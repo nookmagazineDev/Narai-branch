@@ -65,7 +65,10 @@ export default async function handler(req, res) {
       
       return res.status(200).json({ status: 'success', data: usageMap });
     } else {
-      return res.status(200).json({ status: 'error', message: apiData.message || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง' });
+      return res.status(200).json({ 
+        status: 'error', 
+        message: `${apiData.message} (ลองค้นหาด้วยรหัส: ${outletId} จากสาขา: ${branchKey})` || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง' 
+      });
     }
 
   } catch (error) {
