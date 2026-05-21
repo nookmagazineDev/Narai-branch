@@ -635,7 +635,17 @@ function doPost(e) {
         throw new Error('ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน');
       }
       
-      var url = "http://183.89.248.221:14369/api/trn_usg?outletid=" + encodeURIComponent(reqBranch);
+      var branchMap = {
+        'sjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
+        'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
+        'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '109', 'zbw': '400',
+        'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
+        'zk3': '906'
+      };
+      var branchKey = String(reqBranch).toLowerCase().trim();
+      var outletId = branchMap[branchKey] || branchKey;
+      
+      var url = "http://183.89.248.221:14369/api/trn_usg?outletid=" + encodeURIComponent(outletId);
       var fetchOptions = {
         'method' : 'get',
         'muteHttpExceptions': true
