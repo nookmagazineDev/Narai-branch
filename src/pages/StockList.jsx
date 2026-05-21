@@ -20,14 +20,10 @@ export default function StockList() {
   const [requesterName, setRequesterName] = useState('');
   const [counterName, setCounterName] = useState('');
   
-  const [usageStartDate, setUsageStartDate] = useState('');
-  const [usageEndDate, setUsageEndDate] = useState('');
-  const [isFetchingUsage, setIsFetchingUsage] = useState(false);
+  const [apiStartDate, setApiStartDate] = useState('');
+  const [apiEndDate, setApiEndDate] = useState('');
+  const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
-
-  const [receivedStartDate, setReceivedStartDate] = useState('');
-  const [receivedEndDate, setReceivedEndDate] = useState('');
-  const [isFetchingReceived, setIsFetchingReceived] = useState(false);
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
 
   // Effective branch used for data loading
@@ -67,48 +63,8 @@ export default function StockList() {
     }
   };
 
-  const fetchUsageData = async () => {
-    if (!effectiveBranch || !usageStartDate || !usageEndDate) {
-      toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
-      return;
-    }
-    // Find the outletId for the effective branch
-    let currentOutletId = '';
-    if (isAll) {
-       const foundBranch = branches.find(b => b.name === effectiveBranch);
-       if (foundBranch) currentOutletId = foundBranch.outletId;
-    } else {
-       currentOutletId = user?.outletId || '';
-    }
-
-    setIsFetchingUsage(true);
-    try {
-      // Use Vercel Serverless Function proxy
-      const response = await fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(usageStartDate)}&endDate=${encodeURIComponent(usageEndDate)}`);
-      const res = await response.json();
-      
-      if (res.status === 'success') {
-        const usageMap = res.data;
-        setItems(prevItems => prevItems.map(item => {
-          const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
-          return {
-            ...item,
-            apiUsage: usageMap[normId] || 0
-          };
-        }));
-        toast.success('ดึงข้อมูลยอดใช้สำเร็จ');
-      } else {
-        toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
-      }
-    } catch (err) {
-      toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
-    } finally {
-      setIsFetchingUsage(false);
-    }
-  };
-
-  const fetchReceivedData = async () => {
-    if (!effectiveBranch || !receivedStartDate || !receivedEndDate) {
+  const fetchApiData = async () => {
+    if (!effectiveBranch || !apiStartDate || !apiEndDate) {
       toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
       return;
     }
@@ -120,24 +76,32 @@ export default function StockList() {
       currentOutletId = user?.outletId || '';
     }
 
-    setIsFetchingReceived(true);
+    setIsFetchingApi(true);
     try {
-      const response = await fetch(`/api/orderd?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(receivedStartDate)}&endDate=${encodeURIComponent(receivedEndDate)}`);
-      const res = await response.json();
-      if (res.status === 'success') {
-        const receivedMap = res.data;
-        setItems(prevItems => prevItems.map(item => {
-          const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
-          return { ...item, apiReceived: receivedMap[normId] || null };
-        }));
-        toast.success('ดึงข้อมูลยอดรับสำเร็จ');
-      } else {
-        toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
-      }
+      const [usageRes, receivedRes] = await Promise.all([
+        fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`).then(r => r.json()),
+        fetch(`/api/orderd?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`).then(r => r.json()),
+      ]);
+
+      setItems(prevItems => prevItems.map(item => {
+        const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+        return {
+          ...item,
+          apiUsage: usageRes.status === 'success' ? (usageRes.data[normId] || null) : item.apiUsage,
+          apiReceived: receivedRes.status === 'success' ? (receivedRes.data[normId] || null) : item.apiReceived,
+        };
+      }));
+
+      const msgs = [];
+      if (usageRes.status === 'success') msgs.push('ยอดใช้');
+      else toast.error('ยอดใช้: ' + (usageRes.message || 'เกิดข้อผิดพลาด'));
+      if (receivedRes.status === 'success') msgs.push('ยอดรับเข้า');
+      else toast.error('ยอดรับ: ' + (receivedRes.message || 'เกิดข้อผิดพลาด'));
+      if (msgs.length > 0) toast.success(`ดึงข้อมูล ${msgs.join(' และ ')} สำเร็จ`);
     } catch (err) {
       toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
     } finally {
-      setIsFetchingReceived(false);
+      setIsFetchingApi(false);
     }
   };
 
@@ -324,35 +288,19 @@ export default function StockList() {
                 onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
             
-            {/* Usage API Date Picker */}
-            <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 p-2 rounded-xl">
-              <span className="text-sm font-medium text-emerald-800 ml-2 whitespace-nowrap">ยอดใช้ :</span>
-              <input type="date" value={usageStartDate} onChange={(e) => setUsageStartDate(e.target.value)}
-                className="px-2 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-              <span className="text-emerald-800 text-sm">-</span>
-              <input type="date" value={usageEndDate} onChange={(e) => setUsageEndDate(e.target.value)}
-                className="px-2 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+            {/* Shared Date Picker for Usage + Received */}
+            <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-sky-50 border border-emerald-100 p-2 rounded-xl">
+              <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
+              <input type="date" value={apiStartDate} onChange={(e) => setApiStartDate(e.target.value)}
+                className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              <span className="text-gray-500 text-sm">-</span>
+              <input type="date" value={apiEndDate} onChange={(e) => setApiEndDate(e.target.value)}
+                className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
               <button
-                onClick={fetchUsageData}
-                disabled={isFetchingUsage || !effectiveBranch || !usageStartDate || !usageEndDate}
-                className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors">
-                {isFetchingUsage ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูล'}
-              </button>
-            </div>
-
-            {/* Received API Date Picker */}
-            <div className="flex items-center gap-2 bg-sky-50 border border-sky-100 p-2 rounded-xl">
-              <span className="text-sm font-medium text-sky-800 ml-2 whitespace-nowrap">ยอดรับ :</span>
-              <input type="date" value={receivedStartDate} onChange={(e) => setReceivedStartDate(e.target.value)}
-                className="px-2 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-sky-500" />
-              <span className="text-sky-800 text-sm">-</span>
-              <input type="date" value={receivedEndDate} onChange={(e) => setReceivedEndDate(e.target.value)}
-                className="px-2 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-sky-500" />
-              <button
-                onClick={fetchReceivedData}
-                disabled={isFetchingReceived || !effectiveBranch || !receivedStartDate || !receivedEndDate}
-                className="px-4 py-1.5 bg-sky-600 text-white text-sm rounded-lg hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2 transition-colors">
-                {isFetchingReceived ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูล'}
+                onClick={fetchApiData}
+                disabled={isFetchingApi || !effectiveBranch || !apiStartDate || !apiEndDate}
+                className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+                {isFetchingApi ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูลยอดใช้,ยอดรับเข้า'}
               </button>
             </div>
           </div>
