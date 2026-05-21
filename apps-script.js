@@ -339,29 +339,17 @@ function doPost(e) {
         response.data = history;
       }
     } else if (action === 'getBranches') {
-      // ดึงรายชื่อสาขาจากชีทข้อมูลนับสตอค
-      var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
-      var countSheet = stockSs.getSheetByName('ข้อมูลนับสตอค');
+      // ดึงรายชื่อสาขาจากชีท User (ชีทหลัก) คอลัมน์ C
+      var userSheet = ss.getSheetByName('User');
       var branches = [];
-      if (countSheet && countSheet.getLastRow() > 1) {
-        var cData = countSheet.getDataRange().getValues();
+      if (userSheet) {
+        var uData = userSheet.getDataRange().getValues();
         var branchSet = {};
-        for (var r = 1; r < cData.length; r++) {
-          var b = cData[r][2];
-          if (b && !branchSet[b]) { branchSet[b] = true; branches.push(b); }
-        }
-      }
-      // Also check ยอดยกมา sheet
-      var balSheet = stockSs.getSheetByName('ยอดยกมา');
-      if (balSheet && balSheet.getLastRow() > 1) {
-        var bData = balSheet.getDataRange().getValues();
-        var branchSet2 = {};
-        branches.forEach(function(br) { branchSet2[br.toLowerCase()] = true; });
-        for (var r2 = 1; r2 < bData.length; r2++) {
-          var b2 = bData[r2][2];
-          if (b2 && !branchSet2[b2.toString().toLowerCase()]) {
-            branchSet2[b2.toString().toLowerCase()] = true;
-            branches.push(b2);
+        for (var r = 0; r < uData.length; r++) {
+          var br = uData[r][2]; // Column C = Branch
+          if (br && String(br).toLowerCase() !== 'all' && !branchSet[String(br).toLowerCase()]) {
+            branchSet[String(br).toLowerCase()] = true;
+            branches.push(br);
           }
         }
       }
