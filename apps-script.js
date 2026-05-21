@@ -338,6 +338,35 @@ function doPost(e) {
         response.status = 'success';
         response.data = history;
       }
+    } else if (action === 'getBranches') {
+      // ดึงรายชื่อสาขาจากชีทข้อมูลนับสตอค
+      var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      var countSheet = stockSs.getSheetByName('ข้อมูลนับสตอค');
+      var branches = [];
+      if (countSheet && countSheet.getLastRow() > 1) {
+        var cData = countSheet.getDataRange().getValues();
+        var branchSet = {};
+        for (var r = 1; r < cData.length; r++) {
+          var b = cData[r][2];
+          if (b && !branchSet[b]) { branchSet[b] = true; branches.push(b); }
+        }
+      }
+      // Also check ยอดยกมา sheet
+      var balSheet = stockSs.getSheetByName('ยอดยกมา');
+      if (balSheet && balSheet.getLastRow() > 1) {
+        var bData = balSheet.getDataRange().getValues();
+        var branchSet2 = {};
+        branches.forEach(function(br) { branchSet2[br.toLowerCase()] = true; });
+        for (var r2 = 1; r2 < bData.length; r2++) {
+          var b2 = bData[r2][2];
+          if (b2 && !branchSet2[b2.toString().toLowerCase()]) {
+            branchSet2[b2.toString().toLowerCase()] = true;
+            branches.push(b2);
+          }
+        }
+      }
+      response.status = 'success';
+      response.data = branches.sort();
     } else if (action === 'getStockItems') {
       var reqBranch = (data.branch || '').toLowerCase();
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
@@ -363,6 +392,30 @@ function doPost(e) {
             balanceMap[bProductId] = {
               balance: bBalance,
               date: bDate instanceof Date ? Utilities.formatDate(bDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : bDate
+            };
+          }
+        }
+      }
+
+      // Build lastStock map from ข้อมูลนับสตอค sheet (latest row per product per branch)
+      var lastStockMap = {};
+      var countSheetR = stockSs.getSheetByName('ข้อมูลนับสตอค');
+      if (countSheetR && countSheetR.getLastRow() > 1) {
+        var csValues = countSheetR.getDataRange().getValues();
+        // A=date, B=counterName, C=branch, D=productId, E=name, F=unit, G=remaining
+        for (var cs = 1; cs < csValues.length; cs++) {
+          var csRow = csValues[cs];
+          var csBranch = csRow[2] ? csRow[2].toString().toLowerCase() : '';
+          var csPid = normalizeId(csRow[3]);
+          var csDate = csRow[0];
+          var csRemaining = csRow[6];
+          var csCounter = csRow[1];
+          if (csPid && csBranch === reqBranch) {
+            // Always overwrite to keep the LATEST (rows are in chronological order)
+            lastStockMap[csPid] = {
+              remaining: csRemaining,
+              date: csDate instanceof Date ? Utilities.formatDate(csDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : csDate,
+              counter: csCounter
             };
           }
         }
@@ -393,14 +446,17 @@ function doPost(e) {
         var pId = row[0] || '';
         var normId = normalizeId(pId);
         items.push({
-          productId: pId, // A: รหัสสินค้า
-          name: row[1] || '',      // B: ชื่อสินค้า
-          unit: row[2] || '',      // C: หน่วย
-          storeCat: row[3] || '',  // D: หมวด store
-          storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),// E: หมวดจัดเก็บ
-          rdCat: row[5] || '',     // F: หมวดตาม RD
+          productId: pId,
+          name: row[1] || '',
+          unit: row[2] || '',
+          storeCat: row[3] || '',
+          storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),
+          rdCat: row[5] || '',
           previousBalance: balanceMap[normId] ? balanceMap[normId].balance : '',
-          previousBalanceDate: balanceMap[normId] ? balanceMap[normId].date : ''
+          previousBalanceDate: balanceMap[normId] ? balanceMap[normId].date : '',
+          lastStock: lastStockMap[normId] ? lastStockMap[normId].remaining : '',
+          lastStockDate: lastStockMap[normId] ? lastStockMap[normId].date : '',
+          lastStockCounter: lastStockMap[normId] ? lastStockMap[normId].counter : ''
         });
       }
       response.status = 'success';
