@@ -387,10 +387,10 @@ function doPost(e) {
 
       // Build lastStock map from ข้อมูลนับสตอค sheet (latest row per product per branch)
       var lastStockMap = {};
+      var previousStockMap = {}; // second-to-last = ยอดยกมา
       var countSheetR = stockSs.getSheetByName('ข้อมูลนับสตอค');
       if (countSheetR && countSheetR.getLastRow() > 1) {
         var csValues = countSheetR.getDataRange().getValues();
-        // A=date, B=counterName, C=branch, D=productId, E=name, F=unit, G=remaining
         for (var cs = 1; cs < csValues.length; cs++) {
           var csRow = csValues[cs];
           var csBranch = csRow[2] ? csRow[2].toString().toLowerCase() : '';
@@ -399,7 +399,9 @@ function doPost(e) {
           var csRemaining = csRow[6];
           var csCounter = csRow[1];
           if (csPid && csBranch === reqBranch) {
-            // Always overwrite to keep the LATEST (rows are in chronological order)
+            if (lastStockMap[csPid]) {
+              previousStockMap[csPid] = lastStockMap[csPid];
+            }
             lastStockMap[csPid] = {
               remaining: csRemaining,
               date: csDate instanceof Date ? Utilities.formatDate(csDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : csDate,
@@ -468,8 +470,8 @@ function doPost(e) {
           storeCat: row[3] || '',
           storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),
           rdCat: row[5] || '',
-          previousBalance: balanceMap[normId] ? balanceMap[normId].balance : '',
-          previousBalanceDate: balanceMap[normId] ? balanceMap[normId].date : '',
+          previousBalance: previousStockMap[normId] ? previousStockMap[normId].remaining : (balanceMap[normId] ? balanceMap[normId].balance : ''),
+          previousBalanceDate: previousStockMap[normId] ? previousStockMap[normId].date : (balanceMap[normId] ? balanceMap[normId].date : ''),
           lastStock: lastStockMap[normId] ? lastStockMap[normId].remaining : '',
           lastStockDate: lastStockMap[normId] ? lastStockMap[normId].date : '',
           lastStockCounter: lastStockMap[normId] ? lastStockMap[normId].counter : '',
