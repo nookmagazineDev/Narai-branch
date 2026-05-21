@@ -270,6 +270,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
                     </tr>
@@ -322,6 +323,19 @@ export default function StockList() {
                               <div className="text-[10px] text-gray-400 mt-0.5" title={`นับโดย: ${item.lastStockCounter || '-'}`}>
                                 {item.lastStockDate.split(' ')[0]}
                                 {item.lastStockCounter && <span className="ml-1 text-indigo-400">· {item.lastStockCounter}</span>}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* ยอดเบิกล่าสุด */}
+                          <td className="px-4 py-3 text-center bg-orange-50/30">
+                            <div className="font-semibold text-orange-600 text-sm">
+                              {item.lastRequest !== '' && item.lastRequest !== undefined ? item.lastRequest : '-'}
+                            </div>
+                            {item.lastRequestDate && (
+                              <div className="text-[10px] text-gray-400 mt-0.5" title={`ผู้เบิก: ${item.lastRequester || '-'}`}>
+                                {item.lastRequestDate.split(' ')[0]}
+                                {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
                               </div>
                             )}
                           </td>

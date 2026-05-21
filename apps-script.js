@@ -409,6 +409,34 @@ function doPost(e) {
         }
       }
       
+      // Build lastRequest map from ข้อมูลเบิก sheet (latest request per product per branch)
+      var lastRequestMap = {};
+      var reqSheetR = stockSs.getSheetByName('ข้อมูมูลเบิก');
+      if (!reqSheetR) reqSheetR = stockSs.getSheetByName('ข้อมูลเบิก');
+      if (reqSheetR && reqSheetR.getLastRow() > 1) {
+        var rqValues = reqSheetR.getDataRange().getValues();
+        // A=reqNo, B=date, C=productId, D=name, E=unit, F=qty, G=requestDate, H=requester, I=branch
+        for (var rq = 1; rq < rqValues.length; rq++) {
+          var rqRow = rqValues[rq];
+          var rqPid = normalizeId(rqRow[2]);
+          var rqBranch = rqRow[8] ? rqRow[8].toString().toLowerCase() : '';
+          // Fallback: parse branch from reqNo prefix (e.g. CRM-2605-0001 -> crm)
+          if (!rqBranch && rqRow[0]) {
+            rqBranch = rqRow[0].toString().substring(0, 3).toLowerCase();
+          }
+          var rqQty = rqRow[5];
+          var rqDate = rqRow[1];
+          var rqRequester = rqRow[7];
+          if (rqPid && rqBranch === reqBranch) {
+            lastRequestMap[rqPid] = {
+              qty: rqQty,
+              date: rqDate instanceof Date ? Utilities.formatDate(rqDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : rqDate,
+              requester: rqRequester
+            };
+          }
+        }
+      }
+      
       var categoryMap = {};
       var categorySheet = stockSs.getSheetByName('หมวดจัดเก็บสาขา');
       if (categorySheet) {
@@ -444,7 +472,10 @@ function doPost(e) {
           previousBalanceDate: balanceMap[normId] ? balanceMap[normId].date : '',
           lastStock: lastStockMap[normId] ? lastStockMap[normId].remaining : '',
           lastStockDate: lastStockMap[normId] ? lastStockMap[normId].date : '',
-          lastStockCounter: lastStockMap[normId] ? lastStockMap[normId].counter : ''
+          lastStockCounter: lastStockMap[normId] ? lastStockMap[normId].counter : '',
+          lastRequest: lastRequestMap[normId] ? lastRequestMap[normId].qty : '',
+          lastRequestDate: lastRequestMap[normId] ? lastRequestMap[normId].date : '',
+          lastRequester: lastRequestMap[normId] ? lastRequestMap[normId].requester : ''
         });
       }
       response.status = 'success';
@@ -462,8 +493,8 @@ function doPost(e) {
       var requestSheet = stockSs.getSheetByName('ข้อมูลเบิก');
       if (!requestSheet) {
         requestSheet = stockSs.insertSheet('ข้อมูลเบิก');
-        requestSheet.appendRow(['เลขที่ใบเบิก', 'วันที่เวลาบันทึก', 'รหัส', 'ชื่อ', 'หน่วย', 'จำนวน', 'วันที่เบิก', 'ชื่อผู้เบิก']);
-        requestSheet.getRange("A1:H1").setFontWeight("bold");
+        requestSheet.appendRow(['เลขที่ใบเบิก', 'วันที่เวลาบันทึก', 'รหัส', 'ชื่อ', 'หน่วย', 'จำนวน', 'วันที่เบิก', 'ชื่อผู้เบิก', 'สาขา']);
+        requestSheet.getRange("A1:I1").setFontWeight("bold");
       }
       
       var balanceSheet = stockSs.getSheetByName('ยอดยกมา');
@@ -547,7 +578,7 @@ function doPost(e) {
         }
         // Save requested stock
         if (item.requested > 0) {
-          requestSheet.appendRow([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName]);
+          requestSheet.appendRow([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
         }
       });
       
