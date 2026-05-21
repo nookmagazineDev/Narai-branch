@@ -19,6 +19,10 @@ export default function StockList() {
   const [requestDate, setRequestDate] = useState('');
   const [requesterName, setRequesterName] = useState('');
   const [counterName, setCounterName] = useState('');
+  
+  const [usageStartDate, setUsageStartDate] = useState('');
+  const [usageEndDate, setUsageEndDate] = useState('');
+  const [isFetchingUsage, setIsFetchingUsage] = useState(false);
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
@@ -54,6 +58,38 @@ export default function StockList() {
       toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchUsageData = async () => {
+    if (!effectiveBranch || !usageStartDate || !usageEndDate) {
+      toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
+      return;
+    }
+    setIsFetchingUsage(true);
+    try {
+      const res = await apiCall('getUsageData', {
+        branch: effectiveBranch,
+        startDate: usageStartDate,
+        endDate: usageEndDate
+      });
+      if (res.status === 'success') {
+        const usageMap = res.data;
+        setItems(prevItems => prevItems.map(item => {
+          const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+          return {
+            ...item,
+            apiUsage: usageMap[normId] || 0
+          };
+        }));
+        toast.success('ดึงข้อมูลยอดใช้สำเร็จ');
+      } else {
+        toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
+      }
+    } catch (err) {
+      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    } finally {
+      setIsFetchingUsage(false);
     }
   };
 
@@ -228,15 +264,33 @@ export default function StockList() {
       {(!isAll || selectedBranch) && (
         <>
           {/* Search */}
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-gray-400" />
+          <div className="flex flex-col md:flex-row gap-4 mb-4">
+            <div className="relative flex-1">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-5 w-5 text-gray-400" />
+              </div>
+              <input type="text"
+                className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
+                placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
-            <input type="text"
-              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
-              placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)} />
+            
+            {/* Usage API Date Picker */}
+            <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 p-2 rounded-xl">
+              <span className="text-sm font-medium text-emerald-800 ml-2 whitespace-nowrap">ยอดใช้ :</span>
+              <input type="date" value={usageStartDate} onChange={(e) => setUsageStartDate(e.target.value)}
+                className="px-2 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              <span className="text-emerald-800 text-sm">-</span>
+              <input type="date" value={usageEndDate} onChange={(e) => setUsageEndDate(e.target.value)}
+                className="px-2 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+              <button 
+                onClick={fetchUsageData}
+                disabled={isFetchingUsage || !effectiveBranch || !usageStartDate || !usageEndDate}
+                className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors">
+                {isFetchingUsage ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูล'}
+              </button>
+            </div>
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-purple-100 overflow-hidden">
@@ -271,6 +325,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
                     </tr>
@@ -278,7 +333,7 @@ export default function StockList() {
                   <tbody className="bg-white divide-y divide-gray-100">
                     {filteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={isAll ? 6 : 8} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -338,6 +393,13 @@ export default function StockList() {
                                 {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
                               </div>
                             )}
+                          </td>
+
+                          {/* ยอดใช้จาก API */}
+                          <td className="px-4 py-3 text-center bg-emerald-50/30">
+                            <div className="font-semibold text-emerald-600 text-sm">
+                              {item.apiUsage !== undefined ? item.apiUsage : '-'}
+                            </div>
                           </td>
 
                           {/* Input fields — hidden for 'all' */}

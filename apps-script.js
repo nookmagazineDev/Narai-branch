@@ -626,6 +626,57 @@ function doPost(e) {
       
       response.status = 'success';
       response.message = 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว';
+    } else if (action === 'getUsageData') {
+      var reqBranch = data.branch || '';
+      var startDateStr = data.startDate || '';
+      var endDateStr = data.endDate || '';
+      
+      if (!reqBranch || !startDateStr || !endDateStr) {
+        throw new Error('ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน');
+      }
+      
+      var url = "http://183.89.248.221:14369/api/trn_usg?outletid=" + encodeURIComponent(reqBranch);
+      var fetchOptions = {
+        'method' : 'get',
+        'muteHttpExceptions': true
+      };
+      
+      var fetchResponse = UrlFetchApp.fetch(url, fetchOptions);
+      var responseCode = fetchResponse.getResponseCode();
+      
+      if (responseCode === 200) {
+        var apiData = JSON.parse(fetchResponse.getContentText());
+        if (Array.isArray(apiData)) {
+          var usageMap = {};
+          var start = new Date(startDateStr);
+          start.setHours(0,0,0,0);
+          var end = new Date(endDateStr);
+          end.setHours(23,59,59,999);
+          
+          apiData.forEach(function(item) {
+            if (item.Usg_Date) {
+              var d = new Date(item.Usg_Date);
+              if (d >= start && d <= end) {
+                var itmCode = item.Itm_Code;
+                if (itmCode) {
+                  var normId = String(itmCode).replace(/^0+/, '').toLowerCase();
+                  var qty = parseFloat(item.Qty) || 0;
+                  if (!usageMap[normId]) usageMap[normId] = 0;
+                  usageMap[normId] += qty;
+                }
+              }
+            }
+          });
+          response.status = 'success';
+          response.data = usageMap;
+        } else {
+           response.status = 'error';
+           response.message = apiData.message || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง';
+        }
+      } else {
+        response.status = 'error';
+        response.message = 'API Error: ' + responseCode;
+      }
     } else {
       response.status = 'error';
       response.message = 'Invalid action';
