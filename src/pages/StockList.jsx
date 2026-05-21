@@ -25,6 +25,11 @@ export default function StockList() {
   const [isFetchingUsage, setIsFetchingUsage] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
 
+  const [receivedStartDate, setReceivedStartDate] = useState('');
+  const [receivedEndDate, setReceivedEndDate] = useState('');
+  const [isFetchingReceived, setIsFetchingReceived] = useState(false);
+  const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
+
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
 
@@ -99,6 +104,40 @@ export default function StockList() {
       toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
     } finally {
       setIsFetchingUsage(false);
+    }
+  };
+
+  const fetchReceivedData = async () => {
+    if (!effectiveBranch || !receivedStartDate || !receivedEndDate) {
+      toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
+      return;
+    }
+    let currentOutletId = '';
+    if (isAll) {
+      const foundBranch = branches.find(b => b.name === effectiveBranch);
+      if (foundBranch) currentOutletId = foundBranch.outletId;
+    } else {
+      currentOutletId = user?.outletId || '';
+    }
+
+    setIsFetchingReceived(true);
+    try {
+      const response = await fetch(`/api/orderd?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(receivedStartDate)}&endDate=${encodeURIComponent(receivedEndDate)}`);
+      const res = await response.json();
+      if (res.status === 'success') {
+        const receivedMap = res.data;
+        setItems(prevItems => prevItems.map(item => {
+          const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+          return { ...item, apiReceived: receivedMap[normId] || null };
+        }));
+        toast.success('ดึงข้อมูลยอดรับสำเร็จ');
+      } else {
+        toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
+      }
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+    } finally {
+      setIsFetchingReceived(false);
     }
   };
 
@@ -293,11 +332,27 @@ export default function StockList() {
               <span className="text-emerald-800 text-sm">-</span>
               <input type="date" value={usageEndDate} onChange={(e) => setUsageEndDate(e.target.value)}
                 className="px-2 py-1.5 border border-emerald-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500" />
-              <button 
+              <button
                 onClick={fetchUsageData}
                 disabled={isFetchingUsage || !effectiveBranch || !usageStartDate || !usageEndDate}
                 className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors">
                 {isFetchingUsage ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูล'}
+              </button>
+            </div>
+
+            {/* Received API Date Picker */}
+            <div className="flex items-center gap-2 bg-sky-50 border border-sky-100 p-2 rounded-xl">
+              <span className="text-sm font-medium text-sky-800 ml-2 whitespace-nowrap">ยอดรับ :</span>
+              <input type="date" value={receivedStartDate} onChange={(e) => setReceivedStartDate(e.target.value)}
+                className="px-2 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-sky-500" />
+              <span className="text-sky-800 text-sm">-</span>
+              <input type="date" value={receivedEndDate} onChange={(e) => setReceivedEndDate(e.target.value)}
+                className="px-2 py-1.5 border border-sky-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-sky-500" />
+              <button
+                onClick={fetchReceivedData}
+                disabled={isFetchingReceived || !effectiveBranch || !receivedStartDate || !receivedEndDate}
+                className="px-4 py-1.5 bg-sky-600 text-white text-sm rounded-lg hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2 transition-colors">
+                {isFetchingReceived ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูล'}
               </button>
             </div>
           </div>
@@ -335,6 +390,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
                     </tr>
@@ -407,7 +463,7 @@ export default function StockList() {
                           {/* ยอดใช้จาก API */}
                           <td className="px-4 py-3 text-center bg-emerald-50/30">
                             {item.apiUsage && item.apiUsage.total !== undefined ? (
-                              <div 
+                              <div
                                 className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
                                 onClick={() => setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details })}
                                 title="คลิกเพื่อดูรายละเอียด"
@@ -416,6 +472,21 @@ export default function StockList() {
                               </div>
                             ) : (
                               <div className="font-semibold text-emerald-600 text-sm">-</div>
+                            )}
+                          </td>
+
+                          {/* ยอดรับจาก API */}
+                          <td className="px-4 py-3 text-center bg-sky-50/30">
+                            {item.apiReceived && item.apiReceived.total !== undefined ? (
+                              <div
+                                className="font-semibold text-sky-600 text-sm cursor-pointer hover:underline hover:text-sky-800"
+                                onClick={() => setSelectedReceivedDetails({ name: item.name, details: item.apiReceived.details })}
+                                title="คลิกเพื่อดูรายละเอียด"
+                              >
+                                {item.apiReceived.total}
+                              </div>
+                            ) : (
+                              <div className="font-semibold text-sky-600 text-sm">-</div>
                             )}
                           </td>
 
@@ -494,6 +565,50 @@ export default function StockList() {
               <button 
                 onClick={() => setSelectedUsageDetails(null)}
                 className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Received Details Modal */}
+      {selectedReceivedDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity" onClick={() => setSelectedReceivedDetails(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-sky-50 flex justify-between items-center">
+              <h3 className="font-bold text-sky-800">รายละเอียดการรับสินค้า</h3>
+              <button onClick={() => setSelectedReceivedDetails(null)} className="text-sky-400 hover:text-sky-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 max-h-96 overflow-y-auto">
+              <p className="text-sm text-gray-700 mb-4 font-semibold border-b pb-3">{selectedReceivedDetails.name}</p>
+              <table className="w-full text-sm text-left border-collapse">
+                <thead className="bg-gray-100 border-b">
+                  <tr>
+                    <th className="px-4 py-2 font-semibold text-gray-700">วันที่</th>
+                    <th className="px-4 py-2 font-semibold text-gray-700 text-right">จำนวนรับ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {Object.entries(selectedReceivedDetails.details).sort(([a], [b]) => a.localeCompare(b)).map(([date, qty], idx) => (
+                    <tr key={idx} className="hover:bg-sky-50/50 transition-colors">
+                      <td className="px-4 py-3 text-gray-600">{date}</td>
+                      <td className="px-4 py-3 text-gray-900 text-right font-bold">{qty}</td>
+                    </tr>
+                  ))}
+                  {Object.keys(selectedReceivedDetails.details).length === 0 && (
+                    <tr>
+                      <td colSpan="2" className="px-4 py-6 text-center text-gray-400">ไม่มีข้อมูลการรับสินค้า</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setSelectedReceivedDetails(null)}
+                className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sky-500/20"
               >
                 ปิด
               </button>
