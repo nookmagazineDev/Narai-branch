@@ -68,11 +68,10 @@ export default function StockList() {
     }
     setIsFetchingUsage(true);
     try {
-      const res = await apiCall('getUsageData', {
-        branch: effectiveBranch,
-        startDate: usageStartDate,
-        endDate: usageEndDate
-      });
+      // Use Vercel Serverless Function proxy
+      const response = await fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(usageStartDate)}&endDate=${encodeURIComponent(usageEndDate)}`);
+      const res = await response.json();
+      
       if (res.status === 'success') {
         const usageMap = res.data;
         setItems(prevItems => prevItems.map(item => {
@@ -87,7 +86,7 @@ export default function StockList() {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงข้อมูล');
       }
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อ API');
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
     } finally {
       setIsFetchingUsage(false);
     }
