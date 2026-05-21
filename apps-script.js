@@ -32,12 +32,14 @@ function doPost(e) {
       // Skip header row if exists, but we'll just search all
       var loggedIn = false;
       var branch = "";
+      var outletId = "";
 
       for (var i = 0; i < values.length; i++) {
-        // Col A = 0, Col B = 1, Col C = 2
+        // Col A = 0, Col B = 1, Col C = 2, Col D = 3
         if (values[i][0] == username && values[i][1] == password) {
           loggedIn = true;
           branch = values[i][2]; // สาขา
+          outletId = values[i][3]; // Outlet ID
           break;
         }
       }
@@ -46,7 +48,8 @@ function doPost(e) {
         response.status = 'success';
         response.data = {
           username: username,
-          branch: branch
+          branch: branch,
+          outletId: outletId
         };
       } else {
         response.status = 'error';
@@ -347,14 +350,18 @@ function doPost(e) {
         var branchSet = {};
         for (var r = 0; r < uData.length; r++) {
           var br = uData[r][2]; // Column C = Branch
+          var oId = uData[r][3]; // Column D = Outlet ID
           if (br && String(br).toLowerCase() !== 'all' && !branchSet[String(br).toLowerCase()]) {
             branchSet[String(br).toLowerCase()] = true;
-            branches.push(br);
+            branches.push({ name: br, outletId: oId || '' });
           }
         }
       }
       response.status = 'success';
-      response.data = branches.sort();
+      // Sort by name
+      response.data = branches.sort(function(a, b) {
+        return a.name.localeCompare(b.name);
+      });
     } else if (action === 'getStockItems') {
       var reqBranch = (data.branch || '').toLowerCase();
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');

@@ -66,10 +66,19 @@ export default function StockList() {
       toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
       return;
     }
+    // Find the outletId for the effective branch
+    let currentOutletId = '';
+    if (isAll) {
+       const foundBranch = branches.find(b => b.name === effectiveBranch);
+       if (foundBranch) currentOutletId = foundBranch.outletId;
+    } else {
+       currentOutletId = user?.outletId || '';
+    }
+
     setIsFetchingUsage(true);
     try {
       // Use Vercel Serverless Function proxy
-      const response = await fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(usageStartDate)}&endDate=${encodeURIComponent(usageEndDate)}`);
+      const response = await fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(usageStartDate)}&endDate=${encodeURIComponent(usageEndDate)}`);
       const res = await response.json();
       
       if (res.status === 'success') {
@@ -229,7 +238,7 @@ export default function StockList() {
           >
             <option value="">-- เลือกสาขา --</option>
             {branches.map((br, idx) => (
-              <option key={idx} value={br}>{br}</option>
+              <option key={idx} value={br.name}>{br.name}</option>
             ))}
           </select>
           {selectedBranch && (

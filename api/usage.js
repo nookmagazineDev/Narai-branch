@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { branch, startDate, endDate } = req.query;
+  const { branch, startDate, endDate, outletId: queryOutletId } = req.query;
 
   if (!branch || !startDate || !endDate) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
   };
 
   const branchKey = String(branch).toLowerCase().trim();
-  const outletId = branchMap[branchKey] || branchKey;
+  const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
   const url = `http://183.89.248.221:14369/api/trn_usg?outletid=${encodeURIComponent(outletId)}`;
 
