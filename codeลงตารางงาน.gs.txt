@@ -1,0 +1,1768 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  
+  <style>
+    body {
+      font-family: 'Sarabun', sans-serif;
+      background-color: #f4f7f6;
+      padding: 20px;
+    }
+    #loginOverlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background-color: #e9ecef; z-index: 9999;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .login-card {
+      background: white; padding: 40px; border-radius: 12px;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.1); width: 100%; max-width: 400px;
+    }
+
+    .excel-table { width: 100%; border-collapse: collapse; background: white; font-size: 12px; }
+    .excel-table th, .excel-table td {
+      border: 1px solid #c0c0c0; padding: 4px 2px; text-align: center; vertical-align: middle;
+    }
+    .excel-table th { background-color: #e6f7ff; font-weight: bold; white-space: nowrap; }
+    .excel-table tr:hover { background-color: #f1f1f1; }
+    
+    .control-panel {
+      background: white; padding: 15px; border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px;
+    }
+    .summary-panel { margin-bottom: 20px; }
+    .card-summary {
+        border-radius: 8px; color: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%;
+    }
+    .card-summary h6 { font-size: 0.9rem; opacity: 0.9; }
+    .card-summary .value-text { font-size: 1.5rem; font-weight: bold; }
+    .text-max-wage {
+        color: #ff4d4d; background-color: white;
+        padding: 0 4px; border-radius: 4px; font-size: 1.2rem;
+    }
+    .card-summary.bg-success .text-max-wage { color: #ff4d4d; }
+
+    input[type="time"], input[type="text"], input[type="number"], select {
+      border: 1px solid #ddd; border-radius: 4px; padding: 4px;
+      width: 100%; box-sizing: border-box; height: 30px; font-size: 12px;
+    }
+    input[type="date"] { padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; }
+    input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+    .table-responsive { overflow-x: auto; }
+    
+    /* สไตล์สำหรับ Dropdown เวลาเพื่อความกะทัดรัด */
+    .time-select-group select {
+        padding-left: 2px !important;
+        padding-right: 15px !important;
+        background-position: right 0.1rem center;
+        background-size: 10px 10px;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+    }
+
+    .nav-tabs .nav-link { color: #495057; font-weight: bold; }
+    .nav-tabs .nav-link.active { color: #0d6efd; border-bottom: 3px solid #0d6efd; }
+    
+    .schedule-cell { width: 35px; min-width: 35px; padding: 0 !important; height: 30px; font-size: 10px; }
+    .bg-working-legend { background-color: #28a745 !important; }
+    .bg-break-legend { background-color: #ffc107 !important; }
+    .legend-box { width: 15px; height: 15px; display: inline-block; margin-right: 5px; vertical-align: middle; border: 1px solid #ccc; }
+
+    /* CSS สำหรับหน้าลงตารางงานแบบ Weekly */
+    .exp-table {
+        width: 100%; border-collapse: separate; border-spacing: 0; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 0 10px rgba(0,0,0,0.05);
+    }
+    .exp-table th { background-color: #f8f9fa; padding: 15px 10px; text-align: center; border-bottom: 2px solid #e9ecef; border-right: 1px solid #e9ecef; color: #495057; font-weight: 600; font-size: 13px;}
+    .exp-table td { padding: 10px; border-bottom: 1px solid #e9ecef; border-right: 1px solid #e9ecef; vertical-align: middle;}
+    .exp-table th:first-child, .exp-table td:first-child { text-align: left; position: sticky; left: 0; background: white; z-index: 1; border-right: 2px solid #e9ecef; }
+    .exp-table th:first-child { background: #f8f9fa; z-index: 2; }
+    
+    .shift-card {
+        border: 2px solid #d0e2ff; border-left: 4px solid #0d6efd; border-radius: 6px; padding: 8px; cursor: pointer; text-align: left; background-color: #f8faff; transition: all 0.2s; min-height: 55px; display: flex; flex-direction: column; justify-content: center;
+    }
+    .shift-card:hover { background-color: #e6f0ff; transform: translateY(-1px); box-shadow: 0 2px 5px rgba(13,110,253,0.15);}
+    .shift-card.shift-stop { border: 2px solid #ffeeba; border-left: 4px solid #ffc107; background-color: #fffdf5; color: #d39e00; align-items: center; text-align: center; flex-direction: row; gap: 5px;}
+    .shift-card.shift-stop:hover { background-color: #fff8e1; }
+    .shift-card.shift-empty { border: 1px dashed #ced4da; background-color: transparent; border-left: 1px dashed #ced4da; color: #adb5bd; align-items: center; text-align: center; }
+    .shift-card.shift-empty:hover { background-color: #f8f9fa; border-color: #0d6efd; color: #0d6efd;}
+    
+    .shift-title { font-weight: bold; font-size: 13px; margin-bottom: 2px;}
+    .shift-time { font-size: 12px; color: #6c757d; }
+    
+    .emp-info-exp { display: flex; flex-direction: column; }
+    .emp-name-exp { font-weight: bold; font-size: 14px; color: #333; }
+    .emp-pos-exp { font-size: 11px; color: #888; }
+
+    /* Checkbox อนุมัติ OT: ยังไม่ติ๊ก = สีแดง, ติ๊กแล้ว = สีเขียว */
+    .ot-approve-cb {
+        background-color: #dc3545 !important;
+        border-color: #dc3545 !important;
+    }
+    .ot-approve-cb:checked {
+        background-color: #198754 !important;
+        border-color: #198754 !important;
+    }
+
+    /* =========================================
+       CSS สำหรับการ Print (Export เป็น PDF)
+       ========================================= */
+    @media print {
+        @page { size: landscape; margin: 10mm; }
+        body { background-color: #fff; margin: 0; padding: 0; }
+        /* ซ่อนทุกอย่างที่ไม่อยู่ใน experimentalSection */
+        body * { visibility: hidden; }
+        
+        #experimentalSection, #experimentalSection * { visibility: visible; }
+        /* ขยับส่วนที่จะปริ้นให้ไปอยู่ซ้ายบนสุด */
+        #experimentalSection { position: absolute; left: 0; top: 0; width: 100%; padding: 0; }
+        
+        /* ซ่อนปุ่มและแผงควบคุมตอนปริ้น */
+        .control-panel, .nav-tabs, #loginOverlay, .modal, .btn { display: none !important; }
+        
+        /* ปลดล็อค scroll ป้องกันตารางโดนตัด */
+        .table-responsive { overflow: visible !important; max-height: none !important; }
+        
+        /* ตั้งค่าตารางให้ดึง Header มาแสดงซ้ำเมื่อขึ้นหน้าใหม่ */
+        .exp-table { width: 100%; border-collapse: collapse !important; page-break-inside: auto; }
+        .exp-table thead { display: table-header-group; }
+        .exp-table tr { page-break-inside: avoid; page-break-after: auto; }
+        .exp-table td, .exp-table th { border: 1px solid #ddd !important; }
+        
+        /* บังคับให้สีพื้นหลังของการ์ดและป้ายทำงานตอนปริ้น */
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+        
+        /* เพิ่มหัวข้อรายงานตอนปริ้น */
+        #experimentalSection::before {
+            content: "ตารางงาน สาขา: " attr(data-branch) " | สัปดาห์: " attr(data-week);
+            display: block;
+            font-size: 16pt;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 15px;
+            visibility: visible;
+        }
+    }
+  </style>
+</head>
+<body>
+
+<div id="loginOverlay">
+  <div class="login-card">
+    <h3 class="mb-4 text-primary fw-bold text-center">เข้าสู่ระบบ</h3>
+    <div class="mb-3 text-start">
+      <label class="form-label fw-bold">ชื่อผู้ใช้</label>
+      <input type="text" id="username" class="form-control" placeholder="Username">
+    </div>
+    <div class="mb-4 text-start">
+      <label class="form-label fw-bold">รหัสผ่าน</label>
+      <input type="password" id="password" class="form-control" placeholder="Password">
+    </div>
+    <button class="btn btn-primary w-100" id="btnLogin" onclick="performLogin()">Login</button>
+    <p id="loginMessage" class="text-danger mt-3 text-center small"></p>
+  </div>
+</div>
+
+<div class="container-fluid" id="mainApp" style="display:none;">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="text-primary m-0"><i class="bi bi-clock-history"></i> ระบบลงเวลาทำงาน</h3>
+    <div class="text-end d-flex align-items-center justify-content-end">
+        <!-- Notification Bell -->
+        <div class="dropdown me-3">
+            <a href="javascript:void(0);" class="text-primary text-decoration-none position-relative" id="bellDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-bell-fill" style="font-size: 1.3rem;"></i>
+                <span id="notifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none; font-size:0.6rem;">0</span>
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="bellDropdown" id="notifList" style="width: 320px; max-height: 400px; overflow-y: auto;">
+                <li><span class="dropdown-item text-center text-muted small">กำลังโหลด...</span></li>
+            </ul>
+        </div>
+        <span class="fw-bold" id="userDisplay"></span>
+        <button class="btn btn-sm btn-outline-danger ms-2" onclick="performLogout()">ออกจากระบบ</button>
+    </div>
+  </div>
+
+  <ul class="nav nav-tabs mb-4">
+    <li class="nav-item"><button class="nav-link active" id="tabExperimental" onclick="switchTab('experimental')"><i class="bi bi-calendar-range"></i> ลงตารางงาน</button></li>
+    <li class="nav-item"><button class="nav-link" id="tabHistory" onclick="switchTab('history')"><i class="bi bi-search"></i> ดูประวัติ/รายงาน</button></li>
+    <li class="nav-item"><button class="nav-link" id="tabSchedule" onclick="switchTab('schedule')"><i class="bi bi-calendar3-week"></i> ตารางรายชั่วโมง</button></li>
+  </ul>
+
+  <!-- ================= SECTION 1: ลงตารางงาน (Weekly) ================= -->
+  <div id="experimentalSection" data-branch="" data-week="">
+      <div class="control-panel d-flex justify-content-between align-items-end flex-wrap gap-3">
+          <div class="d-flex align-items-center gap-3">
+              <div style="width: 250px;">
+                  <label class="form-label fw-bold mb-1">เลือกสาขา:</label>
+                  <select id="expBranchSelect" class="form-select" onchange="loadExpEmployees()"><option value="" selected disabled>-- เลือกสาขา --</option></select>
+              </div>
+          </div>
+          
+          <!-- Week Navigator -->
+          <div class="d-flex align-items-center gap-2">
+              <button class="btn btn-outline-primary" onclick="changeExpWeek(-1)"><i class="bi bi-chevron-left"></i></button>
+              <div class="fw-bold text-center" style="min-width: 220px; font-size: 1.1rem; border: 1px solid #dee2e6; padding: 6px 15px; border-radius: 8px; background: white;" id="expWeekDisplay">
+                  -
+              </div>
+              <button class="btn btn-outline-primary" onclick="changeExpWeek(1)"><i class="bi bi-chevron-right"></i></button>
+          </div>
+
+          <div class="d-flex gap-2">
+              <button class="btn btn-info text-white px-3" onclick="exportScheduleToImage()"><i class="bi bi-image"></i> บันทึกรูปตาราง</button>
+              <button class="btn btn-secondary px-3" onclick="exportScheduleToPDF()"><i class="bi bi-printer"></i> พิมพ์ / PDF</button>
+              <a href="https://script.google.com/macros/s/AKfycbzhUrIBZo9iCVfIFfTCv-V9trxDYfxPBd5zXU3udfeGn1bhxHGFSUA03TN5Tl33IIgdFw/exec" target="_blank" class="btn btn-outline-primary px-3"><i class="bi bi-person-plus"></i> เพิ่มพนักงาน</a>
+              <button class="btn btn-outline-danger px-3" onclick="promptResignEmployee()"><i class="bi bi-person-dash"></i> แจ้งออก</button>
+              <button class="btn btn-success px-4" onclick="saveExpData()"><i class="bi bi-cloud-arrow-up"></i> บันทึกตารางงาน</button>
+          </div>
+      </div>
+
+      <!-- สรุปผลของตารางงานรายสัปดาห์ -->
+      <div class="summary-panel row g-2 mt-2" id="expSummaryPanel" style="display:none;">
+        <div class="col-6 col-md-3"><div class="card card-summary bg-info p-3"><h6 class="m-0"><i class="bi bi-people-fill"></i> พนักงานทั้งหมดที่เข้างาน</h6><div><span id="expWorkingCount" class="value-text">0</span> <small>คน</small></div></div></div>
+        <div class="col-6 col-md-3"><div class="card card-summary bg-success p-3"><h6 class="m-0"><i class="bi bi-cash-stack"></i> ค่าแรงสัปดาห์ / <span class="text-max-wage" style="font-size:0.9rem;">Max</span></h6><div><span id="expTotalWage" class="value-text">0</span><span class="mx-1">/</span><span id="expMaxWageDisplay" class="value-text text-max-wage" style="font-size: 1.1rem;">0</span></div></div></div>
+        <div class="col-6 col-md-3"><div class="card card-summary bg-danger text-white p-3"><h6 class="m-0"><i class="bi bi-graph-up-arrow"></i> เป้าขายสัปดาห์ (ประเมิน)</h6><div class="mt-1"><span id="expWeeklyTargetDisplay" class="fw-bold" style="font-size: 1.1rem;">-</span></div></div></div>
+        <div class="col-6 col-md-3"><div class="card card-summary bg-primary text-white p-3"><h6 class="m-0"><i class="bi bi-pie-chart-fill"></i> ค่าแรง / เป้าขาย (%)</h6><div class="mt-1"><span id="expWagePercentDisplay" class="fw-bold" style="font-size: 1.1rem;">0.00%</span></div></div></div>
+      </div>
+
+      <div class="table-responsive mt-3" style="max-height: 65vh;">
+          <table class="exp-table">
+              <thead id="expTableHead">
+                  <!-- JS Gen -->
+              </thead>
+              <tbody id="expTableBody">
+                  <tr><td colspan="8" class="text-center py-5 text-muted">กรุณาเลือกสาขา</td></tr>
+              </tbody>
+          </table>
+      </div>
+  </div>
+
+  <!-- Modal สำหรับกรอกข้อมูลในช่อง (หน้าลงตาราง) -->
+  <div class="modal fade" id="cellEditModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+              <div class="modal-header bg-primary text-white">
+                  <h5 class="modal-title" id="cellEditTitle">กำหนดเวลาทำงาน</h5>
+                  <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                  <input type="hidden" id="modalHrCode">
+                  <input type="hidden" id="modalDate">
+                  <input type="hidden" id="modalEmpType">
+                  <input type="hidden" id="modalWageRate">
+                  
+                  <div class="d-flex justify-content-between mb-3 pb-2 border-bottom">
+                      <div>
+                          <input type="checkbox" id="modalIsStop" class="form-check-input" style="width:20px;height:20px;" onchange="toggleModalFields()">
+                          <label class="form-check-label fw-bold ms-1 text-danger" for="modalIsStop">กำหนดเป็นวันหยุด</label>
+                      </div>
+                  </div>
+
+                  <div id="modalWorkFields">
+                      <div class="row g-2 mb-2">
+                          <div class="col-6">
+                              <label class="form-label small mb-0">เวลาเข้า <span class="text-danger">*</span></label>
+                              <div class="d-flex justify-content-start align-items-center gap-1 time-select-group">
+                                  <select id="modalCheckInHr" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalCheckIn')"></select>
+                                  <span class="fw-bold">:</span>
+                                  <select id="modalCheckInMin" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalCheckIn')"></select>
+                              </div>
+                              <input type="hidden" id="modalCheckIn">
+                          </div>
+                          <div class="col-6">
+                              <label class="form-label small mb-0">เวลาออก</label>
+                              <div class="d-flex justify-content-start align-items-center gap-1 time-select-group">
+                                  <select id="modalCheckOutHr" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalCheckOut')"></select>
+                                  <span class="fw-bold">:</span>
+                                  <select id="modalCheckOutMin" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalCheckOut')"></select>
+                              </div>
+                              <input type="hidden" id="modalCheckOut">
+                          </div>
+                      </div>
+                      
+                      <div class="row g-2 mb-2">
+                          <div class="col-6">
+                              <label class="form-label small mb-0">เวลาเบรค</label>
+                              <select id="modalBreakDur" class="form-select form-select-sm" onchange="calcModalEnd()"></select>
+                          </div>
+                          <div class="col-6">
+                              <label class="form-label small mb-0">เริ่มเบรค</label>
+                              <div class="d-flex justify-content-start align-items-center gap-1 time-select-group">
+                                  <select id="modalBreakStartHr" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalBreakStart')"></select>
+                                  <span class="fw-bold">:</span>
+                                  <select id="modalBreakStartMin" class="form-select form-select-sm text-center" style="width:48px;" onchange="syncModalTime('modalBreakStart')"></select>
+                              </div>
+                              <input type="hidden" id="modalBreakStart">
+                          </div>
+                      </div>
+
+                      <div class="row g-2 mb-2">
+                          <div class="col-6">
+                              <label class="form-label small mb-0">OT (ชั่วโมง)</label>
+                              <select id="modalOT" class="form-select form-select-sm" onchange="calcModalEnd()"></select>
+                          </div>
+                          <div class="col-6">
+                              <label class="form-label small mb-0">ชั่วโมงสะสม</label>
+                              <select id="modalOTAccum" class="form-select form-select-sm" onchange="calcModalEnd()"></select>
+                          </div>
+                      </div>
+                      
+                      <hr class="my-2">
+                      <div class="row g-2 mb-2">
+                          <div class="col-6">
+                              <label class="form-label small mb-0 text-primary">ลา (รับค่าแรง)</label>
+                              <select id="modalLeave1" class="form-select form-select-sm" onchange="toggleModalFields()">
+                              <option value="">-</option>
+                              <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
+                              <option value="ลากิจ">🟠 ลากิจ</option>
+                              <option value="ลาป่วย">🔴 ลาป่วย</option>
+                              <option value="ลารายชั่วโมง">⏱ ลารายชั่วโมง</option>
+                              <option value="ใช้ Extra">⭐ ใช้ Extra (หยุดชดเชย)</option>
+                              <option value="พักร้อน">🔵 พักร้อน</option>
+                              <option value="ใช้สะสม">🟣 ใช้สะสม</option>
+                              <option value="ประชุม">🟤 ประชุม</option>
+                              <option value="อบรม">🔵 อบรม</option>
+                              <option value="คลอด">💖 คลอด</option>
+                              <option value="ชดเชย 8 ชั่วโมง">ชดเชย 8 ชั่วโมง</option>
+
+                              </select>
+                          </div>
+                          <div class="col-6">
+                              <label class="form-label small mb-0 text-danger">หยุด (ไม่รับค่าแรง)</label>
+                              <select id="modalLeave2" class="form-select form-select-sm" onchange="toggleModalFields()">
+                                  <option value="">-</option>
+                                  <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
+                                  <option value="ป่วยไม่มีใบรับรอง">🤒 ป่วยไม่มีใบรับรอง</option>
+                                  <option value="ลากิจ">🏃 ลากิจ</option>
+                                  <option value="ขาดงาน">❌ ขาดงาน</option>
+                              </select>
+                          </div>
+                      </div>
+                      <div class="row g-2">
+                          <div class="col-6">
+                              <label class="form-label small mb-0">ลารายชั่วโมง</label>
+                              <select id="modalHrLeave" class="form-select form-select-sm"></select>
+                          </div>
+                          <div class="col-6">
+                              <label class="form-label small mb-0">ใช้ชั่วโมงสะสม</label>
+                              <select id="modalUseAccum" class="form-select form-select-sm"></select>
+                          </div>
+                      </div>
+                      <div class="row g-2 mt-1">
+                          <div class="col-12">
+                              <label class="form-label small mb-0">หมายเหตุเพิ่มเติม</label>
+                              <input type="text" id="modalOtherNote" class="form-control form-control-sm" placeholder="ระบุหมายเหตุ...">
+                          </div>
+                      </div>
+                  </div>
+              </div>
+              <div class="modal-footer bg-light p-2">
+                  <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">ยกเลิก</button>
+                  <button type="button" class="btn btn-primary btn-sm px-4" onclick="saveModalData()">ตกลง</button>
+              </div>
+          </div>
+      </div>
+  </div>
+
+  <!-- ================= SECTION 2: ดูประวัติ ================= -->
+  <div id="historySection" style="display:none;">
+      <div class="control-panel row g-3">
+        <div class="col-md-4">
+          <label class="form-label fw-bold">เลือกวันที่ต้องการดู:</label>
+          <input type="date" id="historyDate" class="form-control mb-2">
+          <div class="d-flex gap-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary flex-fill" onclick="adjustHistoryDate(-1)"><i class="bi bi-chevron-left"></i> ย้อนกลับ</button>
+              <button type="button" class="btn btn-sm btn-outline-primary flex-fill" onclick="setHistoryToday()"><i class="bi bi-calendar-event"></i> วันนี้ (Today)</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary flex-fill" onclick="adjustHistoryDate(1)">วันถัดไป <i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label fw-bold">เลือกสาขา:</label>
+            <select id="historyBranchSelect" class="form-select"><option value="" selected disabled>-- เลือกสาขา --</option></select>
+        </div>
+        <div class="col-md-4 d-flex flex-column gap-2 justify-content-end">
+          <button class="btn btn-primary w-100" id="btnSearchHistory" onclick="searchHistory()"><i class="bi bi-search"></i> ค้นหาข้อมูล</button>
+          <button class="btn btn-success w-100" id="btnSaveOT" onclick="saveOTApproval()" style="display:none;"><i class="bi bi-check-circle"></i> บันทึกอนุมัติ OT</button>
+        </div>
+      </div>
+      <div class="summary-panel row g-3" id="historySummaryPanel" style="display:none;">
+        <div class="col-md-4"><div class="card card-summary bg-secondary p-3"><h5 class="m-0"><i class="bi bi-people"></i> จำนวนพนักงาน: <span id="histCount" class="fw-bold">0</span> คน</h5></div></div>
+        <div class="col-md-4"><div class="card card-summary bg-primary p-3"><h5 class="m-0"><i class="bi bi-currency-dollar"></i> รวมค่าแรง: <span id="histWage" class="fw-bold">0</span> บาท</h5></div></div>
+        <div class="col-md-4"><div class="card card-summary bg-warning text-dark p-3"><h5 class="m-0"><i class="bi bi-graph-up"></i> ยอดขายของวัน: <span id="histDailySales" class="fw-bold">0</span></h5></div></div>
+      </div>
+      <div class="table-responsive">
+        <table class="excel-table">
+          <thead>
+            <tr>
+              <th style="width: 3%">#</th><th style="width: 10%">ชื่อ-สกุล</th><th style="width: 6%">ตำแหน่ง</th><th style="width: 6%">ประเภท</th>
+              <th style="width: 5%">สถานะ</th><th style="width: 5%">เข้า</th><th style="width: 5%">ออก</th><th style="width: 4%">OT</th>
+              <th style="width: 5%">ชั่วโมงสะสม</th>
+              <th style="width: 6%; background-color:#d4edda;">อนุมัติ OT</th>
+              <th style="width: 6%">ค่าแรง</th><th style="width: 6%">ลา(จ่าย)</th><th style="width: 6%">หยุด(ไม่จ่าย)</th>
+              <th style="width: 6%">ใช้ชม.สะสม</th> 
+              <th style="width: 6%">ลาชม.</th>
+              <th style="width: 5%">ช่วงเบรค</th><th style="width: 6%">หมายเหตุ</th><th style="width: 4%">บันทึกเมื่อ</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody">
+            <tr><td colspan="18" class="text-muted text-center py-4">กรุณาเลือกวันที่และสาขาเพื่อค้นหา</td></tr>
+          </tbody>
+        </table>
+      </div>
+  </div>
+
+  <!-- ================= SECTION 3: ตารางรายชั่วโมง ================= -->
+  <div id="scheduleSection" style="display:none;">
+      <div class="control-panel row g-3">
+        <div class="col-md-4">
+          <label class="form-label fw-bold">เลือกวันที่:</label>
+          <input type="date" id="scheduleDate" class="form-control mb-2">
+           <div class="d-flex gap-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary flex-fill" onclick="adjustScheduleDate(-1)"><i class="bi bi-chevron-left"></i> ย้อนกลับ</button>
+              <button type="button" class="btn btn-sm btn-outline-primary flex-fill" onclick="setScheduleToday()">วันนี้</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary flex-fill" onclick="adjustScheduleDate(1)">ถัดไป <i class="bi bi-chevron-right"></i></button>
+          </div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label fw-bold">เลือกสาขา:</label>
+            <select id="scheduleBranchSelect" class="form-select"><option value="" selected disabled>-- เลือกสาขา --</option></select>
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <button class="btn btn-info w-100 text-white" id="btnLoadSchedule" onclick="loadSchedule()"><i class="bi bi-table"></i> แสดงตารางเวลา</button>
+        </div>
+      </div>
+      <div class="summary-panel row g-2" id="scheduleSummaryPanel" style="display:none;">
+        <div class="col-6 col-md-4"><div class="card card-summary bg-success p-3"><h6 class="m-0"><i class="bi bi-cash-stack"></i> ค่าแรงรวม</h6><div><span id="schedTotalWage" class="value-text">0</span> บาท</div></div></div>
+        <div class="col-6 col-md-4"><div class="card card-summary bg-danger text-white p-3"><h6 class="m-0"><i class="bi bi-graph-up-arrow"></i> เป้ายอดรายวัน</h6><div class="mt-1"><span id="schedDailyTarget" class="fw-bold" style="font-size: 1.1rem;">-</span></div></div></div>
+        <div class="col-6 col-md-4"><div class="card card-summary bg-primary text-white p-3"><h6 class="m-0"><i class="bi bi-pie-chart-fill"></i> ค่าแรง / เป้าขาย (%)</h6><div class="mt-1"><span id="schedWagePercent" class="fw-bold" style="font-size: 1.1rem;">0.00%</span></div></div></div>
+      </div>
+      <div class="text-end mb-2">
+          <button class="btn btn-warning text-dark" onclick="saveWorkStations()"><i class="bi bi-save"></i> บันทึกจุดปฏิบัติงาน</button>
+      </div>
+      <div class="mb-2"><span class="legend-box bg-working-legend"></span> ทำงาน <span class="legend-box bg-break-legend ms-3"></span> พักเบรค</div>
+      <div class="table-responsive">
+        <table class="excel-table">
+            <thead>
+                <tr>
+                    <th style="width: 15%; text-align: left;">ตำแหน่ง</th>
+                    <th style="width: 10%; text-align: left;">จุดปฏิบัติงาน</th>
+                    <th style="width: 15%; text-align: left;">ชื่อ-สกุล</th>
+                    <th class="schedule-cell">08.00</th><th class="schedule-cell">09.00</th><th class="schedule-cell">10.00</th><th class="schedule-cell">11.00</th><th class="schedule-cell">12.00</th><th class="schedule-cell">13.00</th><th class="schedule-cell">14.00</th><th class="schedule-cell">15.00</th><th class="schedule-cell">16.00</th><th class="schedule-cell">17.00</th><th class="schedule-cell">18.00</th><th class="schedule-cell">19.00</th><th class="schedule-cell">20.00</th><th class="schedule-cell">21.00</th><th class="schedule-cell">22.00</th><th class="schedule-cell">23.00</th><th class="schedule-cell">24.00</th>
+                </tr>
+            </thead>
+            <tbody id="scheduleTableBody"><tr><td colspan="20" class="text-muted text-center py-4">กรุณาเลือกวันที่และสาขาเพื่อแสดงตาราง</td></tr></tbody>
+            <tfoot id="scheduleTableFooter"></tfoot>
+        </table>
+      </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+
+<script>
+  // --- Global Vars ---
+  var globalDailyTarget = 0;
+  var globalScheduleDailyTarget = 0;
+  
+  var globalExpWeeklyTarget = 0;
+  var globalExpWeeklyMaxWage = 0;
+
+  var currentUserBranch = '';
+  var currentUserName = ''; 
+  var currentLoadedEmployees = [];
+  
+  // State สำหรับหน้าลงตาราง
+  var expWeekStartDate = new Date(); 
+  var expDataMap = {}; 
+  var expModifiedKeys = new Set();
+  var cellEditModalInstance = null;
+
+  // วันหยุดนักขัตฤกษ์ ปี 2026
+  const publicHolidays = [
+      '2026-01-01', '2026-03-03', '2026-04-13', '2026-04-14', 
+      '2026-04-15', '2026-05-01', '2026-06-03', '2026-07-28', 
+      '2026-08-12', '2026-10-13', '2026-10-23', '2026-12-05', 
+      '2026-12-31'
+  ];
+
+  // สำหรับสร้างตัวเลือกชั่วโมงและนาที
+  const hrOptsArr = Array.from({length: 17}, (_, i) => String(i + 8).padStart(2, '0')); // 08 - 24
+  const minOptsArr = ['00', '10', '20', '30', '40', '50'];
+  let globalHrOpts = '<option value="">-</option>' + hrOptsArr.map(o => `<option value="${o}">${o}</option>`).join('');
+  let globalMinOpts = '<option value="">-</option>' + minOptsArr.map(o => `<option value="${o}">${o}</option>`).join('');
+
+  function generateUUID() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+      });
+  }
+
+  // ป้องกันการคลาดเคลื่อนของ Timezone โดยใช้เวลาท้องถิ่นเสมอ
+  function formatDateLocal(d) {
+      if (!d) return '';
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function formatNumber(num) { 
+      if(num === null || num === undefined || num === '' || num === '-') return '-'; 
+      let v = typeof num === 'string' ? parseFloat(num.replace(/,/g, '')) : parseFloat(num); 
+      if (isNaN(v)) return '-'; 
+      return v.toLocaleString('th-TH', {minimumFractionDigits: 0, maximumFractionDigits: 2}); 
+  }
+  
+  function parseTimeStr(val) { 
+      if (!val) return null; 
+      const str = String(val).trim(); 
+      const parts = str.replace('.', ':').split(':'); 
+      const h = parseInt(parts[0]); 
+      const m = parseInt(parts[1]) || 0; 
+      if (isNaN(h)) return null; 
+      return { h, m, val: h + m/60 }; 
+  }
+  
+  function getScheduleCellStyle(h, workStart, workEnd, breakStart, breakEnd) {
+      const points = new Set([0, 1]);
+      const addPoint = (t) => { const p = t - h; if (p > 0 && p < 1) points.add(p); };
+      addPoint(workStart); addPoint(workEnd);
+      if (breakStart !== -1) { addPoint(breakStart); addPoint(breakEnd); }
+      const sorted = Array.from(points).sort((a, b) => a - b);
+      const gradient = [];
+      for (let i = 0; i < sorted.length - 1; i++) {
+          const sPct = sorted[i] * 100; const ePct = sorted[i+1] * 100;
+          const mid = h + (sorted[i] + sorted[i+1]) / 2;
+          let color = 'transparent';
+          let isBreak = (breakStart !== -1 && mid >= breakStart && mid < breakEnd);
+          let isWork = (mid >= workStart && mid < workEnd);
+          if (isBreak) color = '#ffc107'; else if (isWork) color = '#28a745';
+          gradient.push(`${color} ${sPct}%`); gradient.push(`${color} ${ePct}%`);
+      }
+      if (gradient.length === 0) return '';
+      const colors = new Set(gradient.map(p => p.split(' ')[0]));
+      if (colors.size === 1) { const c = colors.values().next().value; if(c==='transparent') return ''; return `background-color: ${c};`; }
+      return `background: linear-gradient(to right, ${gradient.join(', ')});`;
+  }
+
+  function updateWagePercentage(wId, target, dId) {
+      const wE = document.getElementById(wId); const dE = document.getElementById(dId);
+      if(!wE||!dE) return;
+      const wage = parseFloat(wE.innerText.replace(/,/g, '')) || 0;
+      if(target > 0) dE.innerText = ((wage/target)*100).toFixed(2) + '%'; else dE.innerText = '0.00%';
+  }
+
+  function ensureSelectOption(selectEl, val) {
+      if (!selectEl || val === undefined || val === '') return;
+      let opt = Array.from(selectEl.options).find(o => o.value === val);
+      if (!opt) selectEl.add(new Option(val, val));
+  }
+
+  // --- ระบบ Export PDF ---
+  function exportScheduleToPDF() {
+      const b = document.getElementById('expBranchSelect').value;
+      if (!b || currentLoadedEmployees.length === 0) {
+          safeAlert('เตือน', 'กรุณาเลือกสาขาและรอให้ระบบโหลดข้อมูลจนเสร็จก่อนสั่งพิมพ์', 'warning');
+          return;
+      }
+      
+      // ตั้งค่า Attribute สำหรับแสดงชื่อสาขาและสัปดาห์ในหัวกระดาษตอนปริ้น
+      const section = document.getElementById('experimentalSection');
+      section.setAttribute('data-branch', b);
+      section.setAttribute('data-week', document.getElementById('expWeekDisplay').innerText);
+      
+      // เรียกใช้หน้าต่างสั่งพิมพ์ของ Browser
+      window.print();
+  }
+
+  // --- ระบบ Export Image (เฉพาะตาราง) ---
+  function exportScheduleToImage() {
+      const b = document.getElementById('expBranchSelect').value;
+      if (!b || currentLoadedEmployees.length === 0) {
+          safeAlert('เตือน', 'กรุณาเลือกสาขาและรอให้ระบบโหลดข้อมูลจนเสร็จก่อนบันทึกรูปภาพ', 'warning');
+          return;
+      }
+
+      Swal.fire({title: 'กำลังสร้างรูปภาพ...', allowOutsideClick: false, didOpen: () => Swal.showLoading()});
+
+      // เลือกเฉพาะคอนเทนเนอร์ของตาราง
+      const targetElement = document.querySelector('#experimentalSection .table-responsive');
+      const weekStr = document.getElementById('expWeekDisplay').innerText;
+
+      // 1. เก็บค่า Style เดิมไว้
+      const originalMaxHeight = targetElement.style.maxHeight;
+      const originalOverflow = targetElement.style.overflow;
+      const originalWidth = targetElement.style.width;
+
+      // 2. ปรับ Style ชั่วคราวเพื่อให้เห็นตารางทั้งหมดทั้งแนวตั้งและแนวนอน
+      targetElement.style.maxHeight = 'none';
+      targetElement.style.overflow = 'visible';
+      targetElement.style.width = targetElement.scrollWidth + 'px'; 
+
+      // 3. สร้างหัวข้อชั่วคราวแปะไว้บนตารางเพื่อให้รู้ว่าเป็นตารางของสัปดาห์ไหน
+      const titleEl = document.createElement('h4');
+      titleEl.id = 'tempImageTitle';
+      titleEl.className = 'text-center mb-3 mt-2 fw-bold text-dark';
+      titleEl.innerText = `ตารางงาน สาขา: ${b} | สัปดาห์: ${weekStr}`;
+      targetElement.insertBefore(titleEl, targetElement.firstChild);
+
+      // 4. ถ่ายภาพด้วย html2canvas
+      html2canvas(targetElement, {
+          scale: 2, // เพิ่มความละเอียดภาพ
+          useCORS: true,
+          backgroundColor: '#ffffff', // ใช้พื้นหลังสีขาวให้ตารางดูสะอาดตา
+          width: targetElement.scrollWidth,
+          height: targetElement.scrollHeight,
+          windowWidth: targetElement.scrollWidth,
+          windowHeight: targetElement.scrollHeight
+      }).then(canvas => {
+          // 5. คืนค่า Style เดิม และลบหัวข้อชั่วคราว
+          targetElement.style.maxHeight = originalMaxHeight;
+          targetElement.style.overflow = originalOverflow;
+          targetElement.style.width = originalWidth;
+          titleEl.remove();
+
+          // 6. โหลดไฟล์ลงเครื่อง
+          const link = document.createElement('a');
+          link.download = `ตารางงาน_${b}_${weekStr.replace(/ /g, '_')}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+
+          Swal.close();
+      }).catch(err => {
+          // คืนค่า Style กรณีเกิด Error
+          targetElement.style.maxHeight = originalMaxHeight;
+          targetElement.style.overflow = originalOverflow;
+          targetElement.style.width = originalWidth;
+          if(document.getElementById('tempImageTitle')) document.getElementById('tempImageTitle').remove();
+
+          console.error("Error generating image:", err);
+          Swal.fire('ผิดพลาด', 'ไม่สามารถสร้างรูปภาพได้: ' + err.message, 'error');
+      });
+  }
+
+  // --- ระบบแจ้งเตือน OT ---
+  function loadNotifications() {
+      if(!currentUserBranch) return;
+      google.script.run
+          .withSuccessHandler(renderNotifications)
+          .withFailureHandler(e => console.log("Notif Error:", e))
+          .getOTNotifications(currentUserBranch);
+  }
+
+  function renderNotifications(res) {
+      const badge = document.getElementById('notifBadge');
+      const list = document.getElementById('notifList');
+      if(!res || !res.success) {
+          list.innerHTML = `<li><span class="dropdown-item text-danger small text-center">ไม่สามารถโหลดข้อมูลแจ้งเตือนได้</span></li>`;
+          return;
+      }
+
+      const isAdmin = (currentUserBranch === 'All' || currentUserBranch === 'Admin' || currentUserBranch === '');
+      const pending = (res.data.pending || []).filter(item => isAdmin || item.branch === currentUserBranch);
+      const approved = (res.data.approved || []).filter(item => isAdmin || item.branch === currentUserBranch);
+      
+      if(pending.length > 0) {
+          badge.innerText = pending.length;
+          badge.style.display = 'inline-block';
+      } else {
+          badge.style.display = 'none';
+      }
+
+      let html = '';
+      
+      if(pending.length > 0) {
+          html += `<li><h6 class="dropdown-header text-danger"><i class="bi bi-exclamation-circle"></i> ขออนุมัติ OT (รอดำเนินการ)</h6></li>`;
+          pending.forEach(item => {
+              html += `<li><a class="dropdown-item border-bottom py-2" style="cursor: pointer;" onclick="jumpToHistory('${item.date}', '${item.branch}')">
+                          <div class="d-flex justify-content-between align-items-center">
+                              <strong class="small text-dark">${item.name}</strong>
+                              <span class="badge bg-warning text-dark">${item.ot} ชม.</span>
+                          </div>
+                          <div class="small text-muted mt-1"><i class="bi bi-calendar"></i> ${item.dateFormatted} | สาขา: ${item.branch}</div>
+                       </a></li>`;
+          });
+      }
+
+      if(approved.length > 0) {
+          html += `<li><h6 class="dropdown-header text-success mt-2"><i class="bi bi-check-circle"></i> อนุมัติแล้ว (ล่าสุด)</h6></li>`;
+          approved.forEach(item => {
+              html += `<li><a class="dropdown-item border-bottom py-2 bg-light" style="cursor: pointer;" onclick="jumpToHistory('${item.date}', '${item.branch}')">
+                          <div class="d-flex justify-content-between align-items-center">
+                              <strong class="small text-dark">${item.name}</strong>
+                              <span class="badge bg-success">${item.ot} ชม.</span>
+                          </div>
+                          <div class="small text-muted mt-1"><i class="bi bi-calendar"></i> ${item.dateFormatted} | อนุมัติ: ${item.approver}</div>
+                       </a></li>`;
+          });
+      }
+
+      if(pending.length === 0 && approved.length === 0) {
+          html = `<li><span class="dropdown-item text-center text-muted small py-3">ไม่มีรายการแจ้งเตือน OT</span></li>`;
+      }
+
+      list.innerHTML = html;
+  }
+
+  function jumpToHistory(dateStr, branch) {
+      const bellEl = document.getElementById('bellDropdown');
+      const dropdown = bootstrap.Dropdown.getInstance(bellEl);
+      if(dropdown) { dropdown.hide(); } else { bellEl.click(); }
+      
+      switchTab('history');
+      document.getElementById('historyDate').value = dateStr;
+      
+      const branchSel = document.getElementById('historyBranchSelect');
+      if([...branchSel.options].some(o => o.value === branch)) {
+          branchSel.value = branch;
+      }
+      
+      searchHistory();
+  }
+  // ----------------------------------------
+
+  function getPositionPriority(position) {
+      const priorities = {
+          'ผู้จัดการ': 1, 'ผู้จัดการ ฝึก': 2, 'ผู้จัดการฝึก': 2,
+          'ผช.ผู้จัดการ': 3, 'ผช.ผู้จัดการ ฝึก': 4, 'ผช.ผู้จัดการฝึก': 4,
+          'ซุปเปอร์ไวเซอร์': 5, 'Supervisor': 5, 'ซุปเปอร์ไวเซอร์ ฝึก': 6, 'ซุปเปอร์ไวเซอร์ฝึก': 6,
+          'Pre.Sup': 7, 'แคชเชียร์': 8, 'บริการ': 9, 'หัวหน้ากุ๊ก': 10, 'กุ๊ก': 11, 'ล้างจาน': 12
+      };
+      const pos = position ? String(position).trim() : '';
+      return priorities[pos] || 99;
+  }
+
+  window.onload = function() {
+    setToday(); 
+    initExpWeek(); 
+    
+    const savedUser = localStorage.getItem('timesheet_user');
+    const savedDevice = localStorage.getItem('timesheet_device');
+    if (savedUser && savedDevice) {
+        document.getElementById('loginMessage').innerText = 'กำลังเข้าสู่ระบบ...';
+        const btn = document.getElementById('btnLogin');
+        if (btn) btn.disabled = true;
+        
+        google.script.run
+            .withSuccessHandler(handleLoginResponse)
+            .withFailureHandler(e => {
+                if(btn) btn.disabled = false;
+                document.getElementById('loginMessage').innerText = 'ไม่สามารถเข้าสู่ระบบอัตโนมัติได้: ' + e.message;
+            })
+            .checkLogin(savedUser, null, savedDevice);
+    }
+    
+    setupModalDropdowns();
+  };
+
+  function safeAlert(title, text, icon) {
+      if (typeof Swal !== 'undefined') Swal.fire(title, text, icon);
+      else alert(title + '\n' + text);
+  }
+
+  // --- Login / Logout ---
+  function performLogin() {
+    const u = document.getElementById('username').value; const p = document.getElementById('password').value;
+    if(!u || !p) { document.getElementById('loginMessage').innerText = 'กรุณากรอกข้อมูลให้ครบ'; return; }
+    let dId = localStorage.getItem('timesheet_device') || generateUUID();
+    document.getElementById('btnLogin').disabled = true;
+    document.getElementById('loginMessage').innerText = 'กำลังตรวจสอบ...';
+    google.script.run.withSuccessHandler(handleLoginResponse).withFailureHandler(e=>{
+        document.getElementById('loginMessage').innerText = 'การเชื่อมต่อขัดข้อง: ' + e.message;
+        document.getElementById('btnLogin').disabled=false;
+    }).checkLogin(u, p, dId);
+  }
+  
+  function handleLoginResponse(res) {
+      if(res.success) {
+          localStorage.setItem('timesheet_user', res.username); localStorage.setItem('timesheet_device', res.deviceId);
+          currentUserBranch = res.branch; currentUserName = res.name; 
+          document.getElementById('userDisplay').innerText = `ผู้ใช้: ${res.name} (${res.branch})`;
+          document.getElementById('loginOverlay').style.display = 'none'; document.getElementById('mainApp').style.display = 'block';
+          google.script.run.withSuccessHandler(populateAllBranches).getBranchList();
+          loadNotifications();
+      } else { 
+          document.getElementById('loginMessage').innerText = res.message; 
+          document.getElementById('btnLogin').disabled=false; 
+      }
+  }
+  
+  function performLogout() {
+      const u = localStorage.getItem('timesheet_user'); const d = localStorage.getItem('timesheet_device');
+      const resetUI = () => {
+          localStorage.clear();
+          document.getElementById('password').value = '';
+          document.getElementById('loginMessage').innerText = '';
+          document.getElementById('loginOverlay').style.display = 'flex';
+          document.getElementById('mainApp').style.display = 'none';
+          document.getElementById('btnLogin').disabled = false;
+          if(typeof Swal !== 'undefined') Swal.close();
+      };
+      if (u && d) { 
+          Swal.fire({title:'กำลังออกจากระบบ...', didOpen:()=>Swal.showLoading()});
+          google.script.run.withSuccessHandler(resetUI).withFailureHandler(resetUI).logoutDevice(u, d); 
+      } else { resetUI(); }
+  }
+
+  function setToday() { 
+      const t=new Date(); 
+      document.getElementById('historyDate').valueAsDate=t; 
+      document.getElementById('scheduleDate').valueAsDate=t; 
+  }
+  function setHistoryToday() { document.getElementById('historyDate').valueAsDate = new Date(); }
+  function adjustHistoryDate(d) { const i=document.getElementById('historyDate'); if(!i.value){setHistoryToday();return;} const t=new Date(i.value); t.setDate(t.getDate()+d); i.valueAsDate=t; }
+  function setScheduleToday() { document.getElementById('scheduleDate').valueAsDate = new Date(); }
+  function adjustScheduleDate(d) { const i=document.getElementById('scheduleDate'); if(!i.value){setScheduleToday();return;} const t=new Date(i.value); t.setDate(t.getDate()+d); i.valueAsDate=t; }
+
+  function populateAllBranches(branches) {
+    const sExp = document.getElementById('expBranchSelect');
+    const s2 = document.getElementById('historyBranchSelect'); const s3 = document.getElementById('scheduleBranchSelect');
+    sExp.innerHTML = '<option value="" selected disabled>-- เลือกสาขา --</option>'; 
+    s2.innerHTML = '<option value="" selected disabled>-- เลือกสาขา --</option>'; s3.innerHTML = '<option value="" selected disabled>-- เลือกสาขา --</option>';
+    
+    const isAdmin = (currentUserBranch === 'All' || currentUserBranch === 'Admin' || currentUserBranch === '');
+    branches.forEach(b => { 
+        if (isAdmin || b === currentUserBranch) { 
+            sExp.appendChild(new Option(b, b)); 
+            s2.appendChild(new Option(b, b)); s3.appendChild(new Option(b, b)); 
+        } 
+    });
+    if (!isAdmin && currentUserBranch) { 
+        sExp.value = currentUserBranch; 
+        s2.value = currentUserBranch; s3.value = currentUserBranch; 
+        loadExpEmployees(); 
+    }
+  }
+
+  function switchTab(t) {
+    document.getElementById('experimentalSection').style.display = t==='experimental'?'block':'none';
+    document.getElementById('historySection').style.display = t==='history'?'block':'none';
+    document.getElementById('scheduleSection').style.display = t==='schedule'?'block':'none';
+    
+    document.getElementById('tabExperimental').className = t==='experimental'?'nav-link active':'nav-link';
+    document.getElementById('tabHistory').className = t==='history'?'nav-link active':'nav-link';
+    document.getElementById('tabSchedule').className = t==='schedule'?'nav-link active':'nav-link';
+  }
+
+  function promptResignEmployee() {
+      const b = document.getElementById('expBranchSelect').value;
+      if (!b) { safeAlert('เตือน', 'กรุณาเลือกสาขาก่อน', 'warning'); return; }
+      if (!currentLoadedEmployees || currentLoadedEmployees.length === 0) {
+          safeAlert('เตือน', 'ไม่พบรายชื่อพนักงานในสาขานี้', 'warning'); return;
+      }
+      
+      let opts = '<option value="" selected disabled>-- เลือกพนักงาน --</option>';
+      currentLoadedEmployees.forEach(e => {
+          opts += `<option value="${e.hrCode}">${e.name} (${e.position})</option>`;
+      });
+      
+      const todayStr = formatDateLocal(new Date());
+
+      Swal.fire({
+          title: 'แจ้งพนักงานลาออก',
+          html: `<div class="mb-2 text-start">เลือกพนักงานที่ต้องการแจ้งออก:</div>
+                 <select id="resign-emp-select" class="form-select mb-3">${opts}</select>
+                 <div class="mb-2 text-start">วันที่แจ้งลาออก:</div>
+                 <input type="date" id="resign-date-input" class="form-control" value="${todayStr}">`,
+          showCancelButton: true,
+          confirmButtonText: '<i class="bi bi-person-dash"></i> ยืนยันลาออก',
+          cancelButtonText: 'ยกเลิก',
+          confirmButtonColor: '#dc3545',
+          preConfirm: () => {
+              const sel = document.getElementById('resign-emp-select');
+              const dateInput = document.getElementById('resign-date-input');
+              if(!sel.value) { Swal.showValidationMessage('กรุณาเลือกพนักงาน'); return false; }
+              if(!dateInput.value) { Swal.showValidationMessage('กรุณาระบุวันที่แจ้งลาออก'); return false; }
+              return { hrCode: sel.value, name: sel.options[sel.selectedIndex].text.split(' (')[0], resignDate: dateInput.value };
+          }
+      }).then((res) => {
+          if (res.isConfirmed) {
+              Swal.fire({title: 'กำลังบันทึกสถานะลาออก...', didOpen: () => Swal.showLoading()});
+              google.script.run
+                .withSuccessHandler(result => {
+                    if(result.success) { Swal.fire('สำเร็จ', result.message, 'success').then(() => { loadExpEmployees(); }); } 
+                    else { Swal.fire('ผิดพลาด', result.message, 'error'); }
+                })
+                .withFailureHandler(err => Swal.fire('Error', err.message, 'error'))
+                .updateEmployeeStatusToResigned(res.value.hrCode, res.value.name, b, res.value.resignDate);
+          }
+      });
+  }
+
+  // =========================================================================
+  // ================= โค้ดสำหรับหน้า "ลงตารางงาน" (Weekly) =====================
+  // =========================================================================
+
+  function initExpWeek() {
+      let d = new Date();
+      let day = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+      let diff = d.getDate() - day + (day === 0 ? -6 : 1); // หาวันจันทร์
+      expWeekStartDate = new Date(d.setDate(diff));
+      expWeekStartDate.setHours(0,0,0,0);
+      updateExpWeekDisplay();
+  }
+
+  function changeExpWeek(weeks) {
+      expWeekStartDate.setDate(expWeekStartDate.getDate() + (weeks * 7));
+      updateExpWeekDisplay();
+      if(document.getElementById('expBranchSelect').value) {
+          loadExpEmployees(); 
+      }
+  }
+
+  function updateExpWeekDisplay() {
+      let end = new Date(expWeekStartDate);
+      end.setDate(end.getDate() + 6); // วันอาทิตย์
+      const formatObj = { day: 'numeric', month: 'short', year: 'numeric' };
+      const str1 = expWeekStartDate.toLocaleDateString('th-TH', formatObj);
+      const str2 = end.toLocaleDateString('th-TH', formatObj);
+      document.getElementById('expWeekDisplay').innerText = `${str1} - ${str2}`;
+  }
+
+  function updateExpDashboard(s) {
+      if(s && s.success) {
+          let dailyTgt = parseFloat(String(s.dailyTarget).replace(/,/g, '')) || 0;
+          let dailyMax = parseFloat(String(s.maxWage).replace(/,/g, '')) || 0;
+          globalExpWeeklyTarget = dailyTgt * 7;
+          globalExpWeeklyMaxWage = dailyMax * 7;
+          document.getElementById('expWeeklyTargetDisplay').innerText = formatNumber(globalExpWeeklyTarget);
+          document.getElementById('expMaxWageDisplay').innerText = formatNumber(globalExpWeeklyMaxWage);
+      } else {
+          globalExpWeeklyTarget = 0; globalExpWeeklyMaxWage = 0;
+          document.getElementById('expWeeklyTargetDisplay').innerText = '-';
+          document.getElementById('expMaxWageDisplay').innerText = '-';
+      }
+  }
+
+  async function loadExpEmployees() {
+      const b = document.getElementById('expBranchSelect').value; if(!b) return;
+      document.getElementById('expTableBody').innerHTML = `<tr><td colspan="8" class="text-center py-5"><div class="spinner-border text-primary"></div><br>กำลังดึงข้อมูลพนักงานและตารางงาน...</td></tr>`;
+      
+      google.script.run.withSuccessHandler(updateExpDashboard).getBranchStats(b);
+
+      expDataMap = {}; 
+      expModifiedKeys.clear(); 
+      currentLoadedEmployees = [];
+
+      try {
+          let emps = await new Promise((resolve, reject) => {
+              google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getEmployeesByBranch(b);
+          });
+          if(emps) { emps.sort((a, b) => getPositionPriority(a.position) - getPositionPriority(b.position)); }
+          currentLoadedEmployees = emps || [];
+
+          let curDate = new Date(expWeekStartDate);
+          let fetchPromises = [];
+          for(let i=0; i<7; i++) {
+              let dStr = formatDateLocal(curDate);
+              fetchPromises.push(new Promise((resolve) => {
+                  google.script.run
+                      .withSuccessHandler(res => resolve({date: dStr, res: res}))
+                      .withFailureHandler(err => resolve({date: dStr, res: {success: false, message: err.message}}))
+                      .getHistoryData(dStr, b);
+              }));
+              curDate.setDate(curDate.getDate() + 1);
+          }
+
+          const weeklyResults = await Promise.all(fetchPromises);
+          
+          weeklyResults.forEach(item => {
+              if (item.res && item.res.success && item.res.data) {
+                  item.res.data.forEach(row => {
+                      let emp = currentLoadedEmployees.find(e => e.name === row.name);
+                      if (emp) {
+                          let key = `${emp.hrCode}_${item.date}`;
+                          if(row.otherNote === "ล้างข้อมูล") return;
+
+                          let payload = {
+                              workDate: item.date, hrCode: emp.hrCode, name: emp.name, branch: b, position: emp.position, empType: emp.empType,
+                              checkIn: row.checkIn !== '-' ? row.checkIn : '', checkOut: row.checkOut !== '-' ? row.checkOut : '', breakTime: row.breakTime !== '-' ? row.breakTime : '', 
+                              breakTimeRange: row.breakTimeRange !== '-' ? row.breakTimeRange : '', ot: row.ot !== '-' ? row.ot : '0', otAccumulated: row.otAccumulated !== '-' ? row.otAccumulated : '0', 
+                              wage: parseFloat(String(row.wage).replace(/,/g, '')) || 0, isStop: row.status === 'หยุด',
+                              leaveNote: row.note !== '-' ? row.note : '', unpaidLeave: row.unpaidLeave !== '-' ? row.unpaidLeave : '', hourlyLeave: row.hourlyLeave !== '-' ? row.hourlyLeave : '', 
+                              otherNote: row.otherNote !== '-' ? row.otherNote : '', workStation: row.workStation !== '-' ? row.workStation : '', useAccumulatedHours: row.useAccumulatedHours !== '-' ? row.useAccumulatedHours : ''
+                          };
+                          expDataMap[key] = payload;
+                      }
+                  });
+              }
+          });
+
+          renderExpGrid();
+          document.getElementById('expSummaryPanel').style.display = 'flex';
+      } catch(e) {
+          document.getElementById('expTableBody').innerHTML = `<tr><td colspan="8" class="text-danger text-center py-4">Error: ${e.message}</td></tr>`;
+      }
+  }
+
+  function renderExpGrid() {
+      const thead = document.getElementById('expTableHead');
+      const tbody = document.getElementById('expTableBody');
+      if(currentLoadedEmployees.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4">ไม่พบพนักงานในสาขานี้</td></tr>`; return;
+      }
+
+      let curDate = new Date(expWeekStartDate);
+      let dateStrings = []; 
+      for(let i=0; i<7; i++) {
+          dateStrings.push(formatDateLocal(curDate));
+          curDate.setDate(curDate.getDate() + 1);
+      }
+
+      let dailyWages = {}; let dailyWorkingCounts = {}; let totalWage = 0; let workingEmployees = new Set();
+
+      dateStrings.forEach(dStr => {
+          dailyWages[dStr] = 0; dailyWorkingCounts[dStr] = 0;
+          currentLoadedEmployees.forEach(emp => {
+              let key = `${emp.hrCode}_${dStr}`;
+              let data = expDataMap[key];
+              let baseWage = parseFloat(emp.dailyWage) || 0;
+
+              if (data && data.otherNote !== "ล้างข้อมูล") {
+                  const stop = data.isStop; const cin = data.checkIn; const type = data.empType;
+                  const wage = parseFloat(data.wage) || 0; 
+
+                  if(!stop && cin) { workingEmployees.add(data.hrCode); dailyWorkingCounts[dStr]++; }
+
+                  dailyWages[dStr] += wage; 
+                  totalWage += wage;
+              } else {
+                  if (emp.empType === 'F/T') { dailyWages[dStr] += baseWage; totalWage += baseWage; }
+              }
+          });
+      });
+
+      document.getElementById('expWorkingCount').innerText = formatNumber(workingEmployees.size);
+      document.getElementById('expTotalWage').innerText = formatNumber(totalWage);
+      const pctElem = document.getElementById('expWagePercentDisplay');
+      if(globalExpWeeklyTarget > 0) { pctElem.innerText = ((totalWage / globalExpWeeklyTarget) * 100).toFixed(2) + '%'; } else { pctElem.innerText = '0.00%'; }
+
+      let headHtml = `<tr><th style="min-width: 180px;">พนักงาน | ตำแหน่ง</th>`;
+      const daysTH = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+      curDate = new Date(expWeekStartDate); 
+      
+      for(let i=0; i<7; i++) {
+          let dStr = dateStrings[i]; let dayWage = dailyWages[dStr] || 0; let dayCount = dailyWorkingCounts[dStr] || 0;
+          
+          let isHoliday = publicHolidays.includes(dStr);
+          let holidayIcon = isHoliday ? ' <i class="bi bi-star-fill text-warning" title="วันนักขัตฤกษ์"></i>' : '';
+
+          headHtml += `<th style="width: 12%; min-width: 110px;">
+                          ${daysTH[i]}${holidayIcon}<br>
+                          <span class="fw-normal" style="font-size:11px;">${curDate.getDate()} ${curDate.toLocaleDateString('th-TH',{month:'short'})}</span><br>
+                          <span class="badge bg-success mt-1 fw-normal" style="font-size:11px;">฿ ${formatNumber(dayWage)}</span><br>
+                          <span class="badge bg-info mt-1 fw-normal text-dark" style="font-size:11px;"><i class="bi bi-person-fill"></i> ${formatNumber(dayCount)} คน</span>
+                       </th>`;
+          curDate.setDate(curDate.getDate() + 1);
+      }
+      headHtml += `</tr>`;
+      thead.innerHTML = headHtml;
+
+      let bodyHtml = '';
+      currentLoadedEmployees.forEach(emp => {
+          bodyHtml += `<tr>
+              <td>
+                  <div class="emp-info-exp">
+                      <span class="emp-name-exp">${emp.name}</span>
+                      <span class="text-secondary" style="font-size: 10px;">รหัส: ${emp.hrCode || '-'}</span>
+                      <span class="emp-pos-exp text-muted">${emp.position} <span class="badge bg-light text-dark border ms-1">${emp.empType}</span></span>
+                  </div>
+              </td>`;
+          for(let i=0; i<7; i++) {
+              let dStr = dateStrings[i]; let key = `${emp.hrCode}_${dStr}`; let cellData = expDataMap[key] || null;
+              bodyHtml += `<td class="p-1">${buildCellCardHtml(emp, dStr, cellData)}</td>`;
+          }
+          bodyHtml += `</tr>`;
+      });
+      tbody.innerHTML = bodyHtml;
+  }
+
+  function buildCellCardHtml(emp, dateStr, data) {
+      const onclickAttr = `onclick="openExpModal('${emp.hrCode}', '${dateStr}', '${emp.name}', '${emp.empType}', ${emp.dailyWage||0})"`;
+      if(!data) return `<div class="shift-card shift-empty" ${onclickAttr}><i class="bi bi-plus-lg"></i> เพิ่มกะ</div>`;
+      
+      if(data.isStop) {
+          let leaveTexts = [];
+          if(data.leaveNote) leaveTexts.push(data.leaveNote);
+          if(data.unpaidLeave) leaveTexts.push(data.unpaidLeave);
+          if(data.otherNote && data.otherNote !== "ล้างข้อมูล") leaveTexts.push(data.otherNote);
+
+          let reasonHtml = '';
+          if(leaveTexts.length > 0) {
+              reasonHtml = `<div class="mt-1"><span class="badge bg-danger text-white" style="font-size: 10px; white-space: normal; line-height: 1.2;">${leaveTexts.join(', ')}</span></div>`;
+          }
+          
+          return `<div class="shift-card shift-stop" ${onclickAttr} style="flex-direction: column; justify-content: center; gap: 0;">
+                      <div class="fw-bold"><i class="bi bi-dash-circle"></i> หยุด</div>
+                      ${reasonHtml}
+                  </div>`;
+      }
+      
+      let isHoliday = publicHolidays.includes(dateStr);
+
+      let otVal = parseFloat(data.ot) || 0;
+      let leaveTexts = [];
+      if(data.leaveNote) leaveTexts.push(data.leaveNote);
+      if(data.unpaidLeave) leaveTexts.push(data.unpaidLeave);
+      if(data.hourlyLeave) leaveTexts.push(`ลาชม. ${data.hourlyLeave}`);
+      if(data.useAccumulatedHours) leaveTexts.push(`ใช้ชม.สะสม ${data.useAccumulatedHours}ชม.`);
+      if(data.otherNote && data.otherNote !== "ล้างข้อมูล") leaveTexts.push(data.otherNote);
+
+      let badges = [];
+      if (otVal > 0) badges.push(`<span class="badge bg-primary">OT ${data.ot}</span>`);
+      if (leaveTexts.length > 0) badges.push(`<span class="badge bg-warning text-dark" style="white-space: normal; line-height: 1.2;">${leaveTexts.join(', ')}</span>`);
+      
+      if (isHoliday && data.checkIn) {
+          badges.push(`<span class="badge bg-danger text-white" style="white-space: normal; line-height: 1.2;">นักขัตฤกษ์ ⭐</span>`);
+      }
+
+      let topHtml = '';
+      if (badges.length > 0) topHtml = badges.join(' ');
+      else {
+          let shiftName = emp.empType === 'F/T' ? 'F/T' : (emp.empType === 'DAY9' ? 'DAY9' : 'DAY');
+          topHtml = `<span class="badge bg-warning text-dark">${shiftName}</span>`;
+      }
+
+      let timeDisplay = data.checkIn ? `<div class="shift-time mt-1">${data.checkIn} - ${data.checkOut||'?'}</div>` : '';
+      return `<div class="shift-card" ${onclickAttr}><div class="mb-1">${topHtml}</div>${timeDisplay}</div>`;
+  }
+
+  // --- Modal Logic ---
+  function setupModalDropdowns() {
+      let brOpts = '<option value="" disabled>-เลือก-</option><option value="0">ไม่เบรค</option>';
+      for(let i=0.5; i<=5; i+=0.5) brOpts+=`<option value="${i*60}">${Number.isInteger(i)?`${i} ชั่วโมง`:`${Math.floor(i)} ชม. 30 นาที`}</option>`;
+      document.getElementById('modalBreakDur').innerHTML = brOpts;
+      
+      let otOpts = '<option value="0" selected>0</option>';
+      for(let i=0.5; i<=5; i+=0.5) otOpts+=`<option value="${i}">${Number.isInteger(i)?`${i} ชั่วโมง`:`${Math.floor(i)} ชม. 30 นาที`}</option>`;
+      document.getElementById('modalOT').innerHTML = otOpts;
+      document.getElementById('modalOTAccum').innerHTML = otOpts;
+      
+      let useOpts = '<option value="" selected>-</option>';
+      for(let i=1; i<=8; i++) useOpts+=`<option value="${i}">${i} ชั่วโมง</option>`;
+      document.getElementById('modalUseAccum').innerHTML = useOpts;
+      
+      let hlOpts = '<option value="" selected>-</option><option value="ครึ่งวัน">ครึ่งวัน</option><option value="เต็มวัน">เต็มวัน</option>';
+      for(let i=1; i<=8; i++) hlOpts+=`<option value="${i} ชั่วโมง">${i} ชั่วโมง</option>`;
+      document.getElementById('modalHrLeave').innerHTML = hlOpts;
+
+      // เปลี่ยน input time ใน Modal ให้เป็น Dropdowns
+      document.getElementById('modalCheckInHr').innerHTML = globalHrOpts; document.getElementById('modalCheckInMin').innerHTML = globalMinOpts;
+      document.getElementById('modalCheckOutHr').innerHTML = globalHrOpts; document.getElementById('modalCheckOutMin').innerHTML = globalMinOpts;
+      document.getElementById('modalBreakStartHr').innerHTML = globalHrOpts; document.getElementById('modalBreakStartMin').innerHTML = globalMinOpts;
+
+      cellEditModalInstance = new bootstrap.Modal(document.getElementById('cellEditModal'));
+  }
+
+  window.syncModalTime = function(type) {
+      const hr = document.getElementById(`${type}Hr`).value;
+      const min = document.getElementById(`${type}Min`).value;
+      const hidden = document.getElementById(type);
+      if (hr && min) hidden.value = `${hr}:${min}`;
+      else hidden.value = '';
+
+      if (type === 'modalCheckIn') calcModalEnd();
+  }
+
+  function openExpModal(hrCode, dateStr, empName, empType, wageRate) {
+      document.getElementById('cellEditTitle').innerText = `${empName} (${dateStr})`;
+      document.getElementById('modalHrCode').value = hrCode;
+      document.getElementById('modalDate').value = dateStr;
+      document.getElementById('modalEmpType').value = empType;
+      document.getElementById('modalWageRate').value = wageRate;
+
+      let key = `${hrCode}_${dateStr}`;
+      let data = expDataMap[key] || {};
+      
+      if(data.otherNote === "ล้างข้อมูล") data = {}; 
+
+      document.getElementById('modalIsStop').checked = data.isStop || false;
+      
+      const setTimeDropdowns = (type, val) => {
+          document.getElementById(type).value = val || '';
+          if(val) {
+              const [h, m] = val.split(':');
+              ensureSelectOption(document.getElementById(`${type}Hr`), h); ensureSelectOption(document.getElementById(`${type}Min`), m);
+              document.getElementById(`${type}Hr`).value = h; document.getElementById(`${type}Min`).value = m;
+          } else {
+              document.getElementById(`${type}Hr`).value = ''; document.getElementById(`${type}Min`).value = '';
+          }
+      };
+
+      setTimeDropdowns('modalCheckIn', data.checkIn);
+      setTimeDropdowns('modalCheckOut', data.checkOut);
+      
+      let brVal = "60"; // ให้ค่าเริ่มต้นเวลาเบรคเป็น 1 ชั่วโมง (60 นาที)
+      if(data.breakTime === "ไม่เบรค") brVal = "0";
+      else if(data.breakTime) { let hrs = parseFloat(data.breakTime); brVal = String(hrs * 60); }
+      document.getElementById('modalBreakDur').value = brVal;
+      
+      let bs = ""; if(data.breakTimeRange) bs = data.breakTimeRange.split('-')[0];
+      setTimeDropdowns('modalBreakStart', bs);
+      
+      document.getElementById('modalOT').value = data.ot || "0";
+      document.getElementById('modalOTAccum').value = data.otAccumulated || "0";
+      document.getElementById('modalLeave1').value = data.leaveNote || "";
+      document.getElementById('modalLeave2').value = data.unpaidLeave || "";
+      document.getElementById('modalHrLeave').value = data.hourlyLeave || "";
+      document.getElementById('modalUseAccum').value = data.useAccumulatedHours || "";
+      document.getElementById('modalOtherNote').value = (data.otherNote && data.otherNote !== "ล้างข้อมูล") ? data.otherNote : "";
+
+      toggleModalFields();
+      cellEditModalInstance.show();
+  }
+
+  function toggleModalFields() {
+      const stop = document.getElementById('modalIsStop').checked;
+      const l1 = document.getElementById('modalLeave1').value;
+      const l2 = document.getElementById('modalLeave2').value;
+      
+      let disableAll = stop || (l1 !== "") || (l2 !== "");
+      
+      ['modalBreakDur','modalOT','modalOTAccum','modalHrLeave','modalUseAccum'].forEach(id => {
+          let el = document.getElementById(id);
+          el.disabled = disableAll;
+          if(disableAll) { 
+              if(el.tagName==='SELECT') el.value = el.options[0].value; else el.value=''; 
+          } else {
+              if(id === 'modalBreakDur' && el.value === '') el.value = '60';
+          }
+      });
+
+      ['modalCheckIn','modalCheckOut','modalBreakStart'].forEach(type => {
+          document.getElementById(`${type}Hr`).disabled = disableAll;
+          document.getElementById(`${type}Min`).disabled = disableAll;
+          if(disableAll) {
+              document.getElementById(`${type}Hr`).value = '';
+              document.getElementById(`${type}Min`).value = '';
+              document.getElementById(type).value = '';
+          }
+      });
+      
+      // ปลดล็อค dropdown ลาเสมอ เพื่อให้เลือกได้ตอนกด "กำหนดเป็นวันหยุด"
+      document.getElementById('modalLeave1').disabled = false;
+      document.getElementById('modalLeave2').disabled = false;
+
+      // ถ้าระบุลาช่องนึงแล้ว ให้ปิดอีกช่อง
+      if (l1 !== "") document.getElementById('modalLeave2').disabled = true;
+      if (l2 !== "") document.getElementById('modalLeave1').disabled = true;
+  }
+
+  function calcModalEnd() {
+      const pt = document.getElementById('modalEmpType').value === 'P/T';
+      if(pt) return; 
+
+      const ci = document.getElementById('modalCheckIn').value;
+      if(!ci) return;
+      
+      const empType = document.getElementById('modalEmpType').value;
+      const baseMin = (empType === 'DAY9') ? 540 : 480;
+      
+      const [h,m] = ci.split(':').map(Number);
+      let total = h*60 + m + baseMin; 
+      total += (parseInt(document.getElementById('modalBreakDur').value)||0);
+      total += (parseFloat(document.getElementById('modalOT').value)||0) * 60;
+      total += (parseFloat(document.getElementById('modalOTAccum').value)||0) * 60;
+      
+      let eh = Math.floor(total/60); 
+      let em = total%60;
+      if (eh >= 24) {
+          if (eh === 24 && em === 0) {} else { eh = eh % 24; }
+      }
+
+      let hrStr = String(eh).padStart(2,'0'); let minStr = String(em).padStart(2,'0');
+      document.getElementById('modalCheckOut').value = `${hrStr}:${minStr}`;
+      
+      ensureSelectOption(document.getElementById('modalCheckOutHr'), hrStr);
+      ensureSelectOption(document.getElementById('modalCheckOutMin'), minStr);
+      document.getElementById('modalCheckOutHr').value = hrStr;
+      document.getElementById('modalCheckOutMin').value = minStr;
+  }
+
+  function saveModalData() {
+      const hrCode = document.getElementById('modalHrCode').value;
+      const dateStr = document.getElementById('modalDate').value;
+      const empType = document.getElementById('modalEmpType').value;
+      const rate = parseFloat(document.getElementById('modalWageRate').value) || 0;
+      
+      const emp = currentLoadedEmployees.find(e => e.hrCode === hrCode);
+      if(!emp) return;
+
+      const stop = document.getElementById('modalIsStop').checked;
+      const ci = document.getElementById('modalCheckIn').value;
+      const co = document.getElementById('modalCheckOut').value;
+      const brDur = document.getElementById('modalBreakDur').value;
+      const bs = document.getElementById('modalBreakStart').value;
+      const ot = document.getElementById('modalOT').value;
+      const ota = document.getElementById('modalOTAccum').value;
+      const l1 = document.getElementById('modalLeave1').value;
+      const l2 = document.getElementById('modalLeave2').value;
+      const hl = document.getElementById('modalHrLeave').value;
+      const ua = document.getElementById('modalUseAccum').value;
+      const noteInput = document.getElementById('modalOtherNote').value.trim();
+      
+      const finalStop = stop || (l1 !== "") || (l2 !== "");
+
+      // บังคับว่าถ้ากดกำหนดเป็นหยุด ต้องเลือกเหตุผล
+      if (stop && l1 === "" && l2 === "") {
+          Swal.fire('เตือน', 'กรุณาระบุประเภทการลา หรือ เลือก "วันหยุดธรรมดา" ในช่องหยุดไม่รับค่าแรง', 'warning');
+          return;
+      }
+
+      if(!finalStop && ci) {
+          if(!brDur) { Swal.fire('เตือน','กรุณาระบุเวลาเบรค','warning'); return; }
+          if(brDur !== "0" && !bs) { Swal.fire('เตือน','กรุณาระบุเวลาเริ่มเบรค','warning'); return; }
+      }
+
+      let brRange = "";
+      if(bs && brDur && brDur !== "0") {
+          const [h,m] = bs.split(':').map(Number);
+          const t = h*60 + m + parseInt(brDur);
+          const eh = Math.floor(t/60)%24; const em = t%60;
+          brRange = `${bs}-${String(eh).padStart(2,'0')}:${String(em).padStart(2,'0')}`;
+      }
+      
+      let wage = 0; let isCleared = false;
+      if(!ci && !co && !finalStop && !l1 && !l2 && (!ota || ota==="0") && !hl && !ua && !noteInput) { isCleared = true; }
+
+      if (isCleared) {
+          if (empType === 'F/T') wage = rate; else wage = 0;
+      } else {
+          if (l2 !== "") { 
+              if (l2 === "วันหยุดธรรมดา" && empType === 'F/T') {
+                  wage = rate; 
+              } else {
+                  wage = 0; 
+              }
+          } 
+          else if (l1 !== "") { 
+              if (empType === 'P/T') { wage = 0; } else { wage = rate; } 
+          } 
+          else {
+              if (empType === 'F/T') {
+                  wage = rate; 
+                  if (hl !== "") {
+                      let h = hl==='ครึ่งวัน'?4:hl==='เต็มวัน'?8:parseInt(hl)||0;
+                      if(rate>0) wage = rate - (rate/8)*h;
+                  }
+              } else if (empType === 'DAY' || empType === 'DAY9') {
+                  let baseHours = (empType === 'DAY9') ? 9 : 8;
+                  if (!finalStop && ci) {
+                      wage = rate; 
+                      if (hl !== "") {
+                          let h = hl==='ครึ่งวัน'? (baseHours/2) : hl==='เต็มวัน'? baseHours : parseInt(hl)||0;
+                          if(rate>0) wage = rate - (rate/baseHours)*h;
+                      }
+                  } else { wage = 0; }
+              } else if (empType === 'P/T') {
+                  if (!finalStop && ci && co) {
+                      const [h1,m1] = ci.split(':').map(Number); const [h2,m2] = co.split(':').map(Number);
+                      let t1 = h1*60+m1; let t2 = h2*60+m2; if(t2<t1) t2+=1440;
+                      let dur = (t2-t1) - (parseInt(brDur)||0);
+                      if (dur > 0) wage = (dur/60)*rate;
+                  } else { wage = 0; }
+              }
+          }
+      }
+      wage = parseFloat(wage.toFixed(2));
+      
+      let brTxt = (brDur==="0")?"ไม่เบรค":brDur?`${parseInt(brDur)/60} ชม.`:"";
+      const key = `${hrCode}_${dateStr}`;
+
+      const payload = {
+          workDate: dateStr, hrCode: emp.hrCode, name: emp.name, branch: emp.branch, position: emp.position, empType: emp.empType,
+          checkIn: ci, checkOut: co, breakTime: brTxt, breakTimeRange: brRange, ot: ot, otAccumulated: ota, wage: wage, isStop: finalStop,
+          leaveNote: l1, unpaidLeave: l2, hourlyLeave: hl, otherNote: isCleared ? "ล้างข้อมูล" : noteInput, workStation: "", useAccumulatedHours: ua
+      };
+
+      expDataMap[key] = payload;
+      expModifiedKeys.add(key); 
+
+      cellEditModalInstance.hide();
+      renderExpGrid(); 
+  }
+
+  function saveExpData() {
+      const b = document.getElementById('expBranchSelect').value;
+      if(!b) { Swal.fire('เตือน','กรุณาเลือกสาขาก่อนบันทึก','warning'); return; }
+      
+      const dataToSave = [];
+      expModifiedKeys.forEach(key => { if(expDataMap[key]) dataToSave.push(expDataMap[key]); });
+      
+      if(dataToSave.length === 0) { Swal.fire('เตือน','ไม่มีข้อมูลที่แก้ไขหรือเพิ่มใหม่ให้บันทึก','info'); return; }
+
+      Swal.fire({title: 'กำลังบันทึกข้อมูลที่แก้ไข...', didOpen: ()=>Swal.showLoading()});
+      google.script.run.withSuccessHandler(function(res){
+          if(res.success) { Swal.fire('สำเร็จ', 'บันทึกตารางงานเรียบร้อย', 'success'); expModifiedKeys.clear(); } 
+          else { Swal.fire('ผิดพลาด', res.message, 'error'); }
+      }).saveTimesheet(dataToSave);
+  }
+
+  // ================= END SECTION EXPERIMENTAL =================
+
+  // --- HISTORY SECTION ---
+  function searchHistory() { 
+      const date = document.getElementById('historyDate').value; const branch = document.getElementById('historyBranchSelect').value; 
+      if (!date || !branch) { safeAlert('แจ้งเตือน', 'กรุณาเลือกวันที่และสาขา', 'warning'); return; } 
+      const btn = document.getElementById('btnSearchHistory'); if(btn) btn.disabled = true; 
+      
+      const tbody = document.getElementById('historyTableBody');
+      tbody.innerHTML = `<tr><td colspan="18" class="text-center py-5"><div class="spinner-border text-primary" role="status"></div><br>กำลังดึงข้อมูล...</td></tr>`;
+      document.getElementById('historySummaryPanel').style.display = 'none'; 
+      
+      // ดึงพนักงานมาอัปเดตก่อน เพื่อให้มีข้อมูลรหัสพนักงาน (HR Code)
+      google.script.run.withSuccessHandler(function(emps) {
+          if(emps) currentLoadedEmployees = emps;
+          
+          google.script.run
+            .withSuccessHandler(function(result) { 
+                if(btn) btn.disabled = false; 
+                if (result.success) { 
+                    renderHistoryTable(result); 
+                    google.script.run.withSuccessHandler(function(salesRes) { 
+                        if(salesRes && salesRes.success) { document.getElementById('histDailySales').innerText = formatNumber(salesRes.sales); } 
+                        else { document.getElementById('histDailySales').innerText = '-'; } 
+                    }).withFailureHandler(function() { document.getElementById('histDailySales').innerText = '-'; }).getDailySales(date, branch); 
+                } else { 
+                    tbody.innerHTML = `<tr><td colspan="18" class="text-danger text-center py-4">Error: ${result.message}</td></tr>`;
+                    safeAlert('Error', result.message, 'error'); 
+                } 
+            })
+            .withFailureHandler(function(error) { 
+                if(btn) btn.disabled = false; 
+                tbody.innerHTML = `<tr><td colspan="18" class="text-danger text-center py-4">Network Error: ${error.message}</td></tr>`;
+                safeAlert('Error', error.message, 'error'); 
+            }).getHistoryData(date, branch); 
+      }).getEmployeesByBranch(branch);
+  }
+
+  function renderHistoryTable(response) {
+    const tbody = document.getElementById('historyTableBody');
+    try {
+        const data = response.data || [];
+        const searchDateStr = document.getElementById('historyDate').value;
+        const isHoliday = publicHolidays.includes(searchDateStr);
+        
+        // --- ผสมข้อมูลเพื่อโชว์ F/T ที่ยังไม่ได้ลงเวลา ให้ตรงกับหน้าลงตาราง ---
+        const processedHrCodes = new Set();
+        const combinedRows = [];
+
+        data.forEach(row => {
+            if(row.hrCode) processedHrCodes.add(String(row.hrCode));
+            else if(row.name) processedHrCodes.add(String(row.name));
+            combinedRows.push(row);
+        });
+
+        currentLoadedEmployees.forEach(emp => {
+            let key = String(emp.hrCode);
+            if(!processedHrCodes.has(key) && !processedHrCodes.has(emp.name)) {
+                let virtualWage = 0;
+                if (emp.empType === 'F/T') virtualWage = parseFloat(emp.dailyWage) || 0;
+                combinedRows.push({
+                    isVirtual: true, hrCode: emp.hrCode, name: emp.name, position: emp.position, empType: emp.empType,
+                    status: 'ยังไม่ลงข้อมูล', checkIn: '-', checkOut: '-', ot: '0', otAccumulated: '0', wage: virtualWage,
+                    note: '-', unpaidLeave: '-', useAccumulatedHours: '', hourlyLeave: '-', breakTimeRange: '-', otherNote: '-', timestamp: '-'
+                });
+            }
+        });
+
+        if (combinedRows.length === 0) { 
+            tbody.innerHTML = '<tr><td colspan="18" class="text-center text-muted py-4">ไม่พบข้อมูลในวันและสาขานี้</td></tr>'; 
+            return; 
+        }
+        
+        combinedRows.sort((a, b) => getPositionPriority(a.position) - getPositionPriority(b.position));
+
+        tbody.innerHTML = '';
+        document.getElementById('historySummaryPanel').style.display = 'flex';
+        let workingCount = 0; let totalWage = 0;
+        
+        const isAdmin = (currentUserBranch === 'All' || currentUserBranch === 'Admin');
+        const btnSaveOT = document.getElementById('btnSaveOT');
+        if (isAdmin) { btnSaveOT.style.display = 'inline-block'; } else { btnSaveOT.style.display = 'none'; }
+        
+        combinedRows.forEach((row, index) => {
+            const tr = document.createElement('tr');
+            
+            if (row.isVirtual) {
+                totalWage += parseFloat(row.wage) || 0; 
+            } else {
+                if (row.status !== 'หยุด' && row.otherNote !== 'ล้างข้อมูล') { workingCount++; }
+                
+                if (row.otherNote === 'ล้างข้อมูล') {
+                    row.wage = 0;
+                } else {
+                    totalWage += parseFloat(String(row.wage).replace(/,/g, '')) || 0;
+                }
+            }
+            
+            let statusBadge = '';
+            if (row.isVirtual) statusBadge = '<span class="badge bg-secondary">ยังไม่ลงข้อมูล</span>';
+            else if (row.otherNote === 'ล้างข้อมูล') statusBadge = '<span class="badge bg-secondary">ลบข้อมูล</span>';
+            else if (row.status === 'หยุด') statusBadge = '<span class="badge bg-danger">หยุด</span>';
+            else {
+                statusBadge = '<span class="badge bg-success">ทำงาน</span>';
+                if (isHoliday) statusBadge += ' <span class="badge bg-danger">นักขัตฤกษ์ ⭐</span>';
+            }
+
+            let timestampDisplay = row.timestamp || '-';
+            if(timestampDisplay !== '-' && timestampDisplay !== '') { 
+                try { let d = new Date(timestampDisplay); if (!isNaN(d.getTime())) { timestampDisplay = d.toLocaleString('th-TH'); } } catch(e) {} 
+            }
+            
+            let otApprovalHtml = '-';
+            if (!row.isVirtual) {
+                const otVal = parseFloat(row.ot);
+                if (!isNaN(otVal) && otVal > 0) {
+                    let isChecked = row.otApprover ? 'checked' : '';
+                    let isDisabled = isAdmin ? '' : 'disabled';
+                    let approverText = row.otApprover ? `<br><small class="text-success" style="font-size:10px;">(อนุมัติ: ${row.otApprover})</small>` : '';
+                    
+                    otApprovalHtml = `
+                        <div class="form-check d-flex flex-column align-items-center justify-content-center m-0">
+                            <input class="form-check-input ot-approve-cb" type="checkbox" data-name="${row.name}" ${isChecked} ${isDisabled} style="width:18px;height:18px;cursor:pointer;">
+                            ${approverText}
+                        </div>
+                    `;
+                }
+            }
+
+            let useAccumDisplay = row.useAccumulatedHours ? `${row.useAccumulatedHours} ชม.` : '-';
+
+            let empObj = currentLoadedEmployees.find(e => e.name === row.name);
+            let hrCodeText = row.hrCode || (empObj ? empObj.hrCode : '-');
+            let nameDisplay = `
+                <div>${row.name}</div>
+                <div class="text-secondary" style="font-size: 10px;">รหัส: ${hrCodeText}</div>
+            `;
+
+            tr.innerHTML = `
+                <td>${index + 1}</td><td class="text-start">${nameDisplay}</td><td>${row.position}</td><td class="text-secondary small">${row.empType}</td><td>${statusBadge}</td><td>${row.checkIn}</td><td>${row.checkOut}</td><td>${row.ot}</td><td>${row.otAccumulated || '0'}</td>
+                <td style="background-color:#f8f9fa;">${otApprovalHtml}</td>
+                <td class="text-end">${formatNumber(row.wage)}</td><td class="text-start small">${row.note}</td><td class="text-danger small">${row.unpaidLeave || '-'}</td>
+                <td class="text-primary small">${useAccumDisplay}</td>
+                <td class="text-secondary small">${row.hourlyLeave || '-'}</td><td class="text-muted small">${row.breakTimeRange || '-'}</td><td class="text-start small">${row.otherNote || '-'}</td><td class="text-muted small">${timestampDisplay}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+        document.getElementById('histCount').innerText = formatNumber(workingCount);
+        document.getElementById('histWage').innerText = formatNumber(totalWage);
+    } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="18" class="text-danger text-center py-4">แสดงผลผิดพลาด: ${e.message}</td></tr>`;
+    }
+  }
+
+  function saveOTApproval() {
+      const date = document.getElementById('historyDate').value;
+      const branch = document.getElementById('historyBranchSelect').value;
+      if (!date || !branch) return;
+
+      const updates = [];
+      document.querySelectorAll('#historyTableBody tr').forEach(tr => {
+          const cb = tr.querySelector('.ot-approve-cb');
+          if (cb) {
+              updates.push({
+                  name: cb.dataset.name,
+                  isApproved: cb.checked
+              });
+          }
+      });
+
+      if (updates.length === 0) {
+          Swal.fire('แจ้งเตือน', 'ไม่พบรายการ OT ที่ต้องทำการอนุมัติในตาราง', 'info');
+          return;
+      }
+
+      Swal.fire({ title: 'กำลังบันทึกการอนุมัติ...', didOpen: () => Swal.showLoading() });
+      google.script.run
+        .withSuccessHandler(res => {
+            if (res.success) {
+                Swal.fire('สำเร็จ', res.message, 'success');
+                searchHistory(); 
+                loadNotifications(); 
+            } else {
+                Swal.fire('ผิดพลาด', res.message, 'error');
+            }
+        })
+        .withFailureHandler(e => Swal.fire('Error', e.message, 'error'))
+        .updateOTApprovalBulk(date, branch, updates, currentUserName);
+  }
+
+  // --- SCHEDULE SECTION ---
+  function loadSchedule() { 
+     const d = document.getElementById('scheduleDate').value; const b = document.getElementById('scheduleBranchSelect').value; 
+     if(!d||!b) { safeAlert('เตือน', 'เลือกวันที่และสาขา', 'warning'); return; } 
+     const btn = document.getElementById('btnLoadSchedule'); if(btn) btn.disabled=true; 
+     
+     const tb = document.getElementById('scheduleTableBody');
+     tb.innerHTML = `<tr><td colspan="20" class="text-center py-5"><div class="spinner-border text-primary" role="status"></div><br>กำลังดึงตารางเวลา...</td></tr>`;
+     document.getElementById('scheduleTableFooter').innerHTML=''; 
+     document.getElementById('scheduleSummaryPanel').style.display='none'; 
+     
+     // ดึงพนักงานมาอัปเดตก่อน เพื่อให้มีข้อมูลรหัสพนักงาน (HR Code)
+     google.script.run.withSuccessHandler(function(emps) {
+         if(emps) currentLoadedEmployees = emps;
+         
+         google.script.run
+             .withSuccessHandler(function(res){ 
+                 if(btn) btn.disabled=false; 
+                 if(res.success) { 
+                     renderScheduleTable(res); 
+                     google.script.run.withSuccessHandler(updateScheduleStats).getBranchStats(b); 
+                 } else { 
+                     tb.innerHTML = `<tr><td colspan="20" class="text-danger text-center py-4">${res.message}</td></tr>`;
+                     safeAlert('Error', res.message, 'error'); 
+                 } 
+             })
+             .withFailureHandler(e=>{ 
+                 if(btn) btn.disabled=false; 
+                 tb.innerHTML = `<tr><td colspan="20" class="text-danger text-center py-4">การเชื่อมต่อผิดพลาด: ${e.message}</td></tr>`;
+                 safeAlert('Error', e.message, 'error'); 
+             })
+             .getHistoryData(d, b); 
+     }).getEmployeesByBranch(b);
+  }
+
+  function updateScheduleStats(s) {
+      if(s && s.success) {
+          globalScheduleDailyTarget = parseFloat(String(s.dailyTarget).replace(/,/g, ''))||0;
+          document.getElementById('schedDailyTarget').innerText = formatNumber(globalScheduleDailyTarget);
+          updateWagePercentage('schedTotalWage', globalScheduleDailyTarget, 'schedWagePercent');
+      } else {
+          document.getElementById('schedDailyTarget').innerText = '-'; document.getElementById('schedWagePercent').innerText = '0.00%';
+      }
+  }
+
+  function renderScheduleTable(res) {
+      const tb = document.getElementById('scheduleTableBody'); 
+      const tf = document.getElementById('scheduleTableFooter');
+      try {
+          const searchDateStr = document.getElementById('scheduleDate').value;
+          const isHoliday = publicHolidays.includes(searchDateStr);
+          
+          const processedHrCodes = new Set();
+          const combinedRows = [];
+
+          (res.data || []).forEach(r => {
+              if(r.hrCode) processedHrCodes.add(String(r.hrCode));
+              else if(r.name) processedHrCodes.add(String(r.name));
+              combinedRows.push(r);
+          });
+
+          currentLoadedEmployees.forEach(emp => {
+              let key = String(emp.hrCode);
+              if(!processedHrCodes.has(key) && !processedHrCodes.has(emp.name)) {
+                  let virtualWage = 0;
+                  if (emp.empType === 'F/T') virtualWage = parseFloat(emp.dailyWage) || 0;
+                  combinedRows.push({
+                      isVirtual: true, hrCode: emp.hrCode, name: emp.name, position: emp.position, empType: emp.empType,
+                      status: 'ยังไม่ลงข้อมูล', checkIn: '-', checkOut: '-', wage: virtualWage, otherNote: '-', unpaidLeave: '-'
+                  });
+              }
+          });
+
+          if(combinedRows.length === 0) { 
+              tb.innerHTML='<tr><td colspan="20" class="text-center text-muted py-4">ไม่พบข้อมูลในวันและสาขานี้</td></tr>'; 
+              return; 
+          }
+          
+          combinedRows.sort((a, b) => getPositionPriority(a.position) - getPositionPriority(b.position));
+
+          tb.innerHTML = '';
+          const stats = {}; for(let h=8; h<=24; h++) stats[h]={total:0, pos:{}};
+          const allPos = new Set(); let totalW=0;
+          
+          const stOpts = `<option value="" selected>-</option><option value="หน้าร้าน">หน้าร้าน</option><option value="เสริฟอาหาร">เสริฟอาหาร</option><option value="น้ำซุป">น้ำซุป</option><option value="เก็บโต๊ะ">เก็บโต๊ะ</option><option value="ขนมหวาน">ขนมหวาน</option><option value="ครัวอบ">ครัวอบ</option><option value="ครัวร้อน">ครัวร้อน</option><option value="ครัวจัด">ครัวจัด</option><option value="ครัวเตรียม">ครัวเตรียม</option>`;
+
+          combinedRows.forEach(r => {
+              if (r.otherNote === 'ล้างข้อมูล') return; 
+              
+              if (r.isVirtual) {
+                  totalW += parseFloat(r.wage) || 0;
+                  return; // ไม่สร้างแถวในตาราง ถ้ายังไม่ได้ถูกจัดกะลงตาราง
+              }
+
+              let w = parseFloat(String(r.wage).replace(/,/g,''))||0;
+              totalW += w;
+              
+              if(r.status==='หยุด'||!r.checkIn || r.checkIn === '-') return;
+
+              const tr = document.createElement('tr'); tr.dataset.name = r.name;
+              
+              let parsedIn = parseTimeStr(r.checkIn); if(!parsedIn) return;
+              let parsedOut = parseTimeStr(r.checkOut) || {h:24, m:0, val:24};
+              let bs = null, be = null;
+              if(r.breakTimeRange && r.breakTimeRange.includes('-')) {
+                  let parts = r.breakTimeRange.split('-'); bs = parseTimeStr(parts[0]); be = parseTimeStr(parts[1]);
+              }
+              
+              const pos = r.position||'ไม่ระบุ'; allPos.add(pos);
+              let sel = `<select class="schedule-station-select form-select-sm" style="width:100%">${stOpts}</select>`;
+              if(r.workStation) sel = sel.replace(`value="${r.workStation}"`, `value="${r.workStation}" selected`);
+
+              let empObj = currentLoadedEmployees.find(e => e.name === r.name);
+              let hrCodeText = r.hrCode || (empObj ? empObj.hrCode : '-');
+              
+              let holidayHtml = isHoliday ? ' <span class="badge bg-danger px-1" style="font-size: 8px;">นักขัตฤกษ์ ⭐</span>' : '';
+              let nameDisplay = `<div>${r.name}${holidayHtml}</div><div class="text-secondary" style="font-size: 10px;">รหัส: ${hrCodeText}</div>`;
+              let html = `<td style="text-align:left;">${pos}</td><td style="padding:0;">${sel}</td><td style="text-align:left;">${nameDisplay}</td>`;
+              
+              for(let h=8; h<=24; h++) {
+                  let ws=parsedIn.val, we=parsedOut.val, ss=h, se=h+1;
+                  let isW = false;
+                  
+                  if(Math.max(ss, ws) < Math.min(se, we)) {
+                      isW=true;
+                      if(bs && be && Math.max(ss, bs.val) < Math.min(se, be.val)) {
+                          let overlapW = Math.min(se, we) - Math.max(ss, ws);
+                          let overlapB = Math.max(0, Math.min(Math.min(se, we), be.val) - Math.max(Math.max(ss, ws), bs.val));
+                          if(overlapB >= overlapW && overlapW > 0) isW = false;
+                      }
+                  }
+                  if(isW) { stats[h].total++; if(!stats[h].pos[pos]) stats[h].pos[pos]=0; stats[h].pos[pos]++; }
+                  let sty = getScheduleCellStyle(h, ws, we, bs?bs.val:-1, be?be.val:-1);
+                  html += `<td class="schedule-cell" style="${sty}"></td>`;
+              }
+              tr.innerHTML = html; tb.appendChild(tr);
+          });
+
+          document.getElementById('scheduleSummaryPanel').style.display='flex';
+          document.getElementById('schedTotalWage').innerText = formatNumber(totalW);
+          updateWagePercentage('schedTotalWage', globalScheduleDailyTarget, 'schedWagePercent');
+
+          let ft = '<tr style="background-color:#e9ecef;font-weight:bold;border-top:2px solid #dee2e6;"><td colspan="3" class="text-end">รวมพนักงาน (คน)</td>';
+          for(let h=8; h<=24; h++) ft+=`<td class="text-center">${stats[h].total||''}</td>`;
+          ft+='</tr>';
+          allPos.forEach(p => {
+              ft+=`<tr><td colspan="3" class="text-end text-muted small" style="font-size:11px;">${p}</td>`;
+              for(let h=8; h<=24; h++) { let c = stats[h].pos[p]||0; ft+=`<td class="text-center small text-muted" style="${c>0?'background-color:#f0fff4;':''}">${c||''}</td>`; }
+              ft+='</tr>';
+          });
+          tf.innerHTML = ft;
+      } catch(e) {
+          tb.innerHTML = `<tr><td colspan="20" class="text-danger text-center py-4">แสดงผลขัดข้อง: ${e.message}</td></tr>`;
+      }
+  }
+  
+  function saveWorkStations() {
+      const d = document.getElementById('scheduleDate').value; const b = document.getElementById('scheduleBranchSelect').value;
+      if(!d||!b) return;
+      const ups = [];
+      document.querySelectorAll('#scheduleTableBody tr').forEach(tr => {
+          const n = tr.dataset.name; const s = tr.querySelector('.schedule-station-select');
+          if(n && s) ups.push({name:n, station:s.value});
+      });
+      if(ups.length===0) { safeAlert('เตือน', 'ไม่พบข้อมูล', 'info'); return; }
+      Swal.fire({title:'บันทึก...', didOpen:()=>Swal.showLoading()});
+      google.script.run.withSuccessHandler(r=>{
+          if(r.success) Swal.fire('สำเร็จ', r.message, 'success'); else Swal.fire('ผิดพลาด', r.message, 'error');
+      }).withFailureHandler(e=>Swal.fire('Error', e.message, 'error')).updateWorkStation(d, b, ups);
+  }
+</script>
+
+</body>
+</html>

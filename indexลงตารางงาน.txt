@@ -1,0 +1,448 @@
+// --- ตั้งค่า ID ของ Spreadsheet ต้นทาง (สำหรับดึงรายชื่อพนักงาน) ---
+const SOURCE_SPREADSHEET_ID = '1CLyJb_6QxWTNV0NOmJklMzrLxmqn6AlWABRvzt4bFng';
+
+// --- ตั้งค่า ID ของ Spreadsheet ปลายทาง (สำหรับบันทึกและเรียกดูข้อมูลลงเวลา) ---
+const DESTINATION_SPREADSHEET_ID = '1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U';
+
+// --- ตั้งค่า ID ของ Spreadsheet ข้อมูลยอดขาย/เป้าหมาย ---
+const SALES_DATA_SPREADSHEET_ID = '1kxVqX_hp5B0YTNSPj7mhyFl1OLbnhN-dIWm9ywzHA60';
+
+// ชื่อ Sheet ที่จะบันทึกข้อมูล
+const LOG_SHEET_NAME = 'ลงตารางงาน';
+
+// --- Helper: เปรียบเทียบวันที่อย่างปลอดภัย ---
+function isSameDate(date1, date2) {
+  if (!date1 || !date2) return false;
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return false;
+  d1.setHours(0, 0, 0, 0);
+  d2.setHours(0, 0, 0, 0);
+  return d1.getTime() === d2.getTime();
+}
+
+// --- Helper: จัดลำดับตำแหน่ง ---
+function getPositionPriority(position) {
+  const priorities = {
+    'ผู้จัดการ': 1, 'ผู้จัดการ ฝึก': 2, 'ผู้จัดการฝึก': 2, 'ผช.ผู้จัดการ': 3, 'ผช.ผู้จัดการ ฝึก': 4, 'ผช.ผู้จัดการฝึก': 4,
+    'ซุปเปอร์ไวเซอร์': 5, 'Supervisor': 5, 'ซุปเปอร์ไวเซอร์ ฝึก': 6, 'ซุปเปอร์ไวเซอร์ฝึก': 6,
+    'Pre.Sup': 7, 'แคชเชียร์': 8, 'บริการ': 9, 'หัวหน้ากุ๊ก': 10, 'กุ๊ก': 11, 'ล้างจาน': 12
+  };
+  const pos = position ? String(position).trim() : '';
+  return priorities[pos] || 99;
+}
+
+// --- 1. ระบบ Login (ไม่จำกัดเครื่อง) ---
+function checkLogin(username, password, deviceId) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    let userSheet = ss.getSheetByName('Users');
+    
+    // สร้างโครงสร้างชีทใหม่ถ้ายังไม่มี (เพิ่มคอลัมน์ ActiveSessions)
+    if (!userSheet) {
+      userSheet = ss.insertSheet('Users');
+      userSheet.appendRow(['Username', 'Password', 'AllowedBranch', 'Name', 'ActiveSessions']);
+      userSheet.appendRow(['admin', '1234', 'All', 'ผู้ดูแลระบบ', '[]']);
+    }
+    
+    const data = userSheet.getDataRange().getDisplayValues(); 
+    let userRowIndex = -1;
+    let userData = null;
+    
+    // ค้นหาผู้ใช้
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === username) {
+        userRowIndex = i + 1; // +1 เพราะเริ่มที่ 1-based index
+        userData = data[i];
+        break;
+      }
+    }
+    
+    if (userRowIndex === -1) {
+      return { success: false, message: 'ชื่อผู้ใช้ไม่ถูกต้อง' };
+    }
+    
+    // ดึงข้อมูล Session (คอลัมน์ E - index 4)
+    let sessions = [];
+    try {
+      sessions = JSON.parse(userData[4] || '[]');
+    } catch(e) {
+      sessions = [];
+    }
+
+    // กรณี Auto Login (ส่ง deviceId มาโดยไม่มี password)
+    if (deviceId && !password) {
+        if (sessions.includes(deviceId)) {
+            return { success: true, branch: userData[2], name: userData[3], deviceId: deviceId, username: username };
+        } else {
+            return { success: false, message: 'เซสชั่นในเครื่องนี้หมดอายุ กรุณาเข้าสู่ระบบใหม่' };
+        }
+    }
+    
+    // กรณี Manual Login
+    if (String(userData[1]) !== password) {
+      return { success: false, message: 'รหัสผ่านไม่ถูกต้อง' };
+    }
+    
+    if (!deviceId) deviceId = Utilities.getUuid(); // สร้าง ID ถ้าย้ายเครื่องแต่ไม่มีของเก่าส่งมา
+    
+    // บันทึกเครื่องใหม่โดยไม่จำกัด 2 เครื่องแล้ว แต่เก็บไม่เกิน 50 รายการกันเซลล์ล้น
+    if (!sessions.includes(deviceId)) {
+       if (sessions.length >= 50) sessions.shift(); // ลบอันเก่าสุดทิ้งถ้าเกิน 50 เครื่อง
+       sessions.push(deviceId);
+       // อัปเดตคอลัมน์ E (5)
+       userSheet.getRange(userRowIndex, 5).setValue(JSON.stringify(sessions));
+    }
+    
+    return { success: true, branch: userData[2], name: userData[3], deviceId: deviceId, username: username };
+    
+  } catch(e) {
+    return { success: false, message: 'Login Error: ' + e.message };
+  }
+}
+
+// ฟังก์ชันสำหรับเตะ Session ทิ้งเวลาออกจากระบบ
+function logoutDevice(username, deviceId) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    const userSheet = ss.getSheetByName('Users');
+    if(!userSheet) return { success: true };
+    
+    const data = userSheet.getDataRange().getDisplayValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === username) {
+         let sessions = [];
+         try { sessions = JSON.parse(data[i][4] || '[]'); } catch(e){}
+         // ลบ deviceId เครื่องปัจจุบันออกจาก Array
+         sessions = sessions.filter(id => id !== deviceId);
+         userSheet.getRange(i + 1, 5).setValue(JSON.stringify(sessions));
+         break;
+      }
+    }
+    return { success: true };
+  } catch(e) {
+    return { success: false };
+  }
+}
+
+// --- 2. สร้างหน้าเว็บ ---
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('ระบบลงเวลาทำงาน')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// --- 3. ดึงรายชื่อสาขา ---
+function getBranchList() {
+  try {
+    const ss = SpreadsheetApp.openById(SOURCE_SPREADSHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const data = sheet.getDataRange().getDisplayValues();
+    const rows = data.slice(1);
+    const branches = [...new Set(rows.map(r => String(r[4]).trim()).filter(b => b !== ""))];
+    return branches.sort();
+  } catch (e) {
+    return [];
+  }
+}
+
+// --- 4. ดึงข้อมูลพนักงานตามสาขา (หน้าบันทึก) ---
+function getEmployeesByBranch(selectedBranch) {
+  try {
+    const ss = SpreadsheetApp.openById(SOURCE_SPREADSHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const data = sheet.getDataRange().getDisplayValues(); 
+    const employees = [];
+    const searchBranch = String(selectedBranch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (String(row[4]).trim() === searchBranch && String(row[6]).trim() === 'ทำงาน') {
+        employees.push({
+          hrCode: row[2], name: row[3], branch: row[4], status: row[5],   
+          empType: row[5], position: row[8], dailyWage: row[9] 
+        });
+      }
+    }
+    employees.sort((a, b) => getPositionPriority(a.position) - getPositionPriority(b.position));
+    return employees;
+  } catch(e) {
+    throw new Error("ไม่สามารถดึงข้อมูลพนักงานได้: " + e.message);
+  }
+}
+
+// --- ฟังก์ชันใหม่: อัปเดตสถานะพนักงานเป็นลาออก ---
+function updateEmployeeStatusToResigned(hrCode, empName, branch, resignDate) {
+  try {
+    const ss = SpreadsheetApp.openById(SOURCE_SPREADSHEET_ID);
+    const sheet = ss.getSheets()[0]; // ชีทพนักงาน (Sheet แรกสุด)
+    const data = sheet.getDataRange().getValues();
+    const searchBranch = String(branch).trim();
+    const searchHrCode = String(hrCode).trim();
+    
+    for (let i = 1; i < data.length; i++) {
+      // ตรวจสอบ รหัสพนักงาน (Col C - Index 2) และ สาขา (Col E - Index 4)
+      if (String(data[i][2]).trim() === searchHrCode && String(data[i][4]).trim() === searchBranch) {
+        sheet.getRange(i + 1, 7).setValue('ลาออก'); // คอลัมน์ G คือ Index 6 (คอลัมน์ที่ 7)
+        if (resignDate) {
+          sheet.getRange(i + 1, 15).setValue(resignDate); // คอลัมน์ O คือ Index 14 (คอลัมน์ที่ 15)
+        }
+        return { success: true, message: `เปลี่ยนสถานะ ${empName} เป็นลาออกเรียบร้อยแล้ว` };
+      }
+    }
+    return { success: false, message: 'ไม่พบข้อมูลพนักงานในระบบ' };
+  } catch(e) {
+    return { success: false, message: e.message };
+  }
+}
+
+// --- 5. ดึงข้อมูลสถิติสาขา ---
+function getBranchStats(selectedBranch) {
+  try {
+    const ss = SpreadsheetApp.openById(SALES_DATA_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName('Details');
+    if (!sheet) return { success: false, message: 'ไม่พบ Sheet Details' };
+    const data = sheet.getDataRange().getDisplayValues();
+    const searchBranch = String(selectedBranch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][0]).trim() === searchBranch) {
+        return {
+          success: true, sales: data[i][1], dailyTarget: data[i][2],  
+          monthlyTarget: data[i][3], maxWage: data[i][5]       
+        };
+      }
+    }
+    return { success: false, message: 'ไม่พบข้อมูลสาขานี้' };
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- 6. ดึงยอดขายรายวัน ---
+function getDailySales(searchDateStr, searchBranch) {
+  try {
+    const ss = SpreadsheetApp.openById(SALES_DATA_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName('ยอดขายสาขา');
+    if (!sheet) return { success: true, sales: 0, message: 'ไม่พบ Sheet' };
+    const data = sheet.getDataRange().getValues();
+    const searchB = String(searchBranch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      if (isSameDate(data[i][0], searchDateStr) && String(data[i][2]).trim() === searchB) {
+        return { success: true, sales: data[i][3] }; 
+      }
+    }
+    return { success: true, sales: 0 }; 
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- 7. บันทึกข้อมูลลงเวลา ---
+function saveTimesheet(data) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID); 
+    let logSheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!logSheet) {
+      logSheet = ss.insertSheet(LOG_SHEET_NAME);
+      logSheet.appendRow([
+        'Timestamp', 'วันที่ลงงาน', 'สาขา', 'รหัส HR', 'ชื่อ-สกุล', 'ตำแหน่ง', 
+        'เวลาเข้า', 'เวลาออก', 'เวลาเบรค', 'OT (ชม.)', 'ค่าแรง (บาท)', 'สถานะ', 
+        'ลา/หมายเหตุ (รับค่าแรง)', 'ประเภท', 'หยุดไม่รับค่าแรง', 'ชั่วโมงสะสม',
+        'ลารายชั่วโมง (ชม.)', 'หมายเหตุเพิ่มเติม', 'ช่วงเวลาเบรค', 'จุดปฏิบัติงาน', 'ผู้อนุมัติ OT', 'ใช้ชั่วโมงสะสม'
+      ]);
+    }
+    const timestamp = new Date();
+    data.forEach(item => {
+      if (item.checkIn || item.checkOut || item.leaveNote || item.unpaidLeave || item.isStop || item.otAccumulated !== '0' || item.hourlyLeave || item.otherNote || item.workStation || item.useAccumulatedHours) {
+        logSheet.appendRow([
+          timestamp, item.workDate, item.branch, item.hrCode, item.name, item.position,
+          item.checkIn, item.checkOut, item.breakTime, item.ot, item.wage,
+          item.isStop ? 'หยุด' : 'มาทำงาน', item.leaveNote, item.empType, item.unpaidLeave,
+          item.otAccumulated, item.hourlyLeave || '', item.otherNote || '',
+          item.breakTimeRange || '', item.workStation || '', '', item.useAccumulatedHours || ''
+        ]);
+      }
+    });
+    return { success: true, message: 'บันทึกข้อมูลเรียบร้อยแล้ว' };
+  } catch (e) { return { success: false, message: 'เกิดข้อผิดพลาด: ' + e.message }; }
+}
+
+// --- 8. อัปเดตจุดปฏิบัติงาน ---
+function updateWorkStation(dateStr, branch, updates) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!sheet) return { success: false, message: 'ไม่พบ Sheet ข้อมูล' };
+    const data = sheet.getDataRange().getValues();
+    const updateMap = new Map();
+    updates.forEach(u => updateMap.set(String(u.name).trim(), u.station));
+    const searchB = String(branch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      if (isSameDate(data[i][1], dateStr) && String(data[i][2]).trim() === searchB) {
+        const rowName = String(data[i][4]).trim();
+        if (updateMap.has(rowName)) {
+          sheet.getRange(i + 1, 20).setValue(updateMap.get(rowName)); // Col T
+        }
+      }
+    }
+    return { success: true, message: 'บันทึกจุดปฏิบัติงานเรียบร้อย' };
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- อัปเดตสถานะการอนุมัติ OT ---
+function updateOTApprovalBulk(dateStr, branch, updates, approverName) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!sheet) return { success: false, message: 'ไม่พบ Sheet ข้อมูล' };
+
+    const data = sheet.getDataRange().getValues();
+    const updateMap = new Map();
+    updates.forEach(u => updateMap.set(String(u.name).trim(), u.isApproved));
+    const searchB = String(branch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      if (isSameDate(data[i][1], dateStr) && String(data[i][2]).trim() === searchB) {
+        const rowName = String(data[i][4]).trim();
+        if (updateMap.has(rowName)) {
+          const isAppr = updateMap.get(rowName);
+          const val = isAppr ? approverName : '';
+          sheet.getRange(i + 1, 21).setValue(val); // Col U (Index 20 / Column 21)
+        }
+      }
+    }
+    return { success: true, message: 'บันทึกการอนุมัติ OT เรียบร้อย' };
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- 9. ดึงข้อมูลประวัติการทำงาน ---
+function getHistoryData(searchDate, searchBranch) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!sheet) return { success: true, data: [] };
+
+    const data = sheet.getDataRange().getValues(); 
+    const latestEntriesMap = new Map();
+    const searchB = String(searchBranch).trim();
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (isSameDate(row[1], searchDate) && String(row[2]).trim() === searchB) {
+        
+        const uniqueKey = row[3] || row[4];
+        let status = row[11];
+        if ((!row[6] || row[6] === '') && status !== 'หยุด') status = 'หยุด';
+        
+        let tsStr = '';
+        if (row[0] instanceof Date) tsStr = Utilities.formatDate(row[0], Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm:ss');
+        else tsStr = String(row[0] || '');
+
+        let workDateStr = '';
+        if (row[1] instanceof Date) workDateStr = Utilities.formatDate(row[1], Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        else workDateStr = String(row[1] || '');
+
+        let checkInStr = '';
+        if (row[6] instanceof Date) checkInStr = Utilities.formatDate(row[6], Session.getScriptTimeZone(), 'HH:mm');
+        else checkInStr = String(row[6] || '').trim();
+
+        let checkOutStr = '';
+        if (row[7] instanceof Date) checkOutStr = Utilities.formatDate(row[7], Session.getScriptTimeZone(), 'HH:mm');
+        else checkOutStr = String(row[7] || '').trim();
+
+        latestEntriesMap.set(uniqueKey, {
+          timestamp: tsStr,
+          workDate: workDateStr,
+          name: String(row[4] || ''),
+          position: String(row[5] || ''),
+          checkIn: checkInStr,
+          checkOut: checkOutStr,
+          breakTime: String(row[8] || ''),
+          ot: String(row[9] || ''),
+          wage: String(row[10] || ''),
+          status: String(status || ''),
+          note: String(row[12] || ''),
+          empType: String(row[13] || ''),
+          unpaidLeave: String(row[14] || ''),
+          otAccumulated: String(row[15] || ''),
+          hourlyLeave: String(row[16] || ''),
+          otherNote: String(row[17] || ''),
+          breakTimeRange: String(row[18] || ''),
+          workStation: String(row[19] || ''),
+          otApprover: String(row[20] || ''), // Col U
+          useAccumulatedHours: String(row[21] || '') // Col V
+        });
+      }
+    }
+    
+    const history = Array.from(latestEntriesMap.values());
+    history.sort((a, b) => getPositionPriority(a.position) - getPositionPriority(b.position));
+    return { success: true, data: history };
+  } catch(e) {
+    throw new Error("ระบบดึงประวัติขัดข้อง: " + e.message);
+  }
+}
+
+// --- ดึงข้อมูลการแจ้งเตือน OT ---
+function getOTNotifications(searchBranch) {
+  try {
+    const ss = SpreadsheetApp.openById(DESTINATION_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!sheet) return { success: false, message: 'ไม่พบตารางข้อมูล' };
+
+    const data = sheet.getDataRange().getValues();
+    let pending = [];
+    let approved = [];
+    
+    const branchStr = String(searchBranch).trim();
+    const isAdmin = (branchStr === 'All' || branchStr === 'Admin' || branchStr === '');
+
+    // วนลูปจากล่างขึ้นบน เพื่อให้ได้ข้อมูลล่าสุดก่อน
+    for (let i = data.length - 1; i >= 1; i--) {
+      const row = data[i];
+      const rowBranch = String(row[2]).trim(); // คอลัมน์ C: สาขา
+      
+      if (isAdmin || rowBranch === branchStr) {
+         const otVal = parseFloat(row[9]); // คอลัมน์ J: OT (ชม.)
+         if (!isNaN(otVal) && otVal > 0) {
+             const approver = String(row[20] || '').trim(); // คอลัมน์ U: ผู้อนุมัติ OT
+             let workDateStr = '';
+             let workDateFormatted = '';
+             
+             // แก้ไขการแปลงวันที่ให้แม่นยำยิ่งขึ้น
+             let d = new Date(row[1]);
+             if (!isNaN(d.getTime())) {
+                 workDateStr = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+                 workDateFormatted = Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd/MM/yyyy');
+             } else {
+                 workDateStr = String(row[1]);
+                 workDateFormatted = workDateStr;
+             }
+
+             const notifItem = {
+                 date: workDateStr,
+                 dateFormatted: workDateFormatted,
+                 branch: rowBranch,
+                 name: String(row[4] || '').trim(), // คอลัมน์ E: ชื่อพนักงาน
+                 ot: otVal,
+                 approver: approver
+             };
+
+             if (approver === '') {
+                 if (pending.length < 30) pending.push(notifItem); // แสดงรออนุมัติสูงสุด 30 รายการ
+             } else {
+                 if (approved.length < 10) approved.push(notifItem); // แสดงอนุมัติแล้วล่าสุด 10 รายการ
+             }
+         }
+      }
+      
+      // หยุดค้นหาเมื่อข้อมูลเต็ม เพื่อความรวดเร็ว
+      if (pending.length >= 30 && approved.length >= 10) break;
+    }
+
+    return { success: true, data: { pending: pending, approved: approved } };
+  } catch(e) {
+    return { success: false, message: e.message };
+  }
+}
