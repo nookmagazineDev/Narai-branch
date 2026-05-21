@@ -56,11 +56,27 @@ export default async function handler(req, res) {
             if (itmCode) {
               const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
               const qty = parseFloat(item.Qty) || 0;
-              if (!usageMap[normId]) usageMap[normId] = 0;
-              usageMap[normId] += qty;
+              if (!usageMap[normId]) {
+                usageMap[normId] = { total: 0, details: {} };
+              }
+              usageMap[normId].total += qty;
+              
+              const dateKey = item.Usg_Date.split('T')[0]; // Format like YYYY-MM-DD
+              if (!usageMap[normId].details[dateKey]) {
+                usageMap[normId].details[dateKey] = 0;
+              }
+              usageMap[normId].details[dateKey] += qty;
             }
           }
         }
+      });
+      
+      // Fix floating point precision
+      Object.keys(usageMap).forEach(key => {
+        usageMap[key].total = Number(usageMap[key].total.toFixed(2));
+        Object.keys(usageMap[key].details).forEach(dateKey => {
+          usageMap[key].details[dateKey] = Number(usageMap[key].details[dateKey].toFixed(2));
+        });
       });
       
       return res.status(200).json({ status: 'success', data: usageMap });

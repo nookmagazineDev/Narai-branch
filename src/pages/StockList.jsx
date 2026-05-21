@@ -23,6 +23,7 @@ export default function StockList() {
   const [usageStartDate, setUsageStartDate] = useState('');
   const [usageEndDate, setUsageEndDate] = useState('');
   const [isFetchingUsage, setIsFetchingUsage] = useState(false);
+  const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
@@ -405,9 +406,17 @@ export default function StockList() {
 
                           {/* ยอดใช้จาก API */}
                           <td className="px-4 py-3 text-center bg-emerald-50/30">
-                            <div className="font-semibold text-emerald-600 text-sm">
-                              {item.apiUsage !== undefined ? item.apiUsage : '-'}
-                            </div>
+                            {item.apiUsage && item.apiUsage.total !== undefined ? (
+                              <div 
+                                className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
+                                onClick={() => setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details })}
+                                title="คลิกเพื่อดูรายละเอียด"
+                              >
+                                {item.apiUsage.total}
+                              </div>
+                            ) : (
+                              <div className="font-semibold text-emerald-600 text-sm">-</div>
+                            )}
                           </td>
 
                           {/* Input fields — hidden for 'all' */}
@@ -446,6 +455,50 @@ export default function StockList() {
           <PackageSearch className="w-12 h-12 text-gray-300" />
           <p className="text-lg font-medium">เลือกสาขาเพื่อดูข้อมูลสต๊อก</p>
           <p className="text-sm">ใช้ตัวเลือกสาขาด้านบนเพื่อดูรายละเอียด</p>
+        </div>
+      )}
+
+      {/* Usage Details Modal */}
+      {selectedUsageDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm transition-opacity" onClick={() => setSelectedUsageDetails(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-emerald-50 flex justify-between items-center">
+              <h3 className="font-bold text-emerald-800">รายละเอียดการเบิกใช้</h3>
+              <button onClick={() => setSelectedUsageDetails(null)} className="text-emerald-400 hover:text-emerald-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 max-h-96 overflow-y-auto">
+              <p className="text-sm text-gray-700 mb-4 font-semibold border-b pb-3">{selectedUsageDetails.name}</p>
+              <table className="w-full text-sm text-left border-collapse">
+                <thead className="bg-gray-100 border-b">
+                  <tr>
+                    <th className="px-4 py-2 font-semibold text-gray-700 rounded-tl-md">วันที่</th>
+                    <th className="px-4 py-2 font-semibold text-gray-700 text-right rounded-tr-md">จำนวน</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {Object.entries(selectedUsageDetails.details).sort(([a], [b]) => a.localeCompare(b)).map(([date, qty], idx) => (
+                    <tr key={idx} className="hover:bg-emerald-50/50 transition-colors">
+                      <td className="px-4 py-3 text-gray-600">{date}</td>
+                      <td className="px-4 py-3 text-gray-900 text-right font-bold">{qty}</td>
+                    </tr>
+                  ))}
+                  {Object.keys(selectedUsageDetails.details).length === 0 && (
+                    <tr>
+                      <td colSpan="2" className="px-4 py-6 text-center text-gray-400">ไม่มีข้อมูลการเบิกใช้</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+              <button 
+                onClick={() => setSelectedUsageDetails(null)}
+                className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
