@@ -37,6 +37,9 @@ export default function DashboardLayout() {
       icon: PackageSearch,
       subItems: [
         { name: 'นับสต๊อกและขอเบิก', path: '/stock/list' },
+        ...(String(user?.branch).toLowerCase() === 'all' 
+          ? [{ name: 'ดูยอดรวมทุกสาขา', path: '/stock/total' }] 
+          : [])
       ]
     }
   ];

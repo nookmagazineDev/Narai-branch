@@ -498,6 +498,148 @@ function doPost(e) {
       }
       response.status = 'success';
       response.data = items;
+    } else if (action === 'getStockTotal') {
+      var endDateStr = data.endDate || ''; 
+      var endDateObj = null;
+      if (endDateStr) {
+        var parts = endDateStr.split('-');
+        endDateObj = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59);
+      }
+      
+      var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      
+      var normalizeId = function(id) {
+        if (id === null || id === undefined) return '';
+        return String(id).replace(/^0+/, '').toLowerCase();
+      };
+
+      // 1. Read ยอดยกมา
+      var balancesMap = {}; // { pid: { branch: { balance, date } } }
+      var balanceSheet = stockSs.getSheetByName('ยอดยกมา');
+      if (balanceSheet) {
+        var balValues = balanceSheet.getDataRange().getValues();
+        for (var b = 1; b < balValues.length; b++) {
+          var bRow = balValues[b];
+          var bProductId = normalizeId(bRow[0]);
+          var bBranch = bRow[2] ? bRow[2].toString().toLowerCase() : '';
+          var bBalance = parseFloat(bRow[3]);
+          var bDate = bRow[4];
+          if (bProductId && bBranch && !isNaN(bBalance)) {
+            if (!balancesMap[bProductId]) balancesMap[bProductId] = {};
+            balancesMap[bProductId][bBranch] = {
+              balance: bBalance,
+              date: bDate instanceof Date ? bDate : null
+            };
+          }
+        }
+      }
+
+      // 2. Read ข้อมูลนับสตอค and get the LATEST count <= endDate for each branch
+      var latestCountMap = {}; // { pid: { branch: { remaining, date } } }
+      var countSheetR = stockSs.getSheetByName('ข้อมูลนับสตอค');
+      if (countSheetR && countSheetR.getLastRow() > 1) {
+        var csValues = countSheetR.getDataRange().getValues();
+        for (var cs = 1; cs < csValues.length; cs++) {
+          var csRow = csValues[cs];
+          var csDate = csRow[0];
+          var csCounter = csRow[1];
+          var csBranch = csRow[2] ? csRow[2].toString().toLowerCase() : '';
+          var csPid = normalizeId(csRow[3]);
+          var csRemaining = parseFloat(csRow[6]);
+          
+          if (csPid && csBranch && !isNaN(csRemaining)) {
+            var rowDateObj = csDate instanceof Date ? csDate : new Date(csDate);
+            // Check if within endDate
+            if (!endDateObj || rowDateObj <= endDateObj) {
+              if (!latestCountMap[csPid]) latestCountMap[csPid] = {};
+              // Keep the latest date
+              if (!latestCountMap[csPid][csBranch] || rowDateObj > latestCountMap[csPid][csBranch].dateObj) {
+                latestCountMap[csPid][csBranch] = {
+                  remaining: csRemaining,
+                  dateObj: rowDateObj,
+                  dateStr: Utilities.formatDate(rowDateObj, "Asia/Bangkok", "dd/MM/yyyy HH:mm")
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      var categoryMap = {};
+      var categorySheet = stockSs.getSheetByName('หมวดจัดเก็บสาขา');
+      if (categorySheet) {
+        var catValues = categorySheet.getDataRange().getValues();
+        for (var c = 1; c < catValues.length; c++) {
+          var cRow = catValues[c];
+          var cProductId = normalizeId(cRow[0]);
+          var cBranch = cRow[2] ? cRow[2].toString().toLowerCase() : '';
+          var cCategory = cRow[3];
+          if (cProductId && cBranch) {
+            // we'll just take the first encountered category for "all" since it varies by branch
+            if (!categoryMap[cProductId]) {
+              categoryMap[cProductId] = cCategory;
+            }
+          }
+        }
+      }
+
+      var sheet = stockSs.getSheetByName('รายการสินค้า');
+      if (!sheet) throw new Error('Sheet "รายการสินค้า" not found');
+      var values = sheet.getDataRange().getValues();
+      var items = [];
+      
+      for (var i = 1; i < values.length; i++) {
+        var row = values[i];
+        if (!row[0] && !row[1]) continue;
+        var pId = row[0] || '';
+        var normId = normalizeId(pId);
+        
+        // Calculate Total Remaining
+        var totalRemaining = 0;
+        var branchesAccounted = {};
+        var maxDateObj = null;
+        var hasAnyStock = false;
+
+        // Add from latest count first
+        if (latestCountMap[normId]) {
+          for (var br in latestCountMap[normId]) {
+            totalRemaining += latestCountMap[normId][br].remaining;
+            branchesAccounted[br] = true;
+            hasAnyStock = true;
+            if (!maxDateObj || latestCountMap[normId][br].dateObj > maxDateObj) {
+              maxDateObj = latestCountMap[normId][br].dateObj;
+            }
+          }
+        }
+        
+        // Add from balances if no count exists for that branch
+        if (balancesMap[normId]) {
+          for (var br in balancesMap[normId]) {
+            if (!branchesAccounted[br]) {
+              totalRemaining += balancesMap[normId][br].balance;
+              hasAnyStock = true;
+              if (balancesMap[normId][br].date) {
+                if (!maxDateObj || balancesMap[normId][br].date > maxDateObj) {
+                  maxDateObj = balancesMap[normId][br].date;
+                }
+              }
+            }
+          }
+        }
+
+        items.push({
+          productId: pId,
+          name: row[1] || '',
+          unit: row[2] || '',
+          storeCat: row[3] || '',
+          storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),
+          rdCat: row[5] || '',
+          totalRemaining: hasAnyStock ? Number(totalRemaining.toFixed(2)) : '',
+          lastDate: maxDateObj ? Utilities.formatDate(maxDateObj, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : ''
+        });
+      }
+      response.status = 'success';
+      response.data = items;
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
       
