@@ -289,8 +289,7 @@ export default function StockList() {
                 onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
             
-            {/* Shared Date Picker for Usage + Received — only visible to 'all' users */}
-            {isAll && (
+            {/* Shared Date Picker for Usage + Received */}
             <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-sky-50 border border-emerald-100 p-2 rounded-xl">
               <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
               <input type="date" value={apiStartDate} onChange={(e) => setApiStartDate(e.target.value)}
@@ -305,7 +304,6 @@ export default function StockList() {
                 {isFetchingApi ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูลยอดใช้,ยอดรับเข้า'}
               </button>
             </div>
-            )}
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-purple-100 overflow-hidden">
@@ -341,7 +339,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
-                      {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>}
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
@@ -437,8 +435,7 @@ export default function StockList() {
                           </td>
                           )}
 
-                          {/* ยอดรับจาก API — เฉพาะ isAll */}
-                          {isAll && (
+                          {/* ยอดรับจาก API — ทุกคนเห็นได้ */}
                           <td className="px-4 py-3 text-center bg-sky-50/30">
                             {item.apiReceived && item.apiReceived.total !== undefined ? (
                               <div
@@ -452,7 +449,6 @@ export default function StockList() {
                               <div className="font-semibold text-sky-600 text-sm">-</div>
                             )}
                           </td>
-                          )}
 
                           {/* ยอดคงเหลือจากระบบ — เฉพาะ isAll */}
                           {isAll && (
