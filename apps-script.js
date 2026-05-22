@@ -599,6 +599,7 @@ function doPost(e) {
         var branchesAccounted = {};
         var maxDateObj = null;
         var hasAnyStock = false;
+        var branchDetails = [];
 
         // Add from latest count first
         if (latestCountMap[normId]) {
@@ -609,6 +610,12 @@ function doPost(e) {
             if (!maxDateObj || latestCountMap[normId][br].dateObj > maxDateObj) {
               maxDateObj = latestCountMap[normId][br].dateObj;
             }
+            branchDetails.push({
+              branch: br,
+              remaining: latestCountMap[normId][br].remaining,
+              date: latestCountMap[normId][br].dateStr,
+              type: 'นับล่าสุด'
+            });
           }
         }
         
@@ -618,11 +625,19 @@ function doPost(e) {
             if (!branchesAccounted[br]) {
               totalRemaining += balancesMap[normId][br].balance;
               hasAnyStock = true;
+              var bDateStr = '';
               if (balancesMap[normId][br].date) {
                 if (!maxDateObj || balancesMap[normId][br].date > maxDateObj) {
                   maxDateObj = balancesMap[normId][br].date;
                 }
+                bDateStr = Utilities.formatDate(balancesMap[normId][br].date, "Asia/Bangkok", "dd/MM/yyyy HH:mm");
               }
+              branchDetails.push({
+                branch: br,
+                remaining: balancesMap[normId][br].balance,
+                date: bDateStr,
+                type: 'ยอดยกมา'
+              });
             }
           }
         }
@@ -635,7 +650,8 @@ function doPost(e) {
           storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),
           rdCat: row[5] || '',
           totalRemaining: hasAnyStock ? Number(totalRemaining.toFixed(2)) : '',
-          lastDate: maxDateObj ? Utilities.formatDate(maxDateObj, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : ''
+          lastDate: maxDateObj ? Utilities.formatDate(maxDateObj, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : '',
+          branchDetails: branchDetails
         });
       }
       response.status = 'success';

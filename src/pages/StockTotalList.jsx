@@ -14,6 +14,7 @@ export default function StockTotalList() {
   
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [branches, setBranches] = useState([]);
+  const [selectedBranchDetails, setSelectedBranchDetails] = useState(null);
 
   useEffect(() => {
     // Set default dates to today
@@ -215,7 +216,15 @@ export default function StockTotalList() {
 
                       {/* ยอดคงเหลือล่าสุดรวม (ที่นับได้) */}
                       <td className="px-4 py-3 text-center bg-indigo-50/30">
-                        <div className="font-semibold text-indigo-700 text-sm">
+                        <div 
+                          className={`font-semibold text-sm ${item.branchDetails && item.branchDetails.length > 0 ? 'text-indigo-700 cursor-pointer hover:underline' : 'text-indigo-700'}`}
+                          onClick={() => {
+                            if (item.branchDetails && item.branchDetails.length > 0) {
+                              setSelectedBranchDetails({ name: item.name, details: item.branchDetails });
+                            }
+                          }}
+                          title={item.branchDetails && item.branchDetails.length > 0 ? "คลิกเพื่อดูรายสาขา" : ""}
+                        >
                           {item.totalRemaining !== '' && item.totalRemaining !== undefined && !isNaN(item.totalRemaining) ? item.totalRemaining : '-'}
                         </div>
                         {item.lastDate && (
@@ -274,6 +283,47 @@ export default function StockTotalList() {
           </div>
         )}
       </div>
+
+      {/* Branch Details Modal */}
+      {selectedBranchDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedBranchDetails(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-indigo-100 bg-indigo-50/50">
+              <h3 className="font-bold text-indigo-800">ยอดคงเหลือรายสาขา</h3>
+              <button onClick={() => setSelectedBranchDetails(null)} className="text-indigo-400 hover:text-indigo-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-4 max-h-[60vh] overflow-y-auto">
+              <p className="text-sm text-gray-700 mb-4 font-semibold border-b pb-3">{selectedBranchDetails.name}</p>
+              
+              {selectedBranchDetails.details.length > 0 ? (
+                <div className="space-y-2">
+                  {[...selectedBranchDetails.details].sort((a,b) => String(a.branch).localeCompare(String(b.branch))).map((entry, idx) => (
+                    <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
+                      <div>
+                        <div className="font-medium text-gray-800 text-sm uppercase">{entry.branch}</div>
+                        {entry.date && <div className="text-[10px] text-gray-400 mt-0.5">{entry.date.split(' ')[0]} <span className="ml-1 text-indigo-400">({entry.type})</span></div>}
+                      </div>
+                      <div className="font-bold text-indigo-600">
+                        {entry.remaining}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-400 text-sm">ไม่มีข้อมูลสาขา</div>
+              )}
+            </div>
+            <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+              <button 
+                className="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200 transition-colors"
+                onClick={() => setSelectedBranchDetails(null)}
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
