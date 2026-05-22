@@ -340,6 +340,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
                       {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
                     </tr>
@@ -445,6 +446,31 @@ export default function StockList() {
                             ) : (
                               <div className="font-semibold text-sky-600 text-sm">-</div>
                             )}
+                          </td>
+
+                          {/* ยอดคงเหลือจากระบบ = ยอดยกมา + ยอดรับ - ยอดใช้ */}
+                          <td className="px-4 py-3 text-center bg-amber-50/50 border-l-2 border-amber-200">
+                            {(() => {
+                              const prevBal = parseFloat(item.previousBalance);
+                              const received = item.apiReceived?.total;
+                              const usage = item.apiUsage?.total;
+                              const hasReceived = received !== undefined && received !== null;
+                              const hasUsage = usage !== undefined && usage !== null;
+                              if (isNaN(prevBal) && !hasReceived && !hasUsage) {
+                                return <div className="font-bold text-amber-700 text-sm">-</div>;
+                              }
+                              const base = isNaN(prevBal) ? 0 : prevBal;
+                              const rec = hasReceived ? received : 0;
+                              const use = hasUsage ? usage : 0;
+                              const systemBalance = Number((base + rec - use).toFixed(2));
+                              const color = systemBalance < 0 ? 'text-red-600' : 'text-amber-800';
+                              return (
+                                <div className={`font-bold text-sm ${color}`}>
+                                  {systemBalance}
+                                </div>
+                              );
+                            })()}
+                            <div className="text-[10px] text-amber-400 mt-0.5">ยกมา+รับ-ใช้</div>
                           </td>
 
                           {/* Input fields — hidden for 'all' */}
