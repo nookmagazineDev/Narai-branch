@@ -192,6 +192,7 @@ export default function StockTotalList() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัส</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุดรวม</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้รวม</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับรวม</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-36 bg-fuchsia-50/60">คงเหลือรวมระบบ</th>
@@ -211,6 +212,18 @@ export default function StockTotalList() {
                       <td className="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-600">{item.productId}</td>
                       <td className="px-4 py-3 text-sm text-gray-800 font-medium">{item.name}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
+
+                      {/* ยอดคงเหลือล่าสุดรวม (ที่นับได้) */}
+                      <td className="px-4 py-3 text-center bg-indigo-50/30">
+                        <div className="font-semibold text-indigo-700 text-sm">
+                          {item.totalRemaining !== '' && item.totalRemaining !== undefined && !isNaN(item.totalRemaining) ? item.totalRemaining : '-'}
+                        </div>
+                        {item.lastDate && (
+                          <div className="text-[10px] text-gray-400 mt-0.5" title="นับ/ยกมา ล่าสุด (อาจต่างกันในแต่ละสาขา)">
+                            อิงวันที่: {item.lastDate.split(' ')[0]}
+                          </div>
+                        )}
+                      </td>
 
                       {/* ยอดใช้รวม */}
                       <td className="px-4 py-3 text-center bg-emerald-50/30">
@@ -249,11 +262,6 @@ export default function StockTotalList() {
                               <div className="text-[10px] text-fuchsia-400 mt-0.5">
                                 นับล่าสุด+รับ-ใช้
                               </div>
-                              {item.lastDate && (
-                                <div className="text-[10px] text-gray-400" title="นับ/ยกมา ล่าสุด (อาจต่างกันในแต่ละสาขา)">
-                                  อิงวันที่: {item.lastDate.split(' ')[0]}
-                                </div>
-                              )}
                             </>
                           );
                         })()}
