@@ -392,9 +392,10 @@ function doPost(e) {
         }
       }
 
-      // Build lastStock map from ข้อมูลนับสตอค sheet (latest row per product per branch)
+      // Build lastStock map from ข้อมูลนับสตอค sheet — keep full history per product
       var lastStockMap = {};
       var previousStockMap = {}; // second-to-last = ยอดยกมา
+      var stockHistoryMap = {}; // all entries sorted oldest-first
       var countSheetR = stockSs.getSheetByName('ข้อมูลนับสตอค');
       if (countSheetR && countSheetR.getLastRow() > 1) {
         var csValues = countSheetR.getDataRange().getValues();
@@ -405,15 +406,22 @@ function doPost(e) {
           var csDate = csRow[0];
           var csRemaining = csRow[6];
           var csCounter = csRow[1];
+          var csDateStr = csDate instanceof Date ? Utilities.formatDate(csDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : csDate;
           if (csPid && csBranch === reqBranch) {
             if (lastStockMap[csPid]) {
               previousStockMap[csPid] = lastStockMap[csPid];
             }
             lastStockMap[csPid] = {
               remaining: csRemaining,
-              date: csDate instanceof Date ? Utilities.formatDate(csDate, "Asia/Bangkok", "dd/MM/yyyy HH:mm") : csDate,
+              date: csDateStr,
               counter: csCounter
             };
+            if (!stockHistoryMap[csPid]) stockHistoryMap[csPid] = [];
+            stockHistoryMap[csPid].push({
+              remaining: csRemaining,
+              date: csDateStr,
+              counter: csCounter
+            });
           }
         }
       }
@@ -482,6 +490,7 @@ function doPost(e) {
           lastStock: lastStockMap[normId] ? lastStockMap[normId].remaining : '',
           lastStockDate: lastStockMap[normId] ? lastStockMap[normId].date : '',
           lastStockCounter: lastStockMap[normId] ? lastStockMap[normId].counter : '',
+          stockHistory: stockHistoryMap[normId] ? stockHistoryMap[normId] : [],
           lastRequest: lastRequestMap[normId] ? lastRequestMap[normId].qty : '',
           lastRequestDate: lastRequestMap[normId] ? lastRequestMap[normId].date : '',
           lastRequester: lastRequestMap[normId] ? lastRequestMap[normId].requester : ''

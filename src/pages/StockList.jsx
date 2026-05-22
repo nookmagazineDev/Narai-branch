@@ -25,6 +25,7 @@ export default function StockList() {
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
+  const [selectedStockHistory, setSelectedStockHistory] = useState(null);
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
@@ -374,7 +375,11 @@ export default function StockList() {
 
                           {/* ยอดยกมา */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
-                            <div className="font-semibold text-purple-700 text-sm">
+                            <div
+                              className={`font-semibold text-purple-700 text-sm ${item.stockHistory && item.stockHistory.length > 1 ? 'cursor-pointer hover:underline hover:text-purple-900' : ''}`}
+                              onClick={() => item.stockHistory && item.stockHistory.length > 1 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'previous' })}
+                              title={item.stockHistory && item.stockHistory.length > 1 ? 'คลิกเพื่อดูประวัติ' : ''}
+                            >
                               {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
                             </div>
                             {item.previousBalanceDate && (
@@ -384,7 +389,11 @@ export default function StockList() {
 
                           {/* คงเหลือล่าสุด (from ข้อมูลนับสตอค) */}
                           <td className="px-4 py-3 text-center bg-indigo-50/30">
-                            <div className="font-semibold text-indigo-700 text-sm">
+                            <div
+                              className={`font-semibold text-indigo-700 text-sm ${item.stockHistory && item.stockHistory.length > 0 ? 'cursor-pointer hover:underline hover:text-indigo-900' : ''}`}
+                              onClick={() => item.stockHistory && item.stockHistory.length > 0 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'last' })}
+                              title={item.stockHistory && item.stockHistory.length > 0 ? 'คลิกเพื่อดูประวัติ' : ''}
+                            >
                               {item.lastStock !== '' && item.lastStock !== undefined ? item.lastStock : '-'}
                             </div>
                             {item.lastStockDate && (
@@ -557,6 +566,65 @@ export default function StockList() {
               <button
                 onClick={() => setSelectedReceivedDetails(null)}
                 className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sky-500/20"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Count History Modal */}
+      {selectedStockHistory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedStockHistory(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-indigo-50 flex justify-between items-center">
+              <h3 className="font-bold text-indigo-800">ประวัติการนับสต็อก</h3>
+              <button onClick={() => setSelectedStockHistory(null)} className="text-indigo-400 hover:text-indigo-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 max-h-96 overflow-y-auto">
+              <p className="text-sm text-gray-700 mb-4 font-semibold border-b pb-3">{selectedStockHistory.name}</p>
+              <table className="w-full text-sm text-left border-collapse">
+                <thead className="bg-gray-100 border-b">
+                  <tr>
+                    <th className="px-4 py-2 font-semibold text-gray-700">วันที่นับ</th>
+                    <th className="px-4 py-2 font-semibold text-gray-700 text-right">ยอดคงเหลือ</th>
+                    <th className="px-4 py-2 font-semibold text-gray-700">ผู้นับ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {[...selectedStockHistory.history].reverse().map((entry, idx) => {
+                    const isLatest = idx === 0;
+                    const isPrevious = idx === 1;
+                    return (
+                      <tr
+                        key={idx}
+                        className={`transition-colors ${isLatest ? 'bg-indigo-50 font-semibold' : isPrevious ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                      >
+                        <td className="px-4 py-3 text-gray-700">
+                          {entry.date}
+                          {isLatest && <span className="ml-2 text-[10px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full">ล่าสุด</span>}
+                          {isPrevious && <span className="ml-2 text-[10px] bg-purple-400 text-white px-1.5 py-0.5 rounded-full">ยกมา</span>}
+                        </td>
+                        <td className={`px-4 py-3 text-right font-bold ${isLatest ? 'text-indigo-700' : isPrevious ? 'text-purple-700' : 'text-gray-800'}`}>
+                          {entry.remaining}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 text-xs">{entry.counter || '-'}</td>
+                      </tr>
+                    );
+                  })}
+                  {selectedStockHistory.history.length === 0 && (
+                    <tr>
+                      <td colSpan="3" className="px-4 py-6 text-center text-gray-400">ไม่มีข้อมูลประวัติ</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setSelectedStockHistory(null)}
+                className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               >
                 ปิด
               </button>
