@@ -55,27 +55,67 @@ export default function StockTotalList() {
 
     setIsFetchingApi(true);
     try {
-      // 1. Fetch Total Stock from Apps Script up to apiEndDate
-      const stockResPromise = apiCall('getStockTotal', { endDate: apiEndDate });
+      // 1. Fetch Total Stock from Apps Script (absolute latest count, ignoring UI dates)
+      const stockResPromise = apiCall('getStockTotal', { endDate: '' });
 
-      // 2. Fetch Usage & Received for ALL branches concurrently
+      // Determine earliest count date across all items and branches
+      let earliestCountDateStr = null;
+      stockResPromise.then(res => {
+        if (res.status === 'success') {
+          res.data.forEach(item => {
+            if (item.branchDetails) {
+              item.branchDetails.forEach(bd => {
+                if (bd.date) {
+                  const parts = bd.date.split(' ')[0].split('/'); // [dd, MM, yyyy]
+                  if (parts.length === 3) {
+                    const ymd = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                    if (!earliestCountDateStr || ymd < earliestCountDateStr) {
+                      earliestCountDateStr = ymd;
+                    }
+                  }
+                }
+              });
+            }
+          });
+        }
+      }).catch(() => {});
+
+      const stockRes = await stockResPromise;
+      if (stockRes.status !== 'success') {
+        toast.error('ไม่สามารถดึงยอดคงเหลือได้');
+        setIsFetchingApi(false);
+        return;
+      }
+
+      let fetchStartDate = earliestCountDateStr;
+      if (!fetchStartDate || fetchStartDate > apiStartDate) {
+        fetchStartDate = apiStartDate;
+      }
+
+      const todayYMD = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      let fetchEndDate = apiEndDate;
+      if (todayYMD > fetchEndDate) {
+        fetchEndDate = todayYMD;
+      }
+
       const validBranches = branches.filter(b => b.outletId);
       
       const usagePromises = validBranches.map(b => 
-        fetch(`/api/usage?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`)
+        fetch(`/api/usage?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
       
       const receivedPromises = validBranches.map(b => 
-        fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`)
+        fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
 
-      const [stockRes, usageResults, receivedResults] = await Promise.all([
-        stockResPromise,
+      const [usageResults, receivedResults] = await Promise.all([
         Promise.all(usagePromises),
         Promise.all(receivedPromises)
       ]);
+
+      let baseItems = stockRes.data;
 
       if (stockRes.status !== 'success') {
         toast.error('ไม่สามารถดึงยอดคงเหลือรวมได้');
@@ -86,34 +126,83 @@ export default function StockTotalList() {
       let baseItems = stockRes.data;
 
       // Aggregate Usage
-      const totalUsageMap = {};
-      usageResults.forEach(res => {
-        if (res.status === 'success' && res.data) {
-          Object.entries(res.data).forEach(([pid, data]) => {
-            if (!totalUsageMap[pid]) totalUsageMap[pid] = 0;
-            totalUsageMap[pid] += (data.total || 0);
-          });
-        }
+      const branchUsageMap = {};
+      usageResults.forEach((res, idx) => {
+        const bName = String(validBranches[idx].name).toLowerCase();
+        branchUsageMap[bName] = res.status === 'success' && res.data ? res.data : {};
       });
 
       // Aggregate Received
-      const totalReceivedMap = {};
-      receivedResults.forEach(res => {
-        if (res.status === 'success' && res.data) {
-          Object.entries(res.data).forEach(([pid, data]) => {
-            if (!totalReceivedMap[pid]) totalReceivedMap[pid] = 0;
-            totalReceivedMap[pid] += (data.total || 0);
-          });
-        }
+      const branchReceivedMap = {};
+      receivedResults.forEach((res, idx) => {
+        const bName = String(validBranches[idx].name).toLowerCase();
+        branchReceivedMap[bName] = res.status === 'success' && res.data ? res.data : {};
       });
 
-      // Merge into base items
+      // Merge and Calculate
       const mergedItems = baseItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+        
+        let uiTotalUsage = 0;
+        let calculatedTotalRemaining = 0;
+        let newBranchDetails = [];
+
+        // 1. Calculate UI Total Usage (within apiStartDate and apiEndDate)
+        validBranches.forEach(b => {
+          const bName = String(b.name).toLowerCase();
+          const bUsageDetails = branchUsageMap[bName]?.[normId]?.details || {};
+          Object.entries(bUsageDetails).forEach(([dateKey, qty]) => {
+            if (dateKey >= apiStartDate && dateKey <= apiEndDate) {
+              uiTotalUsage += qty;
+            }
+          });
+        });
+
+        // 2. Calculate System Balance Per Branch
+        if (item.branchDetails && item.branchDetails.length > 0) {
+          item.branchDetails.forEach(bd => {
+            const bName = String(bd.branch).toLowerCase();
+            let branchRemaining = parseFloat(bd.remaining);
+            if (isNaN(branchRemaining)) branchRemaining = 0;
+
+            let usageSinceCount = 0;
+            let receivedSinceCount = 0;
+
+            if (bd.date) {
+              const parts = bd.date.split(' ')[0].split('/'); // [dd, MM, yyyy]
+              if (parts.length === 3) {
+                const countDateKey = `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD
+                
+                const bUsageDetails = branchUsageMap[bName]?.[normId]?.details || {};
+                const bReceivedDetails = branchReceivedMap[bName]?.[normId]?.details || {};
+                
+                // Add received and subtract usage strictly *after* the count date
+                Object.entries(bUsageDetails).forEach(([dateKey, qty]) => {
+                  if (dateKey > countDateKey) usageSinceCount += qty;
+                });
+                Object.entries(bReceivedDetails).forEach(([dateKey, qty]) => {
+                  if (dateKey > countDateKey) receivedSinceCount += qty;
+                });
+              }
+            }
+
+            const branchSystemBalance = Number((branchRemaining + receivedSinceCount - usageSinceCount).toFixed(2));
+            calculatedTotalRemaining += branchSystemBalance;
+
+            newBranchDetails.push({
+              ...bd,
+              calculatedRemaining: branchSystemBalance,
+              usageSinceCount,
+              receivedSinceCount
+            });
+          });
+        }
+
         return {
           ...item,
-          totalUsage: totalUsageMap[normId] || 0,
-          totalReceived: totalReceivedMap[normId] || 0
+          uiTotalUsage: Number(uiTotalUsage.toFixed(2)),
+          calculatedTotalRemaining: item.branchDetails && item.branchDetails.length > 0 ? Number(calculatedTotalRemaining.toFixed(2)) : '',
+          newBranchDetails
         };
       });
 
@@ -193,10 +282,8 @@ export default function StockTotalList() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัส</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุดรวม</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้รวม</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับรวม</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-36 bg-fuchsia-50/60">คงเหลือรวมระบบ</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">ยอดคงเหลือรวม</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
@@ -214,66 +301,26 @@ export default function StockTotalList() {
                       <td className="px-4 py-3 text-sm text-gray-800 font-medium">{item.name}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                      {/* ยอดคงเหลือล่าสุดรวม (ที่นับได้) */}
-                      <td className="px-4 py-3 text-center bg-indigo-50/30">
-                        <div 
-                          className={`font-semibold text-sm ${item.branchDetails && item.branchDetails.length > 0 ? 'text-indigo-700 cursor-pointer hover:underline' : 'text-indigo-700'}`}
-                          onClick={() => {
-                            if (item.branchDetails && item.branchDetails.length > 0) {
-                              setSelectedBranchDetails({ name: item.name, details: item.branchDetails });
-                            }
-                          }}
-                          title={item.branchDetails && item.branchDetails.length > 0 ? "คลิกเพื่อดูรายสาขา" : ""}
-                        >
-                          {item.totalRemaining !== '' && item.totalRemaining !== undefined && !isNaN(item.totalRemaining) ? item.totalRemaining : '-'}
-                        </div>
-                        {item.lastDate && (
-                          <div className="text-[10px] text-gray-400 mt-0.5" title="นับ/ยกมา ล่าสุด (อาจต่างกันในแต่ละสาขา)">
-                            อิงวันที่: {item.lastDate.split(' ')[0]}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* ยอดใช้รวม */}
+                      {/* ยอดใช้รวม (จาก UI Date Picker) */}
                       <td className="px-4 py-3 text-center bg-emerald-50/30">
                         <div className="font-semibold text-emerald-600 text-sm">
-                          {item.totalUsage !== undefined && item.totalUsage > 0 ? Number(item.totalUsage.toFixed(2)) : '-'}
+                          {item.uiTotalUsage !== undefined && item.uiTotalUsage > 0 ? item.uiTotalUsage : '-'}
                         </div>
                       </td>
 
-                      {/* ยอดรับรวม */}
-                      <td className="px-4 py-3 text-center bg-sky-50/30">
-                        <div className="font-semibold text-sky-600 text-sm">
-                          {item.totalReceived !== undefined && item.totalReceived > 0 ? Number(item.totalReceived.toFixed(2)) : '-'}
+                      {/* ยอดคงเหลือล่าสุดรวม (นับล่าสุด + รับ - ใช้ จนถึงปัจจุบัน) */}
+                      <td className="px-4 py-3 text-center bg-indigo-50/30">
+                        <div 
+                          className={`font-semibold text-sm ${item.newBranchDetails && item.newBranchDetails.length > 0 ? 'text-indigo-700 cursor-pointer hover:underline' : 'text-indigo-700'}`}
+                          onClick={() => {
+                            if (item.newBranchDetails && item.newBranchDetails.length > 0) {
+                              setSelectedBranchDetails({ name: item.name, details: item.newBranchDetails });
+                            }
+                          }}
+                          title={item.newBranchDetails && item.newBranchDetails.length > 0 ? "คลิกเพื่อดูรายละเอียดคงเหลือระบบแต่ละสาขา" : ""}
+                        >
+                          {item.calculatedTotalRemaining !== '' ? item.calculatedTotalRemaining : '-'}
                         </div>
-                      </td>
-
-                      {/* ยอดคงเหลือรวมจากระบบ = (คงเหลือที่นับได้ล่าสุดของแต่ละสาขา หรือ ยกมา) + ยอดรับรวม - ยอดใช้รวม */}
-                      <td className="px-4 py-3 text-center bg-fuchsia-50/30 border-l-2 border-fuchsia-200">
-                        {(() => {
-                          const base = parseFloat(item.totalRemaining);
-                          const received = item.totalReceived || 0;
-                          const usage = item.totalUsage || 0;
-                          
-                          if (isNaN(base) && !item.totalReceived && !item.totalUsage) {
-                            return <div className="font-bold text-gray-400 text-sm">-</div>;
-                          }
-                          
-                          const startBal = isNaN(base) ? 0 : base;
-                          const systemBalance = Number((startBal + received - usage).toFixed(2));
-                          const color = systemBalance < 0 ? 'text-red-600' : 'text-fuchsia-800';
-                          
-                          return (
-                            <>
-                              <div className={`font-bold text-sm ${color}`}>
-                                {systemBalance}
-                              </div>
-                              <div className="text-[10px] text-fuchsia-400 mt-0.5">
-                                นับล่าสุด+รับ-ใช้
-                              </div>
-                            </>
-                          );
-                        })()}
                       </td>
                     </tr>
                   );
@@ -301,10 +348,15 @@ export default function StockTotalList() {
                     <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
                       <div>
                         <div className="font-medium text-gray-800 text-sm uppercase">{entry.branch}</div>
-                        {entry.date && <div className="text-[10px] text-gray-400 mt-0.5">{entry.date.split(' ')[0]} <span className="ml-1 text-indigo-400">({entry.type})</span></div>}
+                        {entry.date && <div className="text-[10px] text-gray-400 mt-0.5">นับล่าสุด: {entry.date.split(' ')[0]} <span className="ml-1 text-indigo-400">({entry.type})</span></div>}
                       </div>
-                      <div className="font-bold text-indigo-600">
-                        {entry.remaining}
+                      <div className="text-right">
+                        <div className={`font-bold ${entry.calculatedRemaining < 0 ? 'text-red-500' : 'text-indigo-600'}`}>
+                          {entry.calculatedRemaining}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                          (นับ {entry.remaining} + รับ {entry.receivedSinceCount} - ใช้ {entry.usageSinceCount})
+                        </div>
                       </div>
                     </div>
                   ))}
