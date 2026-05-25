@@ -7,6 +7,7 @@ export default function StockTotalList() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('storageCat');
   
   // Date Picker state (defaults to today)
   const [apiStartDate, setApiStartDate] = useState('');
@@ -216,8 +217,8 @@ export default function StockTotalList() {
     }
   };
 
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
+  const sortedAndFilteredItems = useMemo(() => {
+    let result = items.filter(item => {
       if (!searchTerm) return true;
       const lowerSearch = searchTerm.toLowerCase();
       return (
@@ -226,7 +227,22 @@ export default function StockTotalList() {
         String(item.storageCat || '').toLowerCase().includes(lowerSearch)
       );
     });
-  }, [items, searchTerm]);
+
+    result.sort((a, b) => {
+      if (sortBy === 'storageCat') {
+        const catA = String(a.storageCat || '');
+        const catB = String(b.storageCat || '');
+        return catA.localeCompare(catB, 'th') || String(a.productId || '').localeCompare(String(b.productId || ''));
+      } else if (sortBy === 'productId') {
+        return String(a.productId || '').localeCompare(String(b.productId || ''));
+      } else if (sortBy === 'name') {
+        return String(a.name || '').localeCompare(String(b.name || 'th'));
+      }
+      return 0;
+    });
+
+    return result;
+  }, [items, searchTerm, sortBy]);
 
   return (
     <div className="max-w-7xl mx-auto pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -241,15 +257,27 @@ export default function StockTotalList() {
       </div>
 
       <div className="flex flex-col md:flex-row gap-4 mb-4">
-        <div className="relative flex-1">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-5 w-5 text-gray-400" />
+        <div className="relative flex-1 flex gap-2">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-gray-400" />
+            </div>
+            <input type="text"
+              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-500 focus:border-fuchsia-500 sm:text-sm"
+              placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
-          <input type="text"
-            className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-500 focus:border-fuchsia-500 sm:text-sm"
-            placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)} />
+          
+          <select 
+            value={sortBy} 
+            onChange={(e) => setSortBy(e.target.value)}
+            className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700"
+          >
+            <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
+            <option value="productId">เรียงตามรหัสสินค้า</option>
+            <option value="name">เรียงตามชื่อสินค้า</option>
+          </select>
         </div>
         
         <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
@@ -281,24 +309,26 @@ export default function StockTotalList() {
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัส</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-24">หมวดจัดเก็บ</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้รวม</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">ยอดคงเหลือรวม</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
-                {filteredItems.length === 0 ? (
+                {sortedAndFilteredItems.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-12 text-center text-gray-400">
                       <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                       ไม่พบรายการสินค้า
                     </td>
                   </tr>
-                ) : filteredItems.map((item, index) => {
+                ) : sortedAndFilteredItems.map((item, index) => {
                   return (
                     <tr key={item.productId || index} className="hover:bg-gray-50/50 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-600">{item.productId}</td>
                       <td className="px-4 py-3 text-sm text-gray-800 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-xs text-fuchsia-600 font-medium">{item.storageCat || '-'}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
                       {/* ยอดใช้รวม (จาก UI Date Picker) */}
