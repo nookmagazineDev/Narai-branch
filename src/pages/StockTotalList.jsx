@@ -118,14 +118,6 @@ export default function StockTotalList() {
 
       let baseItems = stockRes.data;
 
-      if (stockRes.status !== 'success') {
-        toast.error('ไม่สามารถดึงยอดคงเหลือรวมได้');
-        setIsFetchingApi(false);
-        return;
-      }
-
-      let baseItems = stockRes.data;
-
       // Aggregate Usage
       const branchUsageMap = {};
       usageResults.forEach((res, idx) => {
