@@ -24,17 +24,22 @@ export default async function handler(req, res) {
     'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
     'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '109', 'zbw': '400',
     'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
-    'zk3': '906'
+    'zk3': '906', 'zip': '12'
   };
 
   const branchKey = String(branch).toLowerCase().trim();
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
-  const url = `http://183.89.248.221:14369/api/trn_usg?outletid=${encodeURIComponent(outletId)}`;
+  // คำนวณ pstart = startDate - 1 วัน
+  const startObj = new Date(startDate);
+  startObj.setDate(startObj.getDate() - 1);
+  const pstart = startObj.toISOString().split('T')[0];
+
+  const url = `http://183.89.248.221:14369/api/trans/?outletid=${encodeURIComponent(outletId)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&pstart=${encodeURIComponent(pstart)}`;
 
   try {
     const fetchRes = await fetch(url);
-    
+
     if (!fetchRes.ok) {
       return res.status(fetchRes.status).json({ status: 'error', message: `API Error: ${fetchRes.status}` });
     }
@@ -43,34 +48,29 @@ export default async function handler(req, res) {
 
     if (Array.isArray(apiData)) {
       const usageMap = {};
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
 
       apiData.forEach(item => {
-        if (item.Usg_Date) {
-          const d = new Date(item.Usg_Date);
-          if (d >= start && d <= end) {
-            const itmCode = item.Itm_Code;
-            if (itmCode) {
-              const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
-              const qty = parseFloat(item.Qty) || 0;
-              if (!usageMap[normId]) {
-                usageMap[normId] = { total: 0, details: {} };
-              }
-              usageMap[normId].total += qty;
-              
-              const dateKey = item.Usg_Date.split('T')[0]; // Format like YYYY-MM-DD
-              if (!usageMap[normId].details[dateKey]) {
-                usageMap[normId].details[dateKey] = 0;
-              }
-              usageMap[normId].details[dateKey] += qty;
-            }
+        // Item_code คือรหัสสินค้า, F5 คือยอดใช้ในระบบ
+        const itmCode = item.Item_code;
+        const qty = parseFloat(item.F5) || 0;
+
+        if (itmCode) {
+          const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
+
+          if (!usageMap[normId]) {
+            usageMap[normId] = { total: 0, details: {} };
           }
+          usageMap[normId].total += qty;
+
+          // ใช้วันที่จาก item ถ้ามี หรือใช้ startDate เป็น fallback
+          const dateKey = item.Date ? String(item.Date).split('T')[0] : startDate;
+          if (!usageMap[normId].details[dateKey]) {
+            usageMap[normId].details[dateKey] = 0;
+          }
+          usageMap[normId].details[dateKey] += qty;
         }
       });
-      
+
       // Fix floating point precision
       Object.keys(usageMap).forEach(key => {
         usageMap[key].total = Number(usageMap[key].total.toFixed(2));
@@ -78,12 +78,14 @@ export default async function handler(req, res) {
           usageMap[key].details[dateKey] = Number(usageMap[key].details[dateKey].toFixed(2));
         });
       });
-      
+
       return res.status(200).json({ status: 'success', data: usageMap });
     } else {
-      return res.status(200).json({ 
-        status: 'error', 
-        message: `${apiData.message} (ลองค้นหาด้วยรหัส: ${outletId} จากสาขา: ${branchKey})` || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง' 
+      return res.status(200).json({
+        status: 'error',
+        message: (apiData && apiData.message)
+          ? `${apiData.message} (outletId: ${outletId})`
+          : 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง'
       });
     }
 
