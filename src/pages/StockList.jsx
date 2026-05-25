@@ -196,16 +196,19 @@ export default function StockList() {
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
-      if (item.storageCat) cats.add(item.storageCat);
+      if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
   }, [items]);
 
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
-      const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          String(item.productId).toLowerCase().includes(searchTerm.toLowerCase());
-      const matchCat = filterCategory === '' || item.storageCat === filterCategory;
+      const itemNameStr = String(item.name || '').toLowerCase();
+      const itemCatStr = String(item.storageCat || '');
+      
+      const matchSearch = itemNameStr.includes(searchTerm.toLowerCase()) ||
+                          String(item.productId || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const matchCat = filterCategory === '' || itemCatStr === filterCategory;
       return matchSearch && matchCat;
     });
 
@@ -217,7 +220,7 @@ export default function StockList() {
       } else if (sortBy === 'productId') {
         return String(a.productId || '').localeCompare(String(b.productId || ''));
       } else if (sortBy === 'name') {
-        return String(a.name || '').localeCompare(String(b.name || 'th'));
+        return String(a.name || '').localeCompare(String(b.name || ''), 'th');
       }
       return 0;
     });
