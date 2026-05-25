@@ -437,7 +437,7 @@ export default function StockList() {
                               {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
                             </div>
                             {item.previousBalanceDate && (
-                              <div className="text-[10px] text-gray-400 mt-0.5">{item.previousBalanceDate.split(' ')[0]}</div>
+                              <div className="text-[10px] text-gray-400 mt-0.5">{String(item.previousBalanceDate || '').split(' ')[0]}</div>
                             )}
                           </td>
 
@@ -452,7 +452,7 @@ export default function StockList() {
                             </div>
                             {item.lastStockDate && (
                               <div className="text-[10px] text-gray-400 mt-0.5" title={`นับโดย: ${item.lastStockCounter || '-'}`}>
-                                {item.lastStockDate.split(' ')[0]}
+                                {String(item.lastStockDate || '').split(' ')[0]}
                                 {item.lastStockCounter && <span className="ml-1 text-indigo-400">· {item.lastStockCounter}</span>}
                               </div>
                             )}
@@ -465,7 +465,7 @@ export default function StockList() {
                             </div>
                             {item.lastRequestDate && (
                               <div className="text-[10px] text-gray-400 mt-0.5" title={`ผู้เบิก: ${item.lastRequester || '-'}`}>
-                                {item.lastRequestDate.split(' ')[0]}
+                                {String(item.lastRequestDate || '').split(' ')[0]}
                                 {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
                               </div>
                             )}
