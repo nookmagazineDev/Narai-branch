@@ -14,6 +14,7 @@ export default function StockList() {
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('storageCat');
   const [isSaving, setIsSaving] = useState(false);
   const [isEditingCat, setIsEditingCat] = useState(false);
   const [requestDate, setRequestDate] = useState('');
@@ -191,10 +192,27 @@ export default function StockList() {
     }
   };
 
-  const filteredItems = items.filter(item =>
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    String(item.productId).toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const sortedAndFilteredItems = useMemo(() => {
+    let result = items.filter(item =>
+      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(item.productId).toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    result.sort((a, b) => {
+      if (sortBy === 'storageCat') {
+        const catA = String(a.storageCat || '');
+        const catB = String(b.storageCat || '');
+        return catA.localeCompare(catB, 'th') || String(a.productId || '').localeCompare(String(b.productId || ''));
+      } else if (sortBy === 'productId') {
+        return String(a.productId || '').localeCompare(String(b.productId || ''));
+      } else if (sortBy === 'name') {
+        return String(a.name || '').localeCompare(String(b.name || 'th'));
+      }
+      return 0;
+    });
+
+    return result;
+  }, [items, searchTerm, sortBy]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -278,15 +296,26 @@ export default function StockList() {
         <>
           {/* Search */}
           <div className="flex flex-col md:flex-row gap-4 mb-4">
-            <div className="relative flex-1">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search className="h-5 w-5 text-gray-400" />
+            <div className="relative flex-1 flex gap-2">
+              <div className="relative flex-1">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-5 w-5 text-gray-400" />
+                </div>
+                <input type="text"
+                  className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
+                  placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
-              <input type="text"
-                className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
-                placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)} />
+              <select 
+                value={sortBy} 
+                onChange={(e) => setSortBy(e.target.value)}
+                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700"
+              >
+                <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
+                <option value="productId">เรียงตามรหัสสินค้า</option>
+                <option value="name">เรียงตามชื่อสินค้า</option>
+              </select>
             </div>
             
             {/* Shared Date Picker for Usage + Received */}
@@ -346,14 +375,14 @@ export default function StockList() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
-                    {filteredItems.length === 0 ? (
+                    {sortedAndFilteredItems.length === 0 ? (
                       <tr>
                         <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
                       </tr>
-                    ) : filteredItems.map((item, index) => {
+                    ) : sortedAndFilteredItems.map((item, index) => {
                       const originalIndex = items.findIndex(i => i.productId === item.productId);
                       return (
                         <tr key={item.productId || index} className="hover:bg-gray-50/50 transition-colors">
