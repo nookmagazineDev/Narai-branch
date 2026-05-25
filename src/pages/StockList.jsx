@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye } from 'lucide-react';
+import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function StockList() {
@@ -28,6 +28,10 @@ export default function StockList() {
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
+  const [pendingOrders, setPendingOrders] = useState([]);
+  const [showPendingModal, setShowPendingModal] = useState(false);
+  const [isLoadingPending, setIsLoadingPending] = useState(false);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
@@ -121,6 +125,55 @@ export default function StockList() {
     setItems(newItems);
   };
 
+  // --- Generate order number: YY + MM + running (0001) ---
+  const generateOrderNo = async (outletId) => {
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const prefix = `${yy}${mm}`;
+    try {
+      const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
+      const data = await res.json();
+      let maxRun = 0;
+      if (data.status === 'success' && Array.isArray(data.all)) {
+        data.all.forEach(order => {
+          const no = String(order.no || order.No || order.Ord_No || '');
+          if (no.startsWith(prefix)) {
+            const run = parseInt(no.slice(prefix.length), 10);
+            if (!isNaN(run) && run > maxRun) maxRun = run;
+          }
+        });
+      }
+      const nextRun = String(maxRun + 1).padStart(4, '0');
+      return `${prefix}${nextRun}`;
+    } catch {
+      return `${prefix}0001`;
+    }
+  };
+
+  // --- Fetch pending orders ---
+  const fetchPendingOrders = async () => {
+    const outletId = isAll
+      ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
+      : (user?.outletId || '');
+    if (!outletId) { toast.error('ไม่พบรหัสสาขา'); return; }
+    setIsLoadingPending(true);
+    try {
+      const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
+      const data = await res.json();
+      if (data.status === 'success') {
+        setPendingOrders(data.data || []);
+        setShowPendingModal(true);
+      } else {
+        toast.error(data.message || 'ไม่สามารถดึงข้อมูลใบเบิกค้างได้');
+      }
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    } finally {
+      setIsLoadingPending(false);
+    }
+  };
+
   const handleSave = async () => {
     const itemsToSave = items.filter(
       item => (item.remaining !== '' && item.remaining !== null) || (item.requested !== '' && Number(item.requested) > 0)
@@ -153,11 +206,39 @@ export default function StockList() {
       });
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
+
+        // --- ส่งใบเบิกไปยัง External API ถ้ามีรายการขอเบิก ---
+        if (hasRequests) {
+          setIsSubmittingOrder(true);
+          try {
+            const outletId = isAll
+              ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
+              : (user?.outletId || '');
+            if (outletId) {
+              const orderNo = await generateOrderNo(outletId);
+              const orderRes = await fetch(
+                `/api/insert_order?outletId=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(requestDate)}&no=${encodeURIComponent(orderNo)}`
+              );
+              const orderData = await orderRes.json();
+              if (orderData.status === 'success') {
+                toast.success(`📋 ส่งใบเบิกสำเร็จ! เลขที่ใบเบิก: ${orderNo}`, { duration: 6000 });
+              } else {
+                toast.error(`ส่งใบเบิกไม่สำเร็จ: ${orderData.message || 'เกิดข้อผิดพลาด'}`);
+              }
+            }
+          } catch (err) {
+            toast.error('ส่งใบเบิกไปยังระบบไม่สำเร็จ: ' + err.message);
+          } finally {
+            setIsSubmittingOrder(false);
+          }
+        }
+
         setItems(items.map(item => ({ ...item, remaining: '', requested: '' })));
         setRequestDate('');
         setRequesterName('');
         setCounterName('');
         loadData(effectiveBranch);
+
       } else {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
       }
@@ -251,17 +332,28 @@ export default function StockList() {
           </div>
         </div>
 
-        {/* Save button — hidden for 'all' */}
+        {/* Save + Pending Orders buttons — hidden for 'all' */}
         {!isAll && (
-          <button
-            onClick={handleSave}
-            disabled={isSaving || !effectiveBranch}
-            className="flex items-center justify-center gap-2 px-6 py-2.5 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-purple-200"
-          >
-            {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-            <span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={fetchPendingOrders}
+              disabled={isLoadingPending}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-amber-200"
+            >
+              {isLoadingPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
+              <span className="text-sm">ใบเบิกค้าง</span>
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isSaving || isSubmittingOrder || !effectiveBranch}
+              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-purple-200"
+            >
+              {(isSaving || isSubmittingOrder) ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+              <span>{isSubmittingOrder ? 'กำลังส่งใบเบิก...' : isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
+            </button>
+          </div>
         )}
+
       </div>
 
       {/* Branch selector for 'all' users */}
@@ -708,6 +800,63 @@ export default function StockList() {
               <button
                 onClick={() => setSelectedStockHistory(null)}
                 className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Orders Modal */}
+      {showPendingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowPendingModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-amber-50 flex justify-between items-center">
+              <h3 className="font-bold text-amber-800 flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                ใบเบิกที่ยังไม่ได้รับของ
+              </h3>
+              <button onClick={() => setShowPendingModal(false)} className="text-amber-400 hover:text-amber-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 max-h-[60vh] overflow-y-auto">
+              {pendingOrders.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                  <p>ไม่มีใบเบิกค้างในขณะนี้</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm border-collapse">
+                  <thead className="bg-amber-50 border-b">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-amber-800 font-semibold">เลขที่ใบเบิก</th>
+                      <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่เบิก</th>
+                      <th className="px-4 py-2 text-center text-amber-800 font-semibold">สถานะ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {pendingOrders.map((order, idx) => {
+                      const no = order.no || order.No || order.Ord_No || '-';
+                      const date = order.deldate || order.DelDate || order.Ord_DelDate || order.date || '-';
+                      const status = order.status || order.Status || order.Ord_Status || 'รอรับ';
+                      return (
+                        <tr key={idx} className="hover:bg-amber-50/50 transition-colors">
+                          <td className="px-4 py-3 font-mono font-semibold text-amber-700">{no}</td>
+                          <td className="px-4 py-3 text-gray-600">{String(date).split('T')[0]}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setShowPendingModal(false)}
+                className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
               >
                 ปิด
               </button>
