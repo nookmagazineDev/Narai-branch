@@ -14,6 +14,7 @@ export default function StockList() {
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
   const [sortBy, setSortBy] = useState('storageCat');
   const [isSaving, setIsSaving] = useState(false);
   const [isEditingCat, setIsEditingCat] = useState(false);
@@ -192,11 +193,21 @@ export default function StockList() {
     }
   };
 
+  const uniqueCategories = useMemo(() => {
+    const cats = new Set();
+    items.forEach(item => {
+      if (item.storageCat) cats.add(item.storageCat);
+    });
+    return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
+  }, [items]);
+
   const sortedAndFilteredItems = useMemo(() => {
-    let result = items.filter(item =>
-      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      String(item.productId).toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    let result = items.filter(item => {
+      const matchSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          String(item.productId).toLowerCase().includes(searchTerm.toLowerCase());
+      const matchCat = filterCategory === '' || item.storageCat === filterCategory;
+      return matchSearch && matchCat;
+    });
 
     result.sort((a, b) => {
       if (sortBy === 'storageCat') {
@@ -212,7 +223,7 @@ export default function StockList() {
     });
 
     return result;
-  }, [items, searchTerm, sortBy]);
+  }, [items, searchTerm, filterCategory, sortBy]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -307,6 +318,16 @@ export default function StockList() {
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
+              <select 
+                value={filterCategory} 
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700 max-w-[200px]"
+              >
+                <option value="">ทั้งหมด (ทุกหมวด)</option>
+                {uniqueCategories.map((cat, idx) => (
+                  <option key={idx} value={cat}>{cat}</option>
+                ))}
+              </select>
               <select 
                 value={sortBy} 
                 onChange={(e) => setSortBy(e.target.value)}
