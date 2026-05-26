@@ -30,12 +30,7 @@ export default async function handler(req, res) {
   const branchKey = String(branch).toLowerCase().trim();
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
-  // คำนวณ pstart = startDate - 1 วัน
-  const startObj = new Date(startDate);
-  startObj.setDate(startObj.getDate() - 1);
-  const pstart = startObj.toISOString().split('T')[0];
-
-  const url = `http://183.89.248.221:14369/api/trans/?outletid=${encodeURIComponent(outletId)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&pstart=${encodeURIComponent(pstart)}`;
+  const url = `http://183.89.248.221:14369/api/trn_usg?outletid=${encodeURIComponent(outletId)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
 
   try {
     const fetchRes = await fetch(url);
@@ -50,9 +45,9 @@ export default async function handler(req, res) {
       const usageMap = {};
 
       apiData.forEach(item => {
-        // Item_code คือรหัสสินค้า, F5 คือยอดใช้ในระบบ
-        const itmCode = item.Item_code;
-        const qty = parseFloat(item.F5) || 0;
+        // Itm_Code คือรหัสสินค้า, Qty คือจำนวน, Usg_Date คือวันที่
+        const itmCode = item.Itm_Code;
+        const qty = parseFloat(item.Qty) || 0;
 
         if (itmCode) {
           const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
@@ -62,8 +57,8 @@ export default async function handler(req, res) {
           }
           usageMap[normId].total += qty;
 
-          // ใช้วันที่จาก item ถ้ามี หรือใช้ startDate เป็น fallback
-          const dateKey = item.Date ? String(item.Date).split('T')[0] : startDate;
+          // ใช้ Usg_Date จาก item ถ้ามี หรือใช้ startDate เป็น fallback
+          const dateKey = item.Usg_Date ? String(item.Usg_Date).split('T')[0] : startDate;
           if (!usageMap[normId].details[dateKey]) {
             usageMap[normId].details[dateKey] = 0;
           }
