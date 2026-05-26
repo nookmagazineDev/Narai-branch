@@ -49,21 +49,23 @@ export default async function handler(req, res) {
         const itmCode = item.Itm_Code;
         const qty = parseFloat(item.Qty) || 0;
 
-        if (itmCode) {
-          const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
+        if (!itmCode) return;
 
-          if (!usageMap[normId]) {
-            usageMap[normId] = { total: 0, details: {} };
-          }
-          usageMap[normId].total += qty;
+        // กรองเฉพาะวันที่อยู่ในช่วงที่เลือก (startDate ถึง endDate)
+        const dateKey = item.Usg_Date ? String(item.Usg_Date).split('T')[0] : null;
+        if (!dateKey || dateKey < startDate || dateKey > endDate) return;
 
-          // ใช้ Usg_Date จาก item ถ้ามี หรือใช้ startDate เป็น fallback
-          const dateKey = item.Usg_Date ? String(item.Usg_Date).split('T')[0] : startDate;
-          if (!usageMap[normId].details[dateKey]) {
-            usageMap[normId].details[dateKey] = 0;
-          }
-          usageMap[normId].details[dateKey] += qty;
+        const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
+
+        if (!usageMap[normId]) {
+          usageMap[normId] = { total: 0, details: {} };
         }
+        usageMap[normId].total += qty;
+
+        if (!usageMap[normId].details[dateKey]) {
+          usageMap[normId].details[dateKey] = 0;
+        }
+        usageMap[normId].details[dateKey] += qty;
       });
 
       // Fix floating point precision
