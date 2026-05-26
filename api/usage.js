@@ -30,7 +30,12 @@ export default async function handler(req, res) {
   const branchKey = String(branch).toLowerCase().trim();
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
-  const url = `http://183.89.248.221:14369/api/trn_usg?outletid=${encodeURIComponent(outletId)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+  // คำนวณ pstart = startDate - 1 วัน
+  const startObj = new Date(startDate);
+  startObj.setDate(startObj.getDate() - 1);
+  const pstart = startObj.toISOString().split('T')[0];
+
+  const url = `http://183.89.248.221:14369/api/trans/?outletid=${encodeURIComponent(outletId)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&pstart=${encodeURIComponent(pstart)}`;
 
   try {
     const fetchRes = await fetch(url);
@@ -45,27 +50,25 @@ export default async function handler(req, res) {
       const usageMap = {};
 
       apiData.forEach(item => {
-        // Itm_Code คือรหัสสินค้า, Qty คือจำนวน, Usg_Date คือวันที่
-        const itmCode = item.Itm_Code;
-        const qty = parseFloat(item.Qty) || 0;
+        // Item_code คือรหัสสินค้า, F5 คือยอดใช้ในระบบ
+        const itmCode = item.Item_code;
+        const qty = parseFloat(item.F5) || 0;
 
-        if (!itmCode) return;
+        if (itmCode) {
+          const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
 
-        // กรองเฉพาะวันที่อยู่ในช่วงที่เลือก (startDate ถึง endDate)
-        const dateKey = item.Usg_Date ? String(item.Usg_Date).split('T')[0] : null;
-        if (!dateKey || dateKey < startDate || dateKey > endDate) return;
+          if (!usageMap[normId]) {
+            usageMap[normId] = { total: 0, details: {} };
+          }
+          usageMap[normId].total += qty;
 
-        const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
-
-        if (!usageMap[normId]) {
-          usageMap[normId] = { total: 0, details: {} };
+          // ใช้วันที่จาก item ถ้ามี หรือใช้ startDate เป็น fallback
+          const dateKey = item.Date ? String(item.Date).split('T')[0] : startDate;
+          if (!usageMap[normId].details[dateKey]) {
+            usageMap[normId].details[dateKey] = 0;
+          }
+          usageMap[normId].details[dateKey] += qty;
         }
-        usageMap[normId].total += qty;
-
-        if (!usageMap[normId].details[dateKey]) {
-          usageMap[normId].details[dateKey] = 0;
-        }
-        usageMap[normId].details[dateKey] += qty;
       });
 
       // Fix floating point precision
