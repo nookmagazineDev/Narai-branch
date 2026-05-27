@@ -314,6 +314,12 @@ function doPost(e) {
           }
           
           if (isMatchBranch && isMatchDate) {
+            var checkInVal = row[6];
+            if (checkInVal instanceof Date) { checkInVal = Utilities.formatDate(checkInVal, "Asia/Bangkok", "HH:mm"); } else { checkInVal = String(checkInVal || ''); }
+            
+            var checkOutVal = row[7];
+            if (checkOutVal instanceof Date) { checkOutVal = Utilities.formatDate(checkOutVal, "Asia/Bangkok", "HH:mm"); } else { checkOutVal = String(checkOutVal || ''); }
+
             history.push({
               timestamp: row[0],
               workDate: rowDate,
@@ -321,8 +327,8 @@ function doPost(e) {
               hrCode: row[3],
               name: row[4],
               position: row[5],
-              checkIn: row[6],
-              checkOut: row[7],
+              checkIn: checkInVal,
+              checkOut: checkOutVal,
               breakTime: row[8],
               ot: row[9],
               wage: row[10],
