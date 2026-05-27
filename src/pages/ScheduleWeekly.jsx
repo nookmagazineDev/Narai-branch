@@ -4,6 +4,21 @@ import { apiCall } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+function getStartOfWeek(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+  return new Date(d.setDate(diff));
+}
+
+function formatDateLocal(date) {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function ScheduleWeekly() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -32,6 +47,44 @@ export default function ScheduleWeekly() {
     hrLeave: '', useAccum: '',
     otherNote: ''
   });
+
+  const changeWeek = (weeks) => {
+    const newDate = new Date(weekStartDate);
+    newDate.setDate(newDate.getDate() + (weeks * 7));
+    setWeekStartDate(newDate);
+  };
+
+  const daysOfWeek = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStartDate);
+    d.setDate(d.getDate() + i);
+    const dateStr = formatDateLocal(d);
+    return {
+      dateStr,
+      dayName: d.toLocaleDateString('th-TH', { weekday: 'short' }),
+      shortDate: `${d.getDate()} ${d.toLocaleDateString('th-TH', { month: 'short' })}`
+    };
+  });
+
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      setLoading(true);
+      try {
+        const res = await apiCall('getScheduleEmployees', { branch: user?.branch || '' });
+        if (res.status === 'success') {
+          setEmployees(res.data);
+        } else {
+          toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+        }
+      } catch (err) {
+        toast.error('เกิดข้อผิดพลาดในการโหลดข้อมูล');
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (user?.branch) {
+      fetchEmployees();
+    }
+  }, [user]);
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;
