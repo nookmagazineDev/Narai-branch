@@ -174,8 +174,10 @@ export default function ScheduleWeekly() {
     try {
       const logs = [];
       Object.entries(scheduleData).forEach(([key, data]) => {
-        const [hrCode, dateStr] = key.split('_');
-        const emp = employees.find(e => e.hrCode === hrCode);
+        // Find the employee by matching the start of the key, since key is hrCode + '_' + dateStr
+        const emp = employees.find(e => key.startsWith(e.hrCode + '_'));
+        const dateStr = emp ? key.replace(emp.hrCode + '_', '') : '';
+        
         if (emp) {
           const ci = data.checkInHr ? `${data.checkInHr}:${data.checkInMin || '00'}` : '';
           const co = data.checkOutHr ? `${data.checkOutHr}:${data.checkOutMin || '00'}` : '';
@@ -281,6 +283,12 @@ export default function ScheduleWeekly() {
 
       // Filter out 'ล้างข้อมูล' if there's no existing entry we are actually clearing
       // In this case we just send everything because apps-script will handle 'ล้างข้อมูล' correctly (actually apps-script appending won't delete old data right now, but it matches the new structure)
+      
+      if (logs.length === 0) {
+        toast.error('รหัสพนักงานไม่ตรงกัน หรือไม่พบข้อมูลที่จะบันทึก');
+        setIsSaving(false);
+        return;
+      }
 
       const res = await apiCall('saveTimesheet', { logs });
       if (res.status === 'success') {
