@@ -30,7 +30,13 @@ export default function ScheduleWeekly() {
   // Helpers for options
   const hrOpts = Array.from({length: 17}, (_, i) => String(i + 8).padStart(2, '0'));
   const minOpts = ['00', '10', '20', '30', '40', '50'];
-  const breakOpts = ['0', '0.5', '1', '1.5', '2'];
+  const breakOpts = [
+    { value: '0', label: 'ไม่เบรค' },
+    ...Array.from({ length: 10 }, (_, i) => {
+      const val = (i + 1) * 30;
+      return { value: String(val), label: `${val / 60} ชั่วโมง` };
+    })
+  ];
   const otOpts = ['0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '4.5', '5'];
   const hrLeaveOpts = ['0', '1', '2', '3', '4', '5', '6', '7', '8'];
 
@@ -47,6 +53,53 @@ export default function ScheduleWeekly() {
     hrLeave: '', useAccum: '',
     otherNote: ''
   });
+
+  // Auto calculate checkOut time
+  useEffect(() => {
+    if (!activeCell || !cellData.checkInHr || !cellData.checkInMin) return;
+    
+    const empType = activeCell.type;
+    if (empType === 'P/T') return; // Do not auto-calc for part-time
+
+    const baseMin = (empType === 'DAY9') ? 540 : 480;
+    
+    const h = parseInt(cellData.checkInHr) || 0;
+    const m = parseInt(cellData.checkInMin) || 0;
+    
+    let total = h * 60 + m + baseMin;
+    total += parseInt(cellData.breakDur || '0');
+    total += (parseFloat(cellData.ot || '0') * 60);
+    total += (parseFloat(cellData.otAccum || '0') * 60);
+    
+    let eh = Math.floor(total / 60);
+    let em = total % 60;
+    
+    if (eh >= 24) {
+      if (eh === 24 && em === 0) {
+        // Keep 24:00
+      } else {
+        eh = eh % 24;
+      }
+    }
+    
+    const hrStr = String(eh).padStart(2, '0');
+    const minStr = String(em).padStart(2, '0');
+    
+    if (cellData.checkOutHr !== hrStr || cellData.checkOutMin !== minStr) {
+      setCellData(prev => ({
+        ...prev,
+        checkOutHr: hrStr,
+        checkOutMin: minStr
+      }));
+    }
+  }, [
+    activeCell?.type,
+    cellData.checkInHr,
+    cellData.checkInMin,
+    cellData.breakDur,
+    cellData.ot,
+    cellData.otAccum
+  ]);
 
   const changeWeek = (weeks) => {
     const newDate = new Date(weekStartDate);
@@ -431,7 +484,7 @@ export default function ScheduleWeekly() {
                         onChange={(e) => setCellData({...cellData, breakDur: e.target.value})}
                       >
                         <option value="">-</option>
-                        {breakOpts.map(b => <option key={b} value={b}>{b}</option>)}
+                        {breakOpts.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
                       </select>
                     </div>
                     <div>
