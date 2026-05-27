@@ -370,8 +370,9 @@ export default function ScheduleWeekly() {
                 {employees.map(emp => (
                   <tr key={emp.hrCode} className="border-b hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-2 border-r bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#f3f4f6]">
-                      <div className="font-medium text-gray-900">{emp.name}</div>
-                      <div className="text-xs text-gray-500">{emp.position}</div>
+                      <div className="text-xs text-purple-600 font-bold mb-0.5">{emp.hrCode}</div>
+                      <div className="font-medium text-gray-900 leading-tight">{emp.name}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{emp.position}</div>
                     </td>
                     {daysOfWeek.map(d => {
                       const key = `${emp.hrCode}_${d.dateStr}`;
