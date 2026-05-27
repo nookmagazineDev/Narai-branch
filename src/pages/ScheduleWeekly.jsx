@@ -119,15 +119,67 @@ export default function ScheduleWeekly() {
   });
 
   useEffect(() => {
-    const fetchEmployees = async () => {
+    const fetchData = async () => {
       setLoading(true);
       try {
-        const res = await apiCall('getScheduleEmployees', { branch: user?.branch || '' });
-        if (res.status === 'success') {
-          setEmployees(res.data);
+        // Fetch employees
+        const empRes = await apiCall('getScheduleEmployees', { branch: user?.branch || '' });
+        if (empRes.status === 'success') {
+          setEmployees(empRes.data);
         } else {
           toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
         }
+
+        // Fetch schedule data for the week
+        const start = new Date(weekStartDate);
+        const end = new Date(weekStartDate);
+        end.setDate(end.getDate() + 6);
+        
+        const schedRes = await apiCall('getHistoryData', { 
+          branch: user?.branch || '',
+          startDate: formatDateLocal(start),
+          endDate: formatDateLocal(end)
+        });
+
+        if (schedRes.status === 'success') {
+          const newScheduleData = {};
+          const sortedHistory = schedRes.data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+          sortedHistory.forEach(record => {
+            if (record.otherNote === 'ล้างข้อมูล') {
+               delete newScheduleData[`${record.hrCode}_${record.workDate}`];
+               return;
+            }
+
+            let brDur = '';
+            if (record.breakTime === 'ไม่เบรค') {
+              brDur = '0';
+            } else if (record.breakTime && String(record.breakTime).includes('ชม.')) {
+              brDur = String(parseFloat(record.breakTime) * 60);
+            }
+
+            newScheduleData[`${record.hrCode}_${record.workDate}`] = {
+              isStop: record.status === 'หยุด',
+              checkInHr: record.checkIn ? record.checkIn.split(':')[0] : '',
+              checkInMin: record.checkIn ? record.checkIn.split(':')[1] : '',
+              checkOutHr: record.checkOut ? record.checkOut.split(':')[0] : '',
+              checkOutMin: record.checkOut ? record.checkOut.split(':')[1] : '',
+              breakDur: brDur,
+              breakStartHr: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[0] : '',
+              breakStartMin: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[1] : '',
+              ot: String(record.ot || ''),
+              otAccum: String(record.otAccumulated || ''),
+              leave1: record.leaveNote || '',
+              leave2: record.unpaidLeave || '',
+              hrLeave: String(record.hourlyLeave || ''),
+              useAccum: String(record.useAccumulatedHours || ''),
+              otherNote: record.otherNote || ''
+            };
+          });
+          
+          setScheduleData(newScheduleData);
+        }
+
       } catch (err) {
         toast.error('เกิดข้อผิดพลาดในการโหลดข้อมูล');
       } finally {
@@ -135,9 +187,9 @@ export default function ScheduleWeekly() {
       }
     };
     if (user?.branch) {
-      fetchEmployees();
+      fetchData();
     }
-  }, [user]);
+  }, [user, weekStartDate]);
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;

@@ -305,7 +305,13 @@ function doPost(e) {
           
           var rowDate = '';
           if (row[1] instanceof Date) { rowDate = Utilities.formatDate(row[1], Session.getScriptTimeZone(), 'yyyy-MM-dd'); } else { rowDate = String(row[1]); }
-          var isMatchDate = !reqDate || rowDate.indexOf(reqDate) !== -1;
+          
+          var isMatchDate = true;
+          if (data.startDate && data.endDate) {
+            isMatchDate = (rowDate >= data.startDate && rowDate <= data.endDate);
+          } else {
+            isMatchDate = !reqDate || rowDate.indexOf(reqDate) !== -1;
+          }
           
           if (isMatchBranch && isMatchDate) {
             history.push({
