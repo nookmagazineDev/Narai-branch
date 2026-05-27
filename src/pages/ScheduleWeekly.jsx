@@ -12,78 +12,39 @@ export default function ScheduleWeekly() {
   const [scheduleData, setScheduleData] = useState({});
   const [isSaving, setIsSaving] = useState(false);
 
+  // Helpers for options
+  const hrOpts = Array.from({length: 17}, (_, i) => String(i + 8).padStart(2, '0'));
+  const minOpts = ['00', '10', '20', '30', '40', '50'];
+  const breakOpts = ['0', '0.5', '1', '1.5', '2'];
+  const otOpts = ['0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '4.5', '5'];
+  const hrLeaveOpts = ['0', '1', '2', '3', '4', '5', '6', '7', '8'];
+
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeCell, setActiveCell] = useState(null); // { hrCode, date, name, position }
+  const [activeCell, setActiveCell] = useState(null);
   const [cellData, setCellData] = useState({
-    checkIn: '',
-    checkOut: '',
-    breakTime: '1',
-    status: 'มาทำงาน',
-    note: ''
+    isStop: false,
+    checkInHr: '', checkInMin: '',
+    checkOutHr: '', checkOutMin: '',
+    breakDur: '', breakStartHr: '', breakStartMin: '',
+    ot: '', otAccum: '',
+    leave1: '', leave2: '',
+    hrLeave: '', useAccum: '',
+    otherNote: ''
   });
-
-  // Utility to get Monday of current week
-  function getStartOfWeek(date) {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(d.setDate(diff));
-  }
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const res = await apiCall('getScheduleEmployees', { branch: user?.branch });
-      if (res.status === 'success') {
-        setEmployees(res.data);
-      } else {
-        toast.error('ไม่สามารถดึงข้อมูลพนักงานได้');
-      }
-      
-      // TODO: Load existing schedule data for this week from backend
-      // For now, we start with empty scheduleData or fetch from a new endpoint later
-    } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการดึงข้อมูล');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [user?.branch]);
-
-  const changeWeek = (offset) => {
-    const newDate = new Date(weekStartDate);
-    newDate.setDate(newDate.getDate() + (offset * 7));
-    setWeekStartDate(newDate);
-  };
-
-  const getDaysOfWeek = () => {
-    const days = [];
-    const dayNames = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสฯ', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(weekStartDate);
-      d.setDate(d.getDate() + i);
-      days.push({
-        date: d,
-        dateStr: d.toISOString().split('T')[0],
-        dayName: dayNames[i],
-        shortDate: `${d.getDate()}/${d.getMonth() + 1}`
-      });
-    }
-    return days;
-  };
-
-  const daysOfWeek = getDaysOfWeek();
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;
     const existingData = scheduleData[key] || {
-      checkIn: '', checkOut: '', breakTime: '1', status: 'มาทำงาน', note: ''
+      isStop: false,
+      checkInHr: '', checkInMin: '',
+      checkOutHr: '', checkOutMin: '',
+      breakDur: '', breakStartHr: '', breakStartMin: '',
+      ot: '', otAccum: '',
+      leave1: '', leave2: '',
+      hrLeave: '', useAccum: '',
+      otherNote: ''
     };
-    
     setActiveCell({ ...emp, dateStr, key });
     setCellData(existingData);
     setIsModalOpen(true);
@@ -109,24 +70,111 @@ export default function ScheduleWeekly() {
       Object.entries(scheduleData).forEach(([key, data]) => {
         const [hrCode, dateStr] = key.split('_');
         const emp = employees.find(e => e.hrCode === hrCode);
-        if (emp && (data.checkIn || data.status !== 'มาทำงาน')) {
+        if (emp) {
+          const ci = data.checkInHr ? `${data.checkInHr}:${data.checkInMin || '00'}` : '';
+          const co = data.checkOutHr ? `${data.checkOutHr}:${data.checkOutMin || '00'}` : '';
+          
+          const brDur = data.breakDur;
+          const bs = data.breakStartHr ? `${data.breakStartHr}:${data.breakStartMin || '00'}` : '';
+          const l1 = data.leave1 || '';
+          const l2 = data.leave2 || '';
+          const hl = data.hrLeave || '';
+          const ua = data.useAccum || '';
+          const ota = data.otAccum || '0';
+          const noteInput = data.otherNote || '';
+          const finalStop = data.isStop || (l1 !== '') || (l2 !== '');
+
+          let brRange = '';
+          if (bs && brDur && brDur !== '0') {
+            const [h, m] = bs.split(':').map(Number);
+            const t = h * 60 + m + parseInt(brDur);
+            const eh = Math.floor(t / 60) % 24;
+            const em = t % 60;
+            brRange = `${bs}-${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`;
+          }
+
+          let isCleared = false;
+          if (!ci && !co && !finalStop && !l1 && !l2 && (!ota || ota === '0') && !hl && !ua && !noteInput) {
+            isCleared = true;
+          }
+
+          let wage = 0;
+          const rate = parseFloat(emp.dailyWage) || 0;
+          const empType = emp.type;
+
+          if (isCleared) {
+            if (empType === 'F/T') wage = rate; else wage = 0;
+          } else {
+            if (l2 !== '') {
+              if (l2 === 'วันหยุดธรรมดา' && empType === 'F/T') {
+                wage = rate;
+              } else {
+                wage = 0;
+              }
+            } else if (l1 !== '') {
+              if (empType === 'P/T') { wage = 0; } else { wage = rate; }
+            } else {
+              if (empType === 'F/T') {
+                wage = rate;
+                if (hl !== '') {
+                  let h = hl === 'ครึ่งวัน' ? 4 : hl === 'เต็มวัน' ? 8 : parseInt(hl) || 0;
+                  if (rate > 0) wage = rate - (rate / 8) * h;
+                }
+              } else if (empType === 'DAY' || empType === 'DAY9') {
+                let baseHours = (empType === 'DAY9') ? 9 : 8;
+                if (!finalStop && ci) {
+                  wage = rate;
+                  if (hl !== '') {
+                    let h = hl === 'ครึ่งวัน' ? (baseHours / 2) : hl === 'เต็มวัน' ? baseHours : parseInt(hl) || 0;
+                    if (rate > 0) wage = rate - (rate / baseHours) * h;
+                  }
+                } else { wage = 0; }
+              } else if (empType === 'P/T') {
+                if (!finalStop && ci && co) {
+                  const [h1, m1] = ci.split(':').map(Number);
+                  const [h2, m2] = co.split(':').map(Number);
+                  let t1 = h1 * 60 + m1;
+                  let t2 = h2 * 60 + m2;
+                  if (t2 < t1) t2 += 1440;
+                  let dur = (t2 - t1) - (parseInt(brDur) || 0);
+                  if (dur > 0) wage = (dur / 60) * rate;
+                } else { wage = 0; }
+              }
+            }
+          }
+          wage = parseFloat(wage.toFixed(2));
+
+          let brTxt = (brDur === '0') ? 'ไม่เบรค' : brDur ? `${parseInt(brDur) / 60} ชม.` : '';
+
+          let status = finalStop ? 'หยุด' : 'มาทำงาน';
+
           logs.push({
             workDate: dateStr,
             branch: emp.branch,
             hrCode: emp.hrCode,
             name: emp.name,
             position: emp.position,
-            checkIn: data.checkIn,
-            checkOut: data.checkOut,
-            breakTime: data.breakTime,
-            ot: '0', // simplified
-            wage: '0', // simplified
-            status: data.status,
-            empType: emp.type || '',
-            note: data.note
+            checkIn: ci,
+            checkOut: co,
+            breakTime: brTxt,
+            breakTimeRange: brRange,
+            ot: data.ot || '0',
+            otAccumulated: ota,
+            wage: wage,
+            status: status,
+            empType: empType || '',
+            leaveNote: l1,
+            unpaidLeave: l2,
+            hourlyLeave: hl,
+            useAccumulatedHours: ua,
+            otherNote: isCleared ? 'ล้างข้อมูล' : noteInput,
+            isStop: finalStop
           });
         }
       });
+
+      // Filter out 'ล้างข้อมูล' if there's no existing entry we are actually clearing
+      // In this case we just send everything because apps-script will handle 'ล้างข้อมูล' correctly (actually apps-script appending won't delete old data right now, but it matches the new structure)
 
       const res = await apiCall('saveTimesheet', { logs });
       if (res.status === 'success') {
@@ -223,17 +271,17 @@ export default function ScheduleWeekly() {
                         >
                           <div className={`h-14 rounded border border-transparent p-1 flex flex-col justify-center items-center text-xs ${
                             !cell ? 'bg-gray-50 text-gray-400 border-dashed border-gray-200' :
-                            cell.status === 'หยุด' ? 'bg-red-50 text-red-600 border-red-100' :
+                            cell.isStop || cell.leave2 ? 'bg-red-50 text-red-600 border-red-100' :
                             'bg-green-50 text-green-700 border-green-100'
                           }`}>
                             {!cell ? (
                               <span>-</span>
-                            ) : cell.status === 'หยุด' ? (
-                              <span className="font-medium">หยุด</span>
+                            ) : cell.isStop || cell.leave2 ? (
+                              <span className="font-medium">{cell.leave2 || 'หยุด'}</span>
                             ) : (
                               <>
-                                <span className="font-bold">{cell.checkIn || '?'} - {cell.checkOut || '?'}</span>
-                                {cell.note && <span className="text-[10px] text-gray-500 truncate w-full text-center">{cell.note}</span>}
+                                <span className="font-bold">{cell.checkInHr ? `${cell.checkInHr}:${cell.checkInMin || '00'}` : '?'} - {cell.checkOutHr ? `${cell.checkOutHr}:${cell.checkOutMin || '00'}` : '?'}</span>
+                                {(cell.leave1 || cell.otherNote) && <span className="text-[10px] text-gray-500 truncate w-full text-center">{cell.leave1 || cell.otherNote}</span>}
                               </>
                             )}
                           </div>
@@ -259,64 +307,219 @@ export default function ScheduleWeekly() {
               <div className="text-sm text-gray-500">{activeCell.dateStr}</div>
             </div>
             
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">สถานะ</label>
-                <select 
-                  className="w-full border border-gray-300 rounded-lg p-2 focus:ring-purple-500 focus:border-purple-500"
-                  value={cellData.status}
-                  onChange={(e) => setCellData({...cellData, status: e.target.value})}
-                >
-                  <option value="มาทำงาน">มาทำงาน</option>
-                  <option value="หยุด">หยุด / ลา</option>
-                </select>
+            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+              {/* Top Toggle */}
+              <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
+                <input 
+                  type="checkbox" 
+                  id="modalIsStop" 
+                  className="w-5 h-5 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                  checked={cellData.isStop}
+                  onChange={(e) => setCellData({...cellData, isStop: e.target.checked})}
+                />
+                <label htmlFor="modalIsStop" className="font-bold text-red-600">กำหนดเป็นวันหยุด</label>
               </div>
 
-              {cellData.status === 'มาทำงาน' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">เวลาเข้า</label>
-                    <input 
-                      type="time" 
-                      className="w-full border border-gray-300 rounded-lg p-2 focus:ring-purple-500 focus:border-purple-500"
-                      value={cellData.checkIn}
-                      onChange={(e) => setCellData({...cellData, checkIn: e.target.value})}
-                    />
+              {!cellData.isStop && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเข้า <span className="text-red-500">*</span></label>
+                      <div className="flex items-center gap-1">
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.checkInHr}
+                          onChange={(e) => setCellData({...cellData, checkInHr: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                        <span className="font-bold">:</span>
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.checkInMin}
+                          onChange={(e) => setCellData({...cellData, checkInMin: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาออก</label>
+                      <div className="flex items-center gap-1">
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.checkOutHr}
+                          onChange={(e) => setCellData({...cellData, checkOutHr: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                        <span className="font-bold">:</span>
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.checkOutMin}
+                          onChange={(e) => setCellData({...cellData, checkOutMin: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">เวลาออก</label>
-                    <input 
-                      type="time" 
-                      className="w-full border border-gray-300 rounded-lg p-2 focus:ring-purple-500 focus:border-purple-500"
-                      value={cellData.checkOut}
-                      onChange={(e) => setCellData({...cellData, checkOut: e.target.value})}
-                    />
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเบรค</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.breakDur}
+                        onChange={(e) => setCellData({...cellData, breakDur: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {breakOpts.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">เริ่มเบรค</label>
+                      <div className="flex items-center gap-1">
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.breakStartHr}
+                          onChange={(e) => setCellData({...cellData, breakStartHr: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                        <span className="font-bold">:</span>
+                        <select 
+                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                          value={cellData.breakStartMin}
+                          onChange={(e) => setCellData({...cellData, breakStartMin: e.target.value})}
+                        >
+                          <option value="">-</option>
+                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">OT (ชั่วโมง)</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.ot}
+                        onChange={(e) => setCellData({...cellData, ot: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">ชั่วโมงสะสม</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.otAccum}
+                        onChange={(e) => setCellData({...cellData, otAccum: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  <hr className="my-2" />
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-blue-600 mb-1">ลา (รับค่าแรง)</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.leave1}
+                        onChange={(e) => setCellData({...cellData, leave1: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
+                        <option value="ลากิจ">🟠 ลากิจ</option>
+                        <option value="ลาป่วย">🔴 ลาป่วย</option>
+                        <option value="ลารายชั่วโมง">⏱ ลารายชั่วโมง</option>
+                        <option value="ใช้ Extra">⭐ ใช้ Extra (หยุดชดเชย)</option>
+                        <option value="พักร้อน">🔵 พักร้อน</option>
+                        <option value="ใช้สะสม">🟣 ใช้สะสม</option>
+                        <option value="ประชุม">🟤 ประชุม</option>
+                        <option value="อบรม">🔵 อบรม</option>
+                        <option value="คลอด">💖 คลอด</option>
+                        <option value="ชดเชย 8 ชั่วโมง">ชดเชย 8 ชั่วโมง</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-red-600 mb-1">หยุด (ไม่รับค่าแรง)</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.leave2}
+                        onChange={(e) => setCellData({...cellData, leave2: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
+                        <option value="ป่วยไม่มีใบรับรอง">🤒 ป่วยไม่มีใบรับรอง</option>
+                        <option value="ลากิจ">🏃 ลากิจ</option>
+                        <option value="ขาดงาน">❌ ขาดงาน</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">ลารายชั่วโมง</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.hrLeave}
+                        onChange={(e) => setCellData({...cellData, hrLeave: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">ใช้ชั่วโมงสะสม</label>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                        value={cellData.useAccum}
+                        onChange={(e) => setCellData({...cellData, useAccum: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                    </div>
                   </div>
                 </div>
               )}
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">หมายเหตุ / ลา</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1 mt-2">หมายเหตุเพิ่มเติม</label>
                 <input 
                   type="text" 
-                  placeholder="เช่น ป่วย, ลากิจ..."
-                  className="w-full border border-gray-300 rounded-lg p-2 focus:ring-purple-500 focus:border-purple-500"
-                  value={cellData.note}
-                  onChange={(e) => setCellData({...cellData, note: e.target.value})}
+                  placeholder="ระบุหมายเหตุ..."
+                  className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                  value={cellData.otherNote}
+                  onChange={(e) => setCellData({...cellData, otherNote: e.target.value})}
                 />
               </div>
+
             </div>
 
-            <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
+            <div className="p-3 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
               <button 
                 onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors font-medium"
+                className="px-4 py-1.5 text-gray-600 hover:bg-gray-200 rounded transition-colors text-sm font-medium"
               >
                 ยกเลิก
               </button>
               <button 
                 onClick={saveCellData}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
+                className="px-6 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm font-medium"
               >
                 ตกลง
               </button>
