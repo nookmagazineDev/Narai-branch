@@ -444,11 +444,35 @@ export default function ScheduleWeekly() {
                             {!cell ? (
                               <span>-</span>
                             ) : cell.isStop || cell.leave2 ? (
-                              <span className="font-medium">{cell.leave2 || 'หยุด'}</span>
+                              <>
+                                <span className="font-medium">{cell.leave2 || 'หยุด'}</span>
+                                {cell.otherNote && <span className="text-[10px] text-red-500 truncate w-full text-center" title={cell.otherNote}>{cell.otherNote}</span>}
+                              </>
                             ) : (
                               <>
-                                <span className="font-bold">{cell.checkInHr ? `${cell.checkInHr}:${cell.checkInMin || '00'}` : '?'} - {cell.checkOutHr ? `${cell.checkOutHr}:${cell.checkOutMin || '00'}` : '?'}</span>
-                                {(cell.leave1 || cell.otherNote) && <span className="text-[10px] text-gray-500 truncate w-full text-center">{cell.leave1 || cell.otherNote}</span>}
+                                {(cell.checkInHr || cell.checkOutHr) ? (
+                                  <span className="font-bold">
+                                    {cell.checkInHr ? `${cell.checkInHr}:${cell.checkInMin || '00'}` : '?'} - {cell.checkOutHr ? `${cell.checkOutHr}:${cell.checkOutMin || '00'}` : '?'}
+                                  </span>
+                                ) : (
+                                  <span className="font-bold text-gray-400">? - ?</span>
+                                )}
+                                {(() => {
+                                  const notes = [];
+                                  if (cell.ot && cell.ot !== '0') notes.push(`OT ${cell.ot}`);
+                                  if (cell.otAccum && cell.otAccum !== '0') notes.push(`+สะสม ${cell.otAccum}`);
+                                  if (cell.leave1) notes.push(cell.leave1);
+                                  if (cell.hrLeave && cell.hrLeave !== '0') notes.push(`ลา ${cell.hrLeave}ชม.`);
+                                  if (cell.useAccum && cell.useAccum !== '0') notes.push(`ใช้สะสม ${cell.useAccum}ชม.`);
+                                  if (cell.otherNote) notes.push(cell.otherNote);
+                                  
+                                  if (notes.length === 0) return null;
+                                  return (
+                                    <span className="text-[10px] text-blue-600 font-medium leading-tight truncate w-full text-center" title={notes.join(', ')}>
+                                      {notes.join(', ')}
+                                    </span>
+                                  );
+                                })()}
                               </>
                             )}
                           </div>
