@@ -122,6 +122,10 @@ export default function EmployeeList() {
     const matchesBranch = branchFilter ? emp.branch === branchFilter : true;
 
     return matchesSearch && matchesStatus && matchesType && matchesBranch;
+  }).sort((a, b) => {
+    if (a.status === 'ทำงาน' && b.status !== 'ทำงาน') return -1;
+    if (a.status !== 'ทำงาน' && b.status === 'ทำงาน') return 1;
+    return 0;
   });
 
   const getAnniversaryEmployees = () => {
