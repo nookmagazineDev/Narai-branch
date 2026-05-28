@@ -1,3 +1,17 @@
+// --- ตั้งค่า ID ของ Spreadsheet ข้อมูลยอดขาย/เป้าหมาย ---
+var SALES_DATA_SPREADSHEET_ID = '1kxVqX_hp5B0YTNSPj7mhyFl1OLbnhN-dIWm9ywzHA60';
+
+// --- Helper: เปรียบเทียบวันที่อย่างปลอดภัย ---
+function isSameDate(date1, date2) {
+  if (!date1 || !date2) return false;
+  var d1 = new Date(date1);
+  var d2 = new Date(date2);
+  if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return false;
+  d1.setHours(0, 0, 0, 0);
+  d2.setHours(0, 0, 0, 0);
+  return d1.getTime() === d2.getTime();
+}
+
 function setupPermissions() {
   // บังคับให้ Google รู้ว่าเราต้องการสิทธิ์ "เขียน" ไฟล์ลง Drive
   var folder = DriveApp.getFolderById("1i-8K4E97vwcghQyT1yJ_TpFTt0irbZtR");
@@ -233,6 +247,27 @@ function doPost(e) {
 
       response.status = 'success';
       response.data = employees;
+
+    } else if (action === 'resignEmployee') {
+      var sheet = ss.getSheetByName('DATA');
+      if (!sheet) throw new Error('Sheet DATA not found');
+      var hrCode = data.hrCode;
+      var values = sheet.getDataRange().getValues();
+      var found = false;
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][2] == hrCode) {
+          sheet.getRange(i + 1, 7).setValue('ลาออก'); // Column G is index 6, so column 7
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        response.status = 'success';
+        response.message = 'แจ้งลาออกสำเร็จ';
+      } else {
+        response.status = 'error';
+        response.message = 'ไม่พบรหัสพนักงานนี้';
+      }
 
     } else if (action === 'getScheduleEmployees') {
       var sheet = ss.getSheetByName('DATA');
@@ -873,6 +908,37 @@ function doPost(e) {
         response.status = 'error';
         response.message = 'API Error: ' + responseCode;
       }
+    } else if (action === 'updateOTApprovalBulk') {
+      var resOT = updateOTApprovalBulk(data.dateStr, data.branch, data.updates, data.approverName);
+      response.status = resOT.success ? 'success' : 'error';
+      response.message = resOT.message;
+    } else if (action === 'getBranchStats') {
+      var resStats = getBranchStats(data.branch);
+      if(resStats.success) {
+        response.status = 'success';
+        response.data = resStats;
+      } else {
+        response.status = 'error';
+        response.message = resStats.message;
+      }
+    } else if (action === 'getDailySales') {
+      var resSales = getDailySales(data.searchDateStr, data.searchBranch);
+      if(resSales.success) {
+        response.status = 'success';
+        response.data = resSales;
+      } else {
+        response.status = 'error';
+        response.message = resSales.message;
+      }
+    } else if (action === 'getOTNotifications') {
+      var resNotif = getOTNotifications(data.branch);
+      if(resNotif.success) {
+        response.status = 'success';
+        response.data = resNotif.data;
+      } else {
+        response.status = 'error';
+        response.message = resNotif.message;
+      }
     } else {
       response.status = 'error';
       response.message = 'Invalid action';
@@ -884,6 +950,134 @@ function doPost(e) {
   }
 
   return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// --- 8. อัปเดตสถานะการอนุมัติ OT ---
+function updateOTApprovalBulk(dateStr, branch, updates, approverName) {
+  try {
+    var ss = SpreadsheetApp.openById("1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U");
+    var sheet = ss.getSheetByName('ลงตารางงาน');
+    if (!sheet) return { success: false, message: 'ไม่พบ Sheet ข้อมูล' };
+
+    var data = sheet.getDataRange().getValues();
+    var updateMap = {};
+    updates.forEach(function(u) { updateMap[String(u.name).trim()] = u.isApproved; });
+    var searchB = String(branch).trim();
+
+    for (var i = 1; i < data.length; i++) {
+      if (isSameDate(data[i][1], dateStr) && String(data[i][2]).trim() === searchB) {
+        var rowName = String(data[i][4]).trim();
+        if (updateMap.hasOwnProperty(rowName)) {
+          var isAppr = updateMap[rowName];
+          var val = isAppr ? approverName : '';
+          sheet.getRange(i + 1, 21).setValue(val); // Col U (Index 20 / Column 21)
+        }
+      }
+    }
+    return { success: true, message: 'บันทึกการอนุมัติ OT เรียบร้อย' };
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- 5. ดึงข้อมูลสถิติสาขา ---
+function getBranchStats(selectedBranch) {
+  try {
+    var ss = SpreadsheetApp.openById(SALES_DATA_SPREADSHEET_ID);
+    var sheet = ss.getSheetByName('Details');
+    if (!sheet) return { success: false, message: 'ไม่พบ Sheet Details' };
+    var data = sheet.getDataRange().getDisplayValues();
+    var searchBranch = String(selectedBranch).trim();
+
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]).trim() === searchBranch) {
+        return {
+          success: true, sales: data[i][1], dailyTarget: data[i][2],  
+          monthlyTarget: data[i][3], maxWage: data[i][5]       
+        };
+      }
+    }
+    return { success: false, message: 'ไม่พบข้อมูลสาขานี้' };
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- 6. ดึงยอดขายรายวัน ---
+function getDailySales(searchDateStr, searchBranch) {
+  try {
+    var ss = SpreadsheetApp.openById(SALES_DATA_SPREADSHEET_ID);
+    var sheet = ss.getSheetByName('ยอดขายสาขา');
+    if (!sheet) return { success: true, sales: 0, message: 'ไม่พบ Sheet' };
+    var data = sheet.getDataRange().getValues();
+    var searchB = String(searchBranch).trim();
+
+    for (var i = 1; i < data.length; i++) {
+      if (isSameDate(data[i][0], searchDateStr) && String(data[i][2]).trim() === searchB) {
+        return { success: true, sales: data[i][3] }; 
+      }
+    }
+    return { success: true, sales: 0 }; 
+  } catch(e) { return { success: false, message: e.message }; }
+}
+
+// --- ดึงข้อมูลการแจ้งเตือน OT ---
+function getOTNotifications(searchBranch) {
+  try {
+    var ss = SpreadsheetApp.openById("1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U");
+    var sheet = ss.getSheetByName('ลงตารางงาน');
+    if (!sheet) return { success: false, message: 'ไม่พบตารางข้อมูล' };
+
+    var data = sheet.getDataRange().getValues();
+    var pending = [];
+    var approved = [];
+    
+    var branchStr = String(searchBranch).trim();
+    var isAdmin = (branchStr === 'All' || branchStr === 'Admin' || branchStr === '');
+
+    // วนลูปจากล่างขึ้นบน เพื่อให้ได้ข้อมูลล่าสุดก่อน
+    for (var i = data.length - 1; i >= 1; i--) {
+      var row = data[i];
+      var rowBranch = String(row[2]).trim(); // คอลัมน์ C: สาขา
+      
+      if (isAdmin || rowBranch === branchStr) {
+         var otVal = parseFloat(row[9]); // คอลัมน์ J: OT (ชม.)
+         if (!isNaN(otVal) && otVal > 0) {
+             var approver = String(row[20] || '').trim(); // คอลัมน์ U: ผู้อนุมัติ OT
+             var workDateStr = '';
+             var workDateFormatted = '';
+             
+             // แก้ไขการแปลงวันที่ให้แม่นยำยิ่งขึ้น
+             var d = new Date(row[1]);
+             if (!isNaN(d.getTime())) {
+                 workDateStr = Utilities.formatDate(d, "Asia/Bangkok", 'yyyy-MM-dd');
+                 workDateFormatted = Utilities.formatDate(d, "Asia/Bangkok", 'dd/MM/yyyy');
+             } else {
+                 workDateStr = String(row[1]);
+                 workDateFormatted = workDateStr;
+             }
+
+             var notifItem = {
+                 date: workDateStr,
+                 dateFormatted: workDateFormatted,
+                 branch: rowBranch,
+                 name: String(row[4] || '').trim(), // คอลัมน์ E: ชื่อพนักงาน
+                 ot: otVal,
+                 approver: approver
+             };
+
+             if (approver === '') {
+                 if (pending.length < 30) pending.push(notifItem); // แสดงรออนุมัติสูงสุด 30 รายการ
+             } else {
+                 if (approved.length < 10) approved.push(notifItem); // แสดงอนุมัติแล้วล่าสุด 10 รายการ
+             }
+         }
+      }
+      
+      // หยุดค้นหาเมื่อข้อมูลเต็ม เพื่อความรวดเร็ว
+      if (pending.length >= 30 && approved.length >= 10) break;
+    }
+
+    return { success: true, data: { pending: pending, approved: approved } };
+  } catch(e) {
+    return { success: false, message: e.message };
+  }
 }
 
 function doOptions(e) {

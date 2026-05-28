@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { Loader2, ChevronLeft, ChevronRight, Save, Clock } from 'lucide-react';
+import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Printer } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 
 function getStartOfWeek(date) {
@@ -23,6 +24,9 @@ export default function ScheduleWeekly() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState([]);
+  const [weeklyTarget, setWeeklyTarget] = useState(0);
+  const [weeklyMaxWage, setWeeklyMaxWage] = useState(0);
+
   const [weekStartDate, setWeekStartDate] = useState(getStartOfWeek(new Date()));
   const [scheduleData, setScheduleData] = useState({});
   const [isSaving, setIsSaving] = useState(false);
@@ -101,6 +105,65 @@ export default function ScheduleWeekly() {
     cellData.otAccum
   ]);
 
+
+  const exportScheduleToImage = async () => {
+    const b = user?.branch;
+    if (!b || employees.length === 0) {
+      toast.error('กรุณาเลือกสาขาและรอระบบโหลดข้อมูลให้เสร็จก่อน');
+      return;
+    }
+
+    const tableEl = document.getElementById('weekly-schedule-table-container');
+    if (!tableEl) return;
+    
+    const loadingToast = toast.loading('กำลังสร้างรูปภาพ...');
+    
+    try {
+      const originalMaxHeight = tableEl.style.maxHeight;
+      const originalOverflow = tableEl.style.overflow;
+      const originalWidth = tableEl.style.width;
+      
+      tableEl.style.maxHeight = 'none';
+      tableEl.style.overflow = 'visible';
+      tableEl.style.width = tableEl.scrollWidth + 'px';
+      
+      const titleEl = document.createElement('h4');
+      titleEl.className = 'text-center mb-3 mt-2 font-bold text-gray-800 text-lg';
+      
+      const end = new Date(weekStartDate);
+      end.setDate(end.getDate() + 6);
+      const weekStr = `${weekStartDate.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })} - ${end.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+      
+      titleEl.innerText = `ตารางงาน สาขา: ${b} | สัปดาห์: ${weekStr}`;
+      tableEl.insertBefore(titleEl, tableEl.firstChild);
+      
+      const canvas = await html2canvas(tableEl, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        width: tableEl.scrollWidth,
+        height: tableEl.scrollHeight,
+        windowWidth: tableEl.scrollWidth,
+        windowHeight: tableEl.scrollHeight
+      });
+      
+      tableEl.style.maxHeight = originalMaxHeight;
+      tableEl.style.overflow = originalOverflow;
+      tableEl.style.width = originalWidth;
+      titleEl.remove();
+      
+      const link = document.createElement('a');
+      link.download = `ตารางงาน_${b}_${weekStr.replace(/ /g, '_')}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      
+      toast.success('บันทึกรูปภาพสำเร็จ', { id: loadingToast });
+    } catch (err) {
+      console.error(err);
+      toast.error('เกิดข้อผิดพลาดในการสร้างรูปภาพ', { id: loadingToast });
+    }
+  };
+
   const changeWeek = (weeks) => {
     const newDate = new Date(weekStartDate);
     newDate.setDate(newDate.getDate() + (weeks * 7));
@@ -122,6 +185,16 @@ export default function ScheduleWeekly() {
     const fetchData = async () => {
       setLoading(true);
       try {
+        
+        // Fetch Branch Stats
+        const statsRes = await apiCall('getBranchStats', { branch: user?.branch || '' });
+        if (statsRes.status === 'success') {
+          const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
+          const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
+          setWeeklyTarget(dTarget * 7);
+          setWeeklyMaxWage(dMax * 7);
+        }
+
         // Fetch employees
         const empRes = await apiCall('getScheduleEmployees', { branch: user?.branch || '' });
         if (empRes.status === 'success') {
@@ -216,6 +289,96 @@ export default function ScheduleWeekly() {
     setIsModalOpen(false);
   };
 
+
+  const calculateCellWage = (emp, data) => {
+    let wage = 0;
+    const rate = parseFloat(emp.dailyWage) || 0;
+    const empType = emp.type;
+    
+    const ci = data.checkInHr ? `${data.checkInHr}:${data.checkInMin || '00'}` : '';
+    const co = data.checkOutHr ? `${data.checkOutHr}:${data.checkOutMin || '00'}` : '';
+    const l1 = data.leave1 || '';
+    const l2 = data.leave2 || '';
+    const hl = data.hrLeave || '';
+    const ua = data.useAccum || '';
+    const ota = data.otAccum || '0';
+    const noteInput = data.otherNote || '';
+    const finalStop = data.isStop || (l1 !== '') || (l2 !== '');
+    const brDur = data.breakDur;
+    
+    let isCleared = false;
+    if (!ci && !co && !finalStop && !l1 && !l2 && (!ota || ota === '0') && !hl && !ua && !noteInput) {
+      isCleared = true;
+    }
+
+    if (isCleared) {
+      if (empType === 'F/T') wage = rate; else wage = 0;
+    } else {
+      if (l2 !== '') {
+        if (l2 === 'วันหยุดธรรมดา' && empType === 'F/T') {
+          wage = rate;
+        } else {
+          wage = 0;
+        }
+      } else if (l1 !== '') {
+        if (empType === 'P/T') { wage = 0; } else { wage = rate; }
+      } else {
+        if (empType === 'F/T') {
+          wage = rate;
+          if (hl !== '') {
+            let h = hl === 'ครึ่งวัน' ? 4 : hl === 'เต็มวัน' ? 8 : parseInt(hl) || 0;
+            if (rate > 0) wage = rate - (rate / 8) * h;
+          }
+        } else if (empType === 'DAY' || empType === 'DAY9') {
+          let baseHours = (empType === 'DAY9') ? 9 : 8;
+          if (!finalStop && ci) {
+            wage = rate;
+            if (hl !== '') {
+              let h = hl === 'ครึ่งวัน' ? (baseHours / 2) : hl === 'เต็มวัน' ? baseHours : parseInt(hl) || 0;
+              if (rate > 0) wage = rate - (rate / baseHours) * h;
+            }
+          } else { wage = 0; }
+        } else if (empType === 'P/T') {
+          if (!finalStop && ci && co) {
+            const [h1, m1] = ci.split(':').map(Number);
+            const [h2, m2] = co.split(':').map(Number);
+            let t1 = h1 * 60 + m1;
+            let t2 = h2 * 60 + m2;
+            if (t2 < t1) t2 += 1440;
+            let dur = (t2 - t1) - (parseInt(brDur) || 0);
+            if (dur > 0) wage = (dur / 60) * rate;
+          } else { wage = 0; }
+        }
+      }
+    }
+    return parseFloat(wage.toFixed(2));
+  };
+
+  // Calculate Summary dynamically
+  const summary = React.useMemo(() => {
+    let totalWage = 0;
+    const workingEmpSet = new Set();
+    
+    Object.entries(scheduleData).forEach(([key, data]) => {
+      const emp = employees.find(e => key.startsWith(e.hrCode + '_'));
+      if (emp) {
+        const w = calculateCellWage(emp, data);
+        totalWage += w;
+        
+        const isStop = data.isStop || data.leave1 || data.leave2;
+        if (!isStop || w > 0) {
+          workingEmpSet.add(emp.hrCode);
+        }
+      }
+    });
+    
+    return {
+      totalWage,
+      workingCount: workingEmpSet.size,
+      wagePercent: weeklyTarget > 0 ? ((totalWage / weeklyTarget) * 100).toFixed(2) : '0.00'
+    };
+  }, [scheduleData, employees, weeklyTarget]);
+
   const handleSaveSchedule = async () => {
     if (Object.keys(scheduleData).length === 0) {
       toast.error('ยังไม่มีข้อมูลให้บันทึก');
@@ -258,51 +421,7 @@ export default function ScheduleWeekly() {
             isCleared = true;
           }
 
-          let wage = 0;
-          const rate = parseFloat(emp.dailyWage) || 0;
-          const empType = emp.type;
-
-          if (isCleared) {
-            if (empType === 'F/T') wage = rate; else wage = 0;
-          } else {
-            if (l2 !== '') {
-              if (l2 === 'วันหยุดธรรมดา' && empType === 'F/T') {
-                wage = rate;
-              } else {
-                wage = 0;
-              }
-            } else if (l1 !== '') {
-              if (empType === 'P/T') { wage = 0; } else { wage = rate; }
-            } else {
-              if (empType === 'F/T') {
-                wage = rate;
-                if (hl !== '') {
-                  let h = hl === 'ครึ่งวัน' ? 4 : hl === 'เต็มวัน' ? 8 : parseInt(hl) || 0;
-                  if (rate > 0) wage = rate - (rate / 8) * h;
-                }
-              } else if (empType === 'DAY' || empType === 'DAY9') {
-                let baseHours = (empType === 'DAY9') ? 9 : 8;
-                if (!finalStop && ci) {
-                  wage = rate;
-                  if (hl !== '') {
-                    let h = hl === 'ครึ่งวัน' ? (baseHours / 2) : hl === 'เต็มวัน' ? baseHours : parseInt(hl) || 0;
-                    if (rate > 0) wage = rate - (rate / baseHours) * h;
-                  }
-                } else { wage = 0; }
-              } else if (empType === 'P/T') {
-                if (!finalStop && ci && co) {
-                  const [h1, m1] = ci.split(':').map(Number);
-                  const [h2, m2] = co.split(':').map(Number);
-                  let t1 = h1 * 60 + m1;
-                  let t2 = h2 * 60 + m2;
-                  if (t2 < t1) t2 += 1440;
-                  let dur = (t2 - t1) - (parseInt(brDur) || 0);
-                  if (dur > 0) wage = (dur / 60) * rate;
-                } else { wage = 0; }
-              }
-            }
-          }
-          wage = parseFloat(wage.toFixed(2));
+          let wage = calculateCellWage(emp, data);
 
           let brTxt = (brDur === '0') ? 'ไม่เบรค' : brDur ? `${parseInt(brDur) / 60} ชม.` : '';
 

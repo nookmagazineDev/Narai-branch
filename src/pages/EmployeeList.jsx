@@ -31,6 +31,24 @@ export default function EmployeeList() {
     }
   };
 
+  const handleResign = async (hrCode, fullName) => {
+    if (!window.confirm(`คุณแน่ใจหรือไม่ว่าต้องการแจ้งลาออกสำหรับพนักงาน: ${fullName} (${hrCode})?`)) {
+      return;
+    }
+    const toastId = toast.loading('กำลังบันทึกข้อมูล...');
+    try {
+      const response = await apiCall('resignEmployee', { hrCode });
+      if (response.status === 'success') {
+        toast.success('แจ้งลาออกสำเร็จ', { id: toastId });
+        fetchEmployees();
+      } else {
+        toast.error(response.message || 'เกิดข้อผิดพลาด', { id: toastId });
+      }
+    } catch (err) {
+      toast.error('การเชื่อมต่อขัดข้อง', { id: toastId });
+    }
+  };
+
   const parseThaiDate = (dateStr) => {
     if (!dateStr) return null;
     let d = new Date(dateStr);
@@ -252,12 +270,15 @@ export default function EmployeeList() {
                 <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="flex flex-col gap-1"><span>ระยะเวลาทำงาน</span></div>
                 </th>
+                <th scope="col" className="px-2 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <div className="flex flex-col gap-1"><span>จัดการ</span></div>
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 9 : 8} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 10 : 9} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Loader2 className="w-8 h-8 animate-spin text-purple-500 mb-2" />
                       <p>กำลังโหลดข้อมูล...</p>
@@ -266,7 +287,7 @@ export default function EmployeeList() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 9 : 8} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 10 : 9} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Users className="w-12 h-12 text-gray-300 mb-3" />
                       <p className="text-lg font-medium text-gray-900">ไม่พบข้อมูลพนักงาน</p>
@@ -302,6 +323,16 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{emp.position || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{formatDate(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{calculateDuration(emp.startDate)}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
+                      {emp.status !== 'ลาออก' && (
+                        <button
+                          onClick={() => handleResign(emp.hrCode, emp.fullName)}
+                          className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
+                        >
+                          แจ้งลาออก
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}
