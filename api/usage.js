@@ -61,14 +61,21 @@ export default async function handler(req, res) {
   }
 
   const branchMap = {
-    'sjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
+    'sjp': '7', 'zjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
     'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
     'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '109', 'zbw': '400',
     'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
     'zk3': '906', 'zip': '12'
   };
 
+  // แมปรหัสสาขาในเว็บ -> ชื่อสาขาในชีท (กรณีชื่อไม่ตรงกัน เช่น เว็บใช้ zjp แต่ชีทเป็น SJP)
+  const branchAlias = {
+    'zjp': 'sjp'
+  };
+
   const branchKey = String(branch).toLowerCase().trim();
+  // ชื่อสาขาที่คาดว่าจะอยู่ในชีท (คอลัมน์ C) ใช้ alias ถ้ามี
+  const sheetBranchName = (branchAlias[branchKey] || branchKey).toLowerCase().trim();
   const outletId = String(queryOutletId || branchMap[branchKey] || '').trim();
 
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
@@ -104,7 +111,7 @@ export default async function handler(req, res) {
       const rowBranchNo = c[COL_BRANCH_NO] && c[COL_BRANCH_NO].v != null
         ? String(c[COL_BRANCH_NO].v).replace(/\.0+$/, '').trim() : '';
 
-      const matchByName = rowBranchName && rowBranchName === branchKey;
+      const matchByName = rowBranchName && rowBranchName === sheetBranchName;
       const matchByNo = outletId && rowBranchNo === outletId;
       if (!matchByName && !matchByNo) return;
 
