@@ -26,6 +26,7 @@ export default function StockList() {
   const [apiEndDate, setApiEndDate] = useState('');
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
+  const [recipeMap, setRecipeMap] = useState({});
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
@@ -42,6 +43,11 @@ export default function StockList() {
       apiCall('getBranches', {}).then(res => {
         if (res.status === 'success') setBranches(res.data);
       });
+      // โหลดสูตรเมนู (วัตถุดิบ -> รายชื่อเมนู) ครั้งเดียว ใช้แสดงในป๊อปอัปรายละเอียดการเบิกใช้
+      fetch('/api/recipe')
+        .then(r => r.json())
+        .then(res => { if (res.status === 'success') setRecipeMap(res.data || {}); })
+        .catch(() => {});
     } else {
       loadData(user?.branch);
     }
@@ -569,7 +575,10 @@ export default function StockList() {
                             {item.apiUsage && item.apiUsage.total !== undefined ? (
                               <div
                                 className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
-                                onClick={() => setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details })}
+                                onClick={() => {
+                                  const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [] });
+                                }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
                                 {item.apiUsage.total}
@@ -692,6 +701,28 @@ export default function StockList() {
                   )}
                 </tbody>
               </table>
+
+              {/* รายการเมนูที่ใช้วัตถุดิบนี้ (จากสูตร RcpDtls) */}
+              <div className="mt-5 pt-4 border-t">
+                <p className="text-sm font-semibold text-emerald-800 mb-2">
+                  เมนูที่ใช้วัตถุดิบนี้
+                  {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 && (
+                    <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.menus.length} เมนู)</span>
+                  )}
+                </p>
+                {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 ? (
+                  <ul className="space-y-1 max-h-48 overflow-y-auto">
+                    {selectedUsageDetails.menus.map((menu, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 bg-emerald-50/40 rounded px-3 py-1.5">
+                        <span className="text-emerald-400 mt-0.5">•</span>
+                        <span>{menu}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-400 py-2">ไม่พบเมนูที่ใช้วัตถุดิบนี้ในสูตร</p>
+                )}
+              </div>
             </div>
             <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
               <button 
