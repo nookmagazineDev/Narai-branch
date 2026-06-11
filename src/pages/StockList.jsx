@@ -27,6 +27,7 @@ export default function StockList() {
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
   const [recipeMap, setRecipeMap] = useState({});
+  const [usageByMenu, setUsageByMenu] = useState({});
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
@@ -91,10 +92,15 @@ export default function StockList() {
 
     setIsFetchingApi(true);
     try {
-      const [usageRes, receivedRes] = await Promise.all([
-        fetch(`/api/usage?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`).then(r => r.json()),
-        fetch(`/api/orderd?branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`).then(r => r.json()),
+      const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
+      const [usageRes, receivedRes, usageMenuRes] = await Promise.all([
+        fetch(`/api/usage?${qs}`).then(r => r.json()),
+        fetch(`/api/orderd?${qs}`).then(r => r.json()),
+        fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
+
+      // ยอดใช้แยกตามเมนูที่ขายจริง (Method 2) — ถ้าไม่มีข้อมูลจะเป็น {}
+      setUsageByMenu(usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {});
 
       setItems(prevItems => prevItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
@@ -577,7 +583,7 @@ export default function StockList() {
                                 className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
                                 onClick={() => {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [] });
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu: usageByMenu[nid] || [] });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
@@ -702,25 +708,54 @@ export default function StockList() {
                 </tbody>
               </table>
 
-              {/* รายการเมนูที่ใช้วัตถุดิบนี้ (จากสูตร RcpDtls) */}
+              {/* ยอดใช้แยกตามเมนู */}
               <div className="mt-5 pt-4 border-t">
-                <p className="text-sm font-semibold text-emerald-800 mb-2">
-                  เมนูที่ใช้วัตถุดิบนี้
-                  {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 && (
-                    <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.menus.length} เมนู)</span>
-                  )}
-                </p>
-                {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 ? (
-                  <ul className="space-y-1 max-h-48 overflow-y-auto">
-                    {selectedUsageDetails.menus.map((menu, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 bg-emerald-50/40 rounded px-3 py-1.5">
-                        <span className="text-emerald-400 mt-0.5">•</span>
-                        <span>{menu}</span>
-                      </li>
-                    ))}
-                  </ul>
+                {selectedUsageDetails.byMenu && selectedUsageDetails.byMenu.length > 0 ? (
+                  <>
+                    {/* Method 2: เมนูที่ขายจริง + ปริมาณที่ใช้ */}
+                    <p className="text-sm font-semibold text-emerald-800 mb-2">
+                      ใช้จากเมนู (ตามยอดขายจริง)
+                      <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.byMenu.length} เมนู)</span>
+                    </p>
+                    <table className="w-full text-sm text-left border-collapse">
+                      <thead className="bg-emerald-50 border-b">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold text-emerald-800 rounded-tl-md">เมนู</th>
+                          <th className="px-3 py-2 font-semibold text-emerald-800 text-right rounded-tr-md">ปริมาณใช้</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {selectedUsageDetails.byMenu.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-emerald-50/50">
+                            <td className="px-3 py-2 text-gray-700">{row.menu}</td>
+                            <td className="px-3 py-2 text-gray-900 text-right font-bold">{row.qty}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
                 ) : (
-                  <p className="text-sm text-gray-400 py-2">ไม่พบเมนูที่ใช้วัตถุดิบนี้ในสูตร</p>
+                  <>
+                    {/* Fallback: เมนูที่มีวัตถุดิบนี้ตามสูตร (ยังไม่มีข้อมูลยอดขายรายเมนู) */}
+                    <p className="text-sm font-semibold text-emerald-800 mb-2">
+                      เมนูที่ใช้วัตถุดิบนี้ <span className="text-gray-400 font-normal">(ตามสูตร)</span>
+                      {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 && (
+                        <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.menus.length} เมนู)</span>
+                      )}
+                    </p>
+                    {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 ? (
+                      <ul className="space-y-1 max-h-48 overflow-y-auto">
+                        {selectedUsageDetails.menus.map((menu, idx) => (
+                          <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 bg-emerald-50/40 rounded px-3 py-1.5">
+                            <span className="text-emerald-400 mt-0.5">•</span>
+                            <span>{menu}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-gray-400 py-2">ไม่พบเมนูที่ใช้วัตถุดิบนี้ในสูตร</p>
+                    )}
+                  </>
                 )}
               </div>
             </div>
