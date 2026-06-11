@@ -1,48 +1,20 @@
-# Narai Usage API (รันในออฟฟิศ)
+# Endpoint ยอดใช้แยกเมนู (เพิ่มในเซิร์ฟเวอร์ express เดิม)
 
-บริการเล็กๆ แยกต่างหาก ทำหน้าที่อ่านยอดใช้วัตถุดิบแยกตามเมนูจาก MySQL POS
-(ตาราง `myfbdata<สาขา>.trn_usg`) แล้วส่งให้หน้าเว็บ (ผ่าน Vercel) — **ไม่ยุ่งกับเซิร์ฟเวอร์ express เดิม**
+เราเลือกเพิ่ม endpoint เข้าไปใน **เซิร์ฟเวอร์ express เดิมที่รันพอร์ต 14365**
+(ตัวที่มี `/express/ctranbetweendate`) เพราะพอร์ตนั้นเปิดออกเน็ตอยู่แล้ว — ไม่ต้องแตะ router
 
-## ติดตั้ง / รัน
+## ขั้นตอน
+1. เปิดโค้ดเซิร์ฟเวอร์ express (เครื่องที่รัน 14365)
+2. ก๊อป route จาก `usagebymenu.route.js` ไปวางในไฟล์เดียวกับ `/express/ctranbetweendate`
+3. เปลี่ยน `pool` ในโค้ด ให้ตรงกับตัวแปร MySQL connection/pool ที่เซิร์ฟเวอร์ใช้อยู่
+4. restart เซิร์ฟเวอร์
+5. ทดสอบ: `http://storenarai.dyndns.tv:14365/express/usagebymenu?branch=zjp&start=2026-05-01&end=2026-05-31`
 
-```bash
-cd office-server
-copy .env.example .env       # Windows (หรือ cp บน mac/linux)
-# แก้ .env ใส่รหัสผ่าน DB + ตั้ง API_TOKEN
-npm install
-npm start
-```
+## ตั้งค่า Vercel
+- `USAGE_API_BASE` = `http://storenarai.dyndns.tv:14365/express`
+- `USAGE_API_TOKEN` = ไม่ต้องใช้กับ endpoint นี้ (จะลบทิ้งหรือเก็บไว้ก็ได้ เซิร์ฟเวอร์ไม่ตรวจ)
+- Redeploy
 
-ขึ้นว่า `Narai Usage API running on port 8787` = ใช้ได้
-
-ทดสอบในเครื่อง:
-```
-http://localhost:8787/health                 -> {"ok":true}
-http://localhost:8787/usagebymenu?branch=zjp&start=2026-05-01&end=2026-05-31
-```
-
-## ทำให้ Vercel เรียกได้ (เปิดออกเน็ต)
-
-1. **Port forward** ที่ router: เปิด port `8787` (หรือพอร์ตที่ตั้ง) ชี้มาเครื่องที่รันบริการนี้
-2. ใช้ชื่อ dyndns ที่มีอยู่ เช่น `http://inventory.dyndns.tv:8787`
-3. ตั้ง Environment Variables บน **Vercel**:
-   - `USAGE_API_BASE` = `http://inventory.dyndns.tv:8787`
-   - `USAGE_API_TOKEN` = (ค่าเดียวกับ API_TOKEN ใน .env)
-   แล้ว Redeploy
-
-> เปิดออกเน็ตเฉพาะพอร์ตของบริการนี้ (ไม่ใช่ port MySQL 3306) — ปลอดภัยกว่า และมี token กันไว้อีกชั้น
-
-## ให้รันค้างตลอด (แนะนำ)
-
-ใช้ pm2:
-```bash
-npm install -g pm2
-pm2 start server.js --name narai-usage-api
-pm2 save
-pm2 startup
-```
-
-## สิทธิ์ MySQL
-
-user ที่ตั้งใน .env ต้องอ่าน database `myfbdata*` ทุกสาขาได้ (SELECT)
-แนะนำสร้าง user อ่านอย่างเดียว แทนการใช้ root
+## ข้อควรรู้
+- MySQL user ของเซิร์ฟเวอร์ต้องมีสิทธิ์ SELECT บน database `myfbdata*` ทุกสาขา
+- ข้อมูล `trn_usg` อาจช้ากว่าปัจจุบันไม่กี่วัน (ขึ้นกับรอบ sync ของ POS)
