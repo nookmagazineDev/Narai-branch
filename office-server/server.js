@@ -63,8 +63,12 @@ async function fetchDay(date) {
     if (Number(x.tableID) === 600) continue; // โต๊ะ 600 = เศษ/อาหารพนักงาน ไม่นับเป็นยอดใช้
     const oid = Number(x.outletID); const ic = nstr(x.itemCode); if (!ic) continue;
     if (EXCLUDE_ITEMCODES.has(ic)) continue; // ไอเทมที่ตั้งว่าไม่ต้องคิด
+    const tid = String(x.tableID == null ? '?' : x.tableID);
+    const qty = Number(x.quantity) || 0;
     let m = outlets.get(oid); if (!m) { m = {}; outlets.set(oid, m); }
-    m[ic] = (m[ic] || 0) + (Number(x.quantity) || 0);
+    let e = m[ic]; if (!e) { e = { total: 0, tbl: {} }; m[ic] = e; }
+    e.total += qty;
+    e.tbl[tid] = (e.tbl[tid] || 0) + qty;
   }
   return outlets;
 }
@@ -99,7 +103,7 @@ async function computeUsageByMenu(outletNum, start, end) {
     const chunk = await Promise.all(days.slice(i, i + CONC).map(getDay));
     for (const outlets of chunk) {
       const m = outlets.get(outletNum); if (!m) continue;
-      for (const [ic, q] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + q;
+      for (const [ic, e] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + e.total;
     }
   }
   // กระจายลงวัตถุดิบตามสูตร
@@ -122,6 +126,26 @@ async function computeUsageByMenu(outletNum, start, end) {
   return data;
 }
 
+// แยกตามโต๊ะ: เมนูที่เลือก ขายที่โต๊ะไหนบ้าง (จำนวนที่ขาย)
+async function computeTablesForMenu(outletNum, start, end, menuName) {
+  const days = dateRange(start, end);
+  const byTable = {};
+  const CONC = 6;
+  for (let i = 0; i < days.length; i += CONC) {
+    const chunk = await Promise.all(days.slice(i, i + CONC).map(getDay));
+    for (const outlets of chunk) {
+      const m = outlets.get(outletNum); if (!m) continue;
+      for (const [ic, e] of Object.entries(m)) {
+        const kc = bridge[ic]; if (!kc || !recipe[kc]) continue;
+        if (recipe[kc].name !== menuName) continue;
+        for (const [t, q] of Object.entries(e.tbl)) byTable[t] = (byTable[t] || 0) + q;
+      }
+    }
+  }
+  return Object.entries(byTable).map(([table, qty]) => ({ table, qty: Number(qty.toFixed(2)) }))
+    .filter((x) => x.qty > 0).sort((a, b) => b.qty - a.qty);
+}
+
 // ---------- HTTP ----------
 const app = express();
 app.use((req, res, next) => {
@@ -139,6 +163,22 @@ app.get('/usagebymenu', async (req, res) => {
     if (!outletNum) return res.json({ status: 'success', data: {} });
     if (!Object.keys(recipe).length) await loadSheets();
     const data = await computeUsageByMenu(outletNum, start, end);
+    res.json({ status: 'success', data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+app.get('/usagebytable', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase().trim();
+    const start = String(req.query.start || ''); const end = String(req.query.end || '');
+    const menu = String(req.query.menu || '');
+    if (!branch || !start || !end || !menu) return res.status(400).json({ status: 'error', message: 'missing branch/start/end/menu' });
+    const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
+    if (!outletNum) return res.json({ status: 'success', data: [] });
+    if (!Object.keys(recipe).length) await loadSheets();
+    const data = await computeTablesForMenu(outletNum, start, end, menu);
     res.json({ status: 'success', data });
   } catch (e) {
     console.error(e);

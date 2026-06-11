@@ -28,6 +28,22 @@ export default function StockList() {
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
   const [recipeMap, setRecipeMap] = useState({});
   const [usageByMenu, setUsageByMenu] = useState({});
+  const [expandedMenu, setExpandedMenu] = useState(null);
+  const [menuTables, setMenuTables] = useState({}); // { [menuName]: { loading, rows } }
+
+  const toggleMenuTables = async (menuName) => {
+    if (expandedMenu === menuName) { setExpandedMenu(null); return; }
+    setExpandedMenu(menuName);
+    if (menuTables[menuName]) return; // โหลดแล้ว
+    setMenuTables(prev => ({ ...prev, [menuName]: { loading: true, rows: [] } }));
+    try {
+      const qs = `branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}&menu=${encodeURIComponent(menuName)}`;
+      const res = await fetch(`/api/usagebytable?${qs}`).then(r => r.json());
+      setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: res.status === 'success' ? (res.data || []) : [] } }));
+    } catch {
+      setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: [] } }));
+    }
+  };
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
@@ -583,6 +599,7 @@ export default function StockList() {
                                 className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
                                 onClick={() => {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+                                  setExpandedMenu(null);
                                   setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu: usageByMenu[nid] || [] });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
@@ -717,6 +734,7 @@ export default function StockList() {
                       ใช้จากเมนู (ตามยอดขายจริง)
                       <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.byMenu.length} เมนู)</span>
                     </p>
+                    <p className="text-[11px] text-gray-400 mb-1">แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย</p>
                     <table className="w-full text-sm text-left border-collapse">
                       <thead className="bg-emerald-50 border-b">
                         <tr>
@@ -725,12 +743,37 @@ export default function StockList() {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {selectedUsageDetails.byMenu.map((row, idx) => (
-                          <tr key={idx} className="hover:bg-emerald-50/50">
-                            <td className="px-3 py-2 text-gray-700">{row.menu}</td>
-                            <td className="px-3 py-2 text-gray-900 text-right font-bold">{row.qty}</td>
-                          </tr>
-                        ))}
+                        {selectedUsageDetails.byMenu.map((row, idx) => {
+                          const isOpen = expandedMenu === row.menu;
+                          const tbl = menuTables[row.menu];
+                          return (
+                            <React.Fragment key={idx}>
+                              <tr className="hover:bg-emerald-50/50 cursor-pointer" onClick={() => toggleMenuTables(row.menu)}>
+                                <td className="px-3 py-2 text-emerald-700">
+                                  <span className="inline-block w-3 text-emerald-400">{isOpen ? '▾' : '▸'}</span> {row.menu}
+                                </td>
+                                <td className="px-3 py-2 text-gray-900 text-right font-bold">{row.qty}</td>
+                              </tr>
+                              {isOpen && (
+                                <tr className="bg-gray-50/70">
+                                  <td colSpan="2" className="px-3 py-2">
+                                    {tbl && tbl.loading && <div className="text-xs text-gray-400">กำลังโหลดโต๊ะ...</div>}
+                                    {tbl && !tbl.loading && tbl.rows.length > 0 && (
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {tbl.rows.map((t, i) => (
+                                          <span key={i} className="text-xs bg-white border border-emerald-200 rounded px-2 py-0.5 text-gray-600">
+                                            โต๊ะ {t.table} <span className="font-bold text-emerald-700">{t.qty}</span>
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {tbl && !tbl.loading && tbl.rows.length === 0 && <div className="text-xs text-gray-400">ไม่พบข้อมูลโต๊ะ</div>}
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </>
