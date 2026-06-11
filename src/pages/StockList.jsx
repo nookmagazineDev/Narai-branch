@@ -605,7 +605,13 @@ export default function StockList() {
                                 onClick={() => {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
                                   setExpandedMenu(null);
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu: usageByMenu[nid] || [] });
+                                  // ปรับยอดแยกเมนู (ประมาณจากสูตร) ให้ผลรวม = ยอดใช้จากระบบ (POS) โดยคงสัดส่วนเมนูเดิม
+                                  const rawByMenu = usageByMenu[nid] || [];
+                                  const estTotal = rawByMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+                                  const posTotal = Number(item.apiUsage.total) || 0;
+                                  const scale = (posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
+                                  const byMenu = rawByMenu.map(r => ({ ...r, qty: Number((Number(r.qty) * scale).toFixed(2)) }));
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal, scaled: scale !== 1 });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
@@ -739,7 +745,10 @@ export default function StockList() {
                       ใช้จากเมนู (ตามยอดขายจริง)
                       <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.byMenu.length} เมนู)</span>
                     </p>
-                    <p className="text-[11px] text-gray-400 mb-1">แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย</p>
+                    <p className="text-[11px] text-gray-400 mb-1">
+                      แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย
+                      {selectedUsageDetails.scaled && <span className="text-emerald-500"> · ปรับยอดให้รวม = ยอดใช้จากระบบ (POS)</span>}
+                    </p>
                     <table className="w-full text-sm text-left border-collapse">
                       <thead className="bg-emerald-50 border-b">
                         <tr>
@@ -784,7 +793,10 @@ export default function StockList() {
                         <tr className="border-t-2 border-emerald-200 bg-emerald-50/60">
                           <td className="px-3 py-2 font-bold text-emerald-800">ยอดรวม</td>
                           <td className="px-3 py-2 text-right font-bold text-emerald-800">
-                            {selectedUsageDetails.byMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2)}
+                            {(selectedUsageDetails.posTotal != null
+                              ? Number(selectedUsageDetails.posTotal)
+                              : selectedUsageDetails.byMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0)
+                            ).toFixed(2)}
                           </td>
                         </tr>
                       </tfoot>
