@@ -1,44 +1,35 @@
-// คำนวณ "ยอดใช้วัตถุดิบ แยกตามเมนูที่ขายจริง" (Method 2)
-// = ยอดขายรายเมนู (ชีท MenuSales) x ปริมาณวัตถุดิบต่อจานในสูตร (ชีท RcpDtls)
-// Spreadsheet: 1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg
+// คำนวณ "ยอดใช้วัตถุดิบ แยกตามเมนูที่ขายจริง" (Method 2) จาก API สดๆ
+// แหล่งข้อมูล:
+//  1) ยอดขายรายเมนู: http://storenarai.dyndns.tv:14365/express/ctranbetweendate?start=&end=
+//       (คืนทุกสาขา ต้องกรอง outletID เอง) -> ใช้ itemCode เป็นรหัสเมนูฝั่งขาย, quantity = จำนวนขาย
+//  2) ตัวเชื่อม: ชีท CostMenu (A=itemCode ฝั่งขาย/BOT, C=Kios_itemid = รหัสเมนูในสูตร)
+//  3) สูตร: ชีท RcpDtls (A=รหัสเมนู, C=ชื่อเมนู, E=รหัสวัตถุดิบ, G/I = ปริมาณต่อจาน)
 //
-// ชีท MenuSales (ต้องสร้างเอง): A=วันที่(YYYY-MM-DD) B=เลขสาขา C=ชื่อสาขา D=รหัสเมนู E=ชื่อเมนู F=จำนวนที่ขาย
-// ชีท RcpDtls: A=รหัสเมนู C=ชื่อเมนู E=รหัสวัตถุดิบ G=ปริมาณใช้ I=yield(หน่วยต่อ stock unit)  -> qty/จาน = G/I
+// เส้นทาง: sales.itemCode -> CostMenu.A -> CostMenu.C (Kios) -> RcpDtls.A -> วัตถุดิบ x (ขาย x G/I)
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
-const MENU_SALES_SHEET = 'MenuSales';
-const RECIPE_SHEET = 'RcpDtls';
+const SALES_BASE = 'http://storenarai.dyndns.tv:14365/express/ctranbetweendate';
 
-// MenuSales columns
-const MS_DATE = 0, MS_BRANCH_NO = 1, MS_BRANCH_NAME = 2, MS_MENU_CODE = 3, MS_QTY = 5;
-// RcpDtls columns
+const CM_ITEMCODE = 0; // CostMenu A (= sales itemCode)
+const CM_KIOS = 2;     // CostMenu C (= RcpDtls menu code)
 const RC_MENU_CODE = 0, RC_MENU_NAME = 2, RC_ITEM_CODE = 4, RC_USE = 6, RC_YIELD = 8;
 
+const branchMap = {
+  'sjp': 7, 'zjp': 7, 'crm': 12, 'xcm': 19, 'slr': 37, 'sum': 51,
+  'xum': 59, 'scs': 61, 'smp': 63, 'xsb': 67, 'xhh': 72,
+  'hrs': 78, 'clk': 79, 'p90': 80, 'hps': 109, 'zbw': 400,
+  'zpt': 401, 'npt': 500, 'wrm': 501, 'wmt': 503, 'ipr': 904,
+  'zk3': 906, 'zip': 12
+};
+
+function nstr(v) { return v == null ? '' : String(v).replace(/\.0+$/, '').trim(); }
 function normItem(id) {
   if (id === null || id === undefined) return '';
   return String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 }
-function normMenu(code) {
-  if (code === null || code === undefined) return '';
-  const n = Number(code);
-  return isNaN(n) ? String(code).trim() : String(n);
-}
-function toDateKey(cell) {
-  if (!cell) return null;
-  const raw = cell.v;
-  if (raw && typeof raw === 'string') {
-    const m = raw.match(/^Date\((\d+),(\d+),(\d+)/);
-    if (m) return `${m[1]}-${String(Number(m[2]) + 1).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`;
-  }
-  if (cell.f) {
-    const m2 = String(cell.f).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    if (m2) return `${m2[1]}-${m2[2].padStart(2, '0')}-${m2[3].padStart(2, '0')}`;
-  }
-  return null;
-}
 function gvizRows(text) {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1) return null;
+  if (start === -1 || end === -1) return [];
   const parsed = JSON.parse(text.substring(start, end + 1));
   return (parsed.table && parsed.table.rows) ? parsed.table.rows : [];
 }
@@ -47,6 +38,31 @@ async function fetchSheet(name) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Google Sheet Error (${name}): ${r.status}`);
   return gvizRows(await r.text());
+}
+function dateList(start, end) {
+  const days = [];
+  const d = new Date(start + 'T00:00:00Z');
+  const last = new Date(end + 'T00:00:00Z');
+  while (d <= last && days.length < 92) { // กันช่วงกว้างเกินไป (สูงสุด ~3 เดือน)
+    days.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return days;
+}
+
+// ดึงยอดขาย 1 วัน แล้วรวมเฉพาะสาขาที่ต้องการลง salesByItem (คุมหน่วยความจำ)
+async function aggregateDay(day, outletNum, salesByItem) {
+  const r = await fetch(`${SALES_BASE}?start=${encodeURIComponent(day)}&end=${encodeURIComponent(day)}`);
+  if (!r.ok) throw new Error(`Sales API Error: ${r.status}`);
+  const json = await r.json();
+  const rows = (json && json.data) ? json.data : [];
+  for (const x of rows) {
+    if (Number(x.outletID) !== outletNum) continue;
+    if (x.void) continue; // ข้ามรายการที่ถูกยกเลิก
+    const ic = nstr(x.itemCode);
+    if (!ic) continue;
+    salesByItem[ic] = (salesByItem[ic] || 0) + (Number(x.quantity) || 0);
+  }
 }
 
 export default async function handler(req, res) {
@@ -62,89 +78,77 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
   }
 
-  const branchMap = {
-    'sjp': '7', 'zjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
-    'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
-    'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '109', 'zbw': '400',
-    'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
-    'zk3': '906', 'zip': '12'
-  };
-  const branchAlias = { 'zjp': 'sjp' };
-
   const branchKey = String(branch).toLowerCase().trim();
-  const sheetBranchName = (branchAlias[branchKey] || branchKey).toLowerCase().trim();
-  const outletId = String(queryOutletId || branchMap[branchKey] || '').trim();
+  const outletNum = Number(queryOutletId || branchMap[branchKey] || 0);
+  if (!outletNum) {
+    return res.status(200).json({ status: 'success', data: {}, note: `ไม่พบเลขสาขาของ ${branchKey}` });
+  }
 
   try {
-    let salesRows;
-    try {
-      salesRows = await fetchSheet(MENU_SALES_SHEET);
-    } catch (e) {
-      // ยังไม่มีชีท MenuSales — คืน data ว่าง (ฝั่งหน้าจอจะ fallback ไปแสดงตามสูตร)
-      return res.status(200).json({ status: 'success', data: {}, note: 'ยังไม่มีชีท MenuSales' });
+    // โหลดตัวเชื่อม + สูตร พร้อมกัน
+    const [costmenuRows, recipeRows] = await Promise.all([fetchSheet('CostMenu'), fetchSheet('RcpDtls')]);
+
+    // bridge: sales itemCode -> รหัสเมนูในสูตร (Kios_itemid)
+    const bridge = {};
+    for (const row of costmenuRows) {
+      const c = row.c; if (!c) continue;
+      const a = nstr(c[CM_ITEMCODE] && c[CM_ITEMCODE].v);
+      const k = nstr(c[CM_KIOS] && c[CM_KIOS].v);
+      if (a && k) bridge[a] = k;
     }
 
-    // 1) รวมยอดขายต่อเมนู (กรองสาขา + ช่วงวันที่)
-    const menuSales = {};   // menuCode -> qty รวม
-    (salesRows || []).forEach(row => {
-      const c = row.c;
-      if (!c) return;
-      const rBrName = c[MS_BRANCH_NAME] && c[MS_BRANCH_NAME].v != null ? String(c[MS_BRANCH_NAME].v).toLowerCase().trim() : '';
-      const rBrNo = c[MS_BRANCH_NO] && c[MS_BRANCH_NO].v != null ? String(c[MS_BRANCH_NO].v).replace(/\.0+$/, '').trim() : '';
-      if (!((rBrName && rBrName === sheetBranchName) || (outletId && rBrNo === outletId))) return;
-
-      const dateKey = toDateKey(c[MS_DATE]);
-      if (!dateKey || dateKey < startDate || dateKey > endDate) return;
-
-      const menuCode = normMenu(c[MS_MENU_CODE] && c[MS_MENU_CODE].v != null ? c[MS_MENU_CODE].v : null);
-      if (!menuCode) return;
-      const qty = c[MS_QTY] && c[MS_QTY].v != null ? parseFloat(c[MS_QTY].v) || 0 : 0;
-      menuSales[menuCode] = (menuSales[menuCode] || 0) + qty;
-    });
-
-    if (Object.keys(menuSales).length === 0) {
-      return res.status(200).json({ status: 'success', data: {} });
-    }
-
-    // 2) กระจายยอดขายเมนูลงวัตถุดิบตามสูตร
-    const recipeRows = await fetchSheet(RECIPE_SHEET);
-    const result = {}; // normItemId -> { menuName -> qty }
-    (recipeRows || []).forEach(row => {
-      const c = row.c;
-      if (!c) return;
-      const menuCode = normMenu(c[RC_MENU_CODE] && c[RC_MENU_CODE].v != null ? c[RC_MENU_CODE].v : null);
-      if (!menuCode || menuSales[menuCode] === undefined) return;
-
-      const itemId = normItem(c[RC_ITEM_CODE] && c[RC_ITEM_CODE].v != null ? c[RC_ITEM_CODE].v : null);
-      if (!itemId) return;
-      const menuName = c[RC_MENU_NAME] && c[RC_MENU_NAME].v != null ? String(c[RC_MENU_NAME].v).trim() : '(ไม่ทราบชื่อเมนู)';
-
+    // recipe: รหัสเมนู -> [{item, name, perUnit}]
+    const recipe = {};
+    for (const row of recipeRows) {
+      const c = row.c; if (!c) continue;
+      const mc = nstr(c[RC_MENU_CODE] && c[RC_MENU_CODE].v);
+      if (!mc || isNaN(Number(mc))) continue;
+      const item = normItem(c[RC_ITEM_CODE] && c[RC_ITEM_CODE].v != null ? c[RC_ITEM_CODE].v : null);
+      if (!item) continue;
       const use = c[RC_USE] && c[RC_USE].v != null ? Number(c[RC_USE].v) : null;
-      const yield_ = c[RC_YIELD] && c[RC_YIELD].v != null ? Number(c[RC_YIELD].v) : null;
+      const yld = c[RC_YIELD] && c[RC_YIELD].v != null ? Number(c[RC_YIELD].v) : null;
       let perUnit;
-      if (use != null && yield_ != null && yield_ !== 0) perUnit = use / yield_;
+      if (use != null && yld != null && yld !== 0) perUnit = use / yld;
       else if (use != null) perUnit = use;
-      else return;
+      else continue;
+      const menuName = c[RC_MENU_NAME] && c[RC_MENU_NAME].v != null ? String(c[RC_MENU_NAME].v).trim() : '(ไม่ทราบชื่อเมนู)';
+      (recipe[mc] = recipe[mc] || []).push({ item, name: menuName, perUnit });
+    }
 
-      const attributed = menuSales[menuCode] * perUnit;
-      if (!attributed) return;
+    // ดึงยอดขายรายวัน (กรองสาขา + รวมทันที) แบบจำกัด concurrency
+    const days = dateList(startDate, endDate);
+    const salesByItem = {};
+    const CONCURRENCY = 4;
+    for (let i = 0; i < days.length; i += CONCURRENCY) {
+      await Promise.all(days.slice(i, i + CONCURRENCY).map(d => aggregateDay(d, outletNum, salesByItem)));
+    }
 
-      if (!result[itemId]) result[itemId] = {};
-      result[itemId][menuName] = (result[itemId][menuName] || 0) + attributed;
-    });
+    // กระจายยอดขายลงวัตถุดิบตามสูตร
+    const result = {}; // normItem -> { menuName -> qty }
+    for (const [ic, qty] of Object.entries(salesByItem)) {
+      if (!qty) continue;
+      const menuCode = bridge[ic];
+      if (!menuCode || !recipe[menuCode]) continue;
+      for (const ing of recipe[menuCode]) {
+        const attributed = qty * ing.perUnit;
+        if (!attributed) continue;
+        if (!result[ing.item]) result[ing.item] = {};
+        result[ing.item][ing.name] = (result[ing.item][ing.name] || 0) + attributed;
+      }
+    }
 
-    // 3) แปลงเป็น array เรียงจากมากไปน้อย + ปัดทศนิยม
+    // แปลงเป็น array เรียงมาก->น้อย
     const data = {};
-    Object.keys(result).forEach(itemId => {
+    for (const itemId of Object.keys(result)) {
       data[itemId] = Object.entries(result[itemId])
         .map(([menu, qty]) => ({ menu, qty: Number(qty.toFixed(2)) }))
         .filter(x => x.qty > 0)
         .sort((a, b) => b.qty - a.qty);
-    });
+    }
 
     return res.status(200).json({ status: 'success', data });
   } catch (error) {
-    console.error('Fetch error:', error);
+    console.error('usagemenu error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
   }
 }
