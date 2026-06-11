@@ -1,20 +1,16 @@
-// ยอดใช้วัตถุดิบ "แยกตามเมนูที่ขายจริง" — อ่านจากฐานข้อมูล POS โดยตรง (เร็ว+แม่นยำ)
-// ระบบ POS คำนวณยอดใช้แยกเมนูไว้ให้แล้วในตาราง trn_usg.Usg_Dtls ของแต่ละสาขา
-//
-// แต่ละสาขามี database ของตัวเอง: myfbdata<branchcode> เช่น zjp -> myfbdatazjp
-//   trn_usg: Usg_Date, Usg_ItemID, Usg_Qty(รวม), Usg_Dtls(รายละเอียดเมนู)
-//   item:    Itm_ID, Itm_Code(รหัสวัตถุดิบ)
-//   Usg_Dtls รูปแบบต่อบรรทัด (คั่นด้วย \r): "ชื่อเมนู : จำนวนขาย (ปริมาณวัตถุดิบที่ใช้)"
-//
-// credentials เก็บใน Environment Variables (ตั้งบน Vercel): MYSQL_HOST/PORT/USER/PASSWORD
-import mysql from 'mysql2/promise';
+// ยอดใช้วัตถุดิบ "แยกตามเมนูที่ขายจริง"
+// อ่านจาก endpoint ของเซิร์ฟเวอร์ในออฟฟิศ (ต่อ MySQL POS ให้แล้ว) — Vercel ไม่ต้องต่อ DB เอง
+//   GET {EXPRESS_BASE}/express/usagebymenu?branch=<code>&start=<YYYY-MM-DD>&end=<YYYY-MM-DD>
+//   -> { status:'success', data:[ { code:'01000046', dtls:'<Usg_Dtls>' }, ... ] }
+// Usg_Dtls แต่ละบรรทัด (คั่นด้วย \r): "ชื่อเมนู : จำนวนขาย (ปริมาณวัตถุดิบที่ใช้)"
+const EXPRESS_BASE = process.env.EXPRESS_BASE || 'http://storenarai.dyndns.tv:14365';
 
 function normItem(id) {
   if (id === null || id === undefined) return '';
   return String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 }
 
-// แยกบรรทัด Usg_Dtls -> { menu, used } ; รูปแบบ "ชื่อเมนู : ขาย (ใช้)"
+// แยกบรรทัด Usg_Dtls -> [{ menu, used }]
 function parseDtls(dtls) {
   if (!dtls) return [];
   const out = [];
@@ -41,38 +37,27 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
   }
 
-  // สาขา -> ชื่อ database (กันค่าแปลกปลอม)
   const branchKey = String(branch).toLowerCase().trim();
   if (!/^[a-z0-9]+$/.test(branchKey) || branchKey === 'all') {
-    return res.status(200).json({ status: 'success', data: {}, note: `ไม่รองรับสาขา ${branchKey}` });
+    return res.status(200).json({ status: 'success', data: {} });
   }
-  const database = 'myfbdata' + branchKey;
 
-  let conn;
   try {
-    conn = await mysql.createConnection({
-      host: process.env.MYSQL_HOST,
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER,
-      password: process.env.MYSQL_PASSWORD,
-      database,
-      connectTimeout: 15000,
-      dateStrings: true,
-    });
-
-    const [rows] = await conn.execute(
-      'SELECT i.Itm_Code AS code, u.Usg_Dtls AS dtls ' +
-      'FROM trn_usg u LEFT JOIN item i ON i.Itm_ID = u.Usg_ItemID ' +
-      'WHERE u.Usg_Date BETWEEN ? AND ?',
-      [startDate, endDate]
-    );
+    const url = `${EXPRESS_BASE}/express/usagebymenu?branch=${encodeURIComponent(branchKey)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      return res.status(502).json({ status: 'error', message: `Office API Error: ${r.status}` });
+    }
+    const payload = await r.json();
+    const rows = Array.isArray(payload) ? payload : (payload && payload.data) ? payload.data : [];
 
     // รวมตามวัตถุดิบ -> เมนู
     const result = {}; // normItem -> { menu -> usedQty }
-    for (const r of rows) {
-      const item = normItem(r.code);
+    for (const row of rows) {
+      const item = normItem(row.code != null ? row.code : row.Itm_Code);
       if (!item) continue;
-      for (const { menu, used } of parseDtls(r.dtls)) {
+      const dtls = row.dtls != null ? row.dtls : row.Usg_Dtls;
+      for (const { menu, used } of parseDtls(dtls)) {
         if (!menu || !used) continue;
         if (!result[item]) result[item] = {};
         result[item][menu] = (result[item][menu] || 0) + used;
@@ -89,13 +74,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ status: 'success', data });
   } catch (error) {
-    // ไม่มี database ของสาขานั้น หรือเชื่อมต่อไม่ได้ -> คืนว่าง (หน้าจอ fallback ไปแสดงตามสูตร)
-    if (error && (error.code === 'ER_BAD_DB_ERROR' || error.code === 'ER_NO_SUCH_TABLE')) {
-      return res.status(200).json({ status: 'success', data: {}, note: 'ไม่พบข้อมูลสาขานี้ในฐานข้อมูล' });
-    }
     console.error('usagemenu error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
-  } finally {
-    if (conn) { try { await conn.end(); } catch (e) { /* ignore */ } }
   }
 }
