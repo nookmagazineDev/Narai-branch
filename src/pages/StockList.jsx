@@ -322,6 +322,11 @@ export default function StockList() {
     });
 
     result.sort((a, b) => {
+      // รายการที่มียอดใช้จากระบบ ขึ้นก่อน ที่ยังไม่มีไว้ล่างสุด
+      const ua = a.apiUsage && a.apiUsage.total > 0 ? 1 : 0;
+      const ub = b.apiUsage && b.apiUsage.total > 0 ? 1 : 0;
+      if (ua !== ub) return ub - ua;
+
       if (sortBy === 'storageCat') {
         const catA = String(a.storageCat || '');
         const catB = String(b.storageCat || '');
