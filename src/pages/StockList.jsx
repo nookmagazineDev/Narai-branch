@@ -780,6 +780,14 @@ export default function StockList() {
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-emerald-200 bg-emerald-50/60">
+                          <td className="px-3 py-2 font-bold text-emerald-800">ยอดรวม</td>
+                          <td className="px-3 py-2 text-right font-bold text-emerald-800">
+                            {selectedUsageDetails.byMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </>
                 ) : (
