@@ -21,6 +21,13 @@ const branchMap = {
 // รหัสไอเทม (ฝั่งขาย) ที่ตั้งว่า "ไม่ต้องคิด" — ใส่ใน .env: EXCLUDE_ITEMCODES=102006,202028,...
 const EXCLUDE_ITEMCODES = new Set(String(process.env.EXCLUDE_ITEMCODES || '').split(',').map(s => s.trim()).filter(Boolean));
 
+// วัตถุดิบ (ฝั่งสต๊อก) ที่ "ห้ามนับเมนูหน่วย (ที่)" — นับเฉพาะเมนูหน่วย (กก)
+// เช่น สันคอ 11010081: เมนูบุฟเฟ่ต์ (กก) นับ, เมนูสไลด์ (ที่) ไม่นับ (กันนับซ้ำเนื้อตัวเดียวกัน)
+// ตั้งรายไอเทม ไม่ใช่กฎรวม — เพิ่มรหัสคั่นด้วย , ใน .env: EXCLUDE_PLATE_MENU_INGREDIENTS=11010081,...
+const EXCLUDE_PLATE_MENU_INGREDIENTS = new Set(
+  String(process.env.EXCLUDE_PLATE_MENU_INGREDIENTS || '11010081').split(',').map(s => normItem(s)).filter(Boolean)
+);
+
 function nstr(v) { return v == null ? '' : String(v).replace(/\.0+$/, '').trim(); }
 function normItem(id) { return id == null ? '' : String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase(); }
 function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return JSON.parse(t.substring(a, b + 1)); }
@@ -114,6 +121,8 @@ async function computeUsageByMenu(outletNum, start, end) {
     const { name, items } = recipe[kc];
     for (const it of items) {
       const used = q * it.per; if (!used) continue;
+      // วัตถุดิบบางตัว: ไม่นับเมนูหน่วย (ที่) — นับเฉพาะ (กก) (กันนับซ้ำเนื้อตัวเดียวกัน)
+      if (EXCLUDE_PLATE_MENU_INGREDIENTS.has(it.ing) && /\(\s*ที่\s*\)/.test(name)) continue;
       if (!result[it.ing]) result[it.ing] = {};
       result[it.ing][name] = (result[it.ing][name] || 0) + used;
     }
