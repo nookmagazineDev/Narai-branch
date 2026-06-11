@@ -746,7 +746,7 @@ export default function StockList() {
                       <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.byMenu.length} เมนู)</span>
                     </p>
                     <p className="text-[11px] text-gray-400 mb-1">
-                      แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย
+                      แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย — แต่ละโต๊ะแสดง <span className="font-semibold text-emerald-600">จำนวนที่สั่ง</span> · <span className="font-semibold text-amber-600">กก.</span>
                       {selectedUsageDetails.scaled && <span className="text-emerald-500"> · ปรับยอดให้รวม = ยอดใช้จากระบบ (POS)</span>}
                     </p>
                     <table className="w-full text-sm text-left border-collapse">
@@ -772,15 +772,23 @@ export default function StockList() {
                                 <tr className="bg-gray-50/70">
                                   <td colSpan="2" className="px-3 py-2">
                                     {tbl && tbl.loading && <div className="text-xs text-gray-400">กำลังโหลดโต๊ะ...</div>}
-                                    {tbl && !tbl.loading && tbl.rows.length > 0 && (
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {tbl.rows.map((t, i) => (
-                                          <span key={i} className="text-xs bg-white border border-emerald-200 rounded px-2 py-0.5 text-gray-600">
-                                            โต๊ะ {t.table} <span className="font-bold text-emerald-700">{t.qty}</span>
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
+                                    {tbl && !tbl.loading && tbl.rows.length > 0 && (() => {
+                                      const sumQty = tbl.rows.reduce((s, t) => s + (Number(t.qty) || 0), 0);
+                                      return (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {tbl.rows.map((t, i) => {
+                                            const kg = sumQty > 0 ? (Number(row.qty) * (Number(t.qty) || 0) / sumQty) : 0;
+                                            return (
+                                              <span key={i} className="text-xs bg-white border border-emerald-200 rounded px-2 py-0.5 text-gray-600">
+                                                โต๊ะ {t.table} <span className="font-bold text-emerald-700">{t.qty}</span>
+                                                <span className="text-gray-400"> · </span>
+                                                <span className="font-bold text-amber-600">{kg.toFixed(2)}</span><span className="text-amber-400"> กก.</span>
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })()}
                                     {tbl && !tbl.loading && tbl.rows.length === 0 && <div className="text-xs text-gray-400">ไม่พบข้อมูลโต๊ะ</div>}
                                   </td>
                                 </tr>
