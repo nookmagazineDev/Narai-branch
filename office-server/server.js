@@ -18,6 +18,9 @@ const branchMap = {
   npt: 500, wrm: 501, wmt: 503, ipr: 904, zk3: 906, zip: 12,
 };
 
+// รหัสไอเทม (ฝั่งขาย) ที่ตั้งว่า "ไม่ต้องคิด" — ใส่ใน .env: EXCLUDE_ITEMCODES=102006,202028,...
+const EXCLUDE_ITEMCODES = new Set(String(process.env.EXCLUDE_ITEMCODES || '').split(',').map(s => s.trim()).filter(Boolean));
+
 function nstr(v) { return v == null ? '' : String(v).replace(/\.0+$/, '').trim(); }
 function normItem(id) { return id == null ? '' : String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase(); }
 function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return JSON.parse(t.substring(a, b + 1)); }
@@ -57,7 +60,9 @@ async function fetchDay(date) {
   const outlets = new Map();
   for (const x of rows) {
     if (x.void) continue;
+    if (Number(x.tableID) === 600) continue; // โต๊ะ 600 = เศษ/อาหารพนักงาน ไม่นับเป็นยอดใช้
     const oid = Number(x.outletID); const ic = nstr(x.itemCode); if (!ic) continue;
+    if (EXCLUDE_ITEMCODES.has(ic)) continue; // ไอเทมที่ตั้งว่าไม่ต้องคิด
     let m = outlets.get(oid); if (!m) { m = {}; outlets.set(oid, m); }
     m[ic] = (m[ic] || 0) + (Number(x.quantity) || 0);
   }
