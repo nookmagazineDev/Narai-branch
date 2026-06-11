@@ -1,28 +1,10 @@
 // ยอดใช้วัตถุดิบ "แยกตามเมนูที่ขายจริง"
-// อ่านจาก endpoint ของเซิร์ฟเวอร์ในออฟฟิศ (ต่อ MySQL POS ให้แล้ว) — Vercel ไม่ต้องต่อ DB เอง
-//   GET {EXPRESS_BASE}/express/usagebymenu?branch=<code>&start=<YYYY-MM-DD>&end=<YYYY-MM-DD>
-//   -> { status:'success', data:[ { code:'01000046', dtls:'<Usg_Dtls>' }, ... ] }
-// Usg_Dtls แต่ละบรรทัด (คั่นด้วย \r): "ชื่อเมนู : จำนวนขาย (ปริมาณวัตถุดิบที่ใช้)"
-const EXPRESS_BASE = process.env.EXPRESS_BASE || 'http://storenarai.dyndns.tv:14365';
-
-function normItem(id) {
-  if (id === null || id === undefined) return '';
-  return String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
-}
-
-// แยกบรรทัด Usg_Dtls -> [{ menu, used }]
-function parseDtls(dtls) {
-  if (!dtls) return [];
-  const out = [];
-  for (const raw of String(dtls).split(/[\r\n]+/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const m = line.match(/^(.*) : ([-\d.]+) \(([-\d.]+)\)\s*$/);
-    if (!m) continue;
-    out.push({ menu: m[1].trim(), used: parseFloat(m[3]) || 0 });
-  }
-  return out;
-}
+// Vercel ไม่ต่อ DB เอง — proxy ไปที่ Narai Usage API ที่รันในออฟฟิศ (ดู office-server/)
+//   GET {USAGE_API_BASE}/usagebymenu?branch=<code>&start=<YYYY-MM-DD>&end=<YYYY-MM-DD>
+//   -> { status:'success', data:{ "<itemCode>":[{menu, qty}, ...], ... } }
+// ตั้งค่า env บน Vercel: USAGE_API_BASE (จำเป็น), USAGE_API_TOKEN (ถ้าตั้ง token ฝั่งออฟฟิศ)
+const USAGE_API_BASE = process.env.USAGE_API_BASE || '';
+const USAGE_API_TOKEN = process.env.USAGE_API_TOKEN || '';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -42,37 +24,19 @@ export default async function handler(req, res) {
     return res.status(200).json({ status: 'success', data: {} });
   }
 
+  if (!USAGE_API_BASE) {
+    // ยังไม่ได้ตั้งค่า API ในออฟฟิศ -> คืนว่าง (หน้าจอจะ fallback ไปแสดงตามสูตร)
+    return res.status(200).json({ status: 'success', data: {}, note: 'ยังไม่ได้ตั้งค่า USAGE_API_BASE' });
+  }
+
   try {
-    const url = `${EXPRESS_BASE}/express/usagebymenu?branch=${encodeURIComponent(branchKey)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
-    const r = await fetch(url);
+    const url = `${USAGE_API_BASE.replace(/\/+$/, '')}/usagebymenu?branch=${encodeURIComponent(branchKey)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+    const r = await fetch(url, USAGE_API_TOKEN ? { headers: { 'x-api-token': USAGE_API_TOKEN } } : undefined);
     if (!r.ok) {
       return res.status(502).json({ status: 'error', message: `Office API Error: ${r.status}` });
     }
     const payload = await r.json();
-    const rows = Array.isArray(payload) ? payload : (payload && payload.data) ? payload.data : [];
-
-    // รวมตามวัตถุดิบ -> เมนู
-    const result = {}; // normItem -> { menu -> usedQty }
-    for (const row of rows) {
-      const item = normItem(row.code != null ? row.code : row.Itm_Code);
-      if (!item) continue;
-      const dtls = row.dtls != null ? row.dtls : row.Usg_Dtls;
-      for (const { menu, used } of parseDtls(dtls)) {
-        if (!menu || !used) continue;
-        if (!result[item]) result[item] = {};
-        result[item][menu] = (result[item][menu] || 0) + used;
-      }
-    }
-
-    const data = {};
-    for (const item of Object.keys(result)) {
-      data[item] = Object.entries(result[item])
-        .map(([menu, qty]) => ({ menu, qty: Number(qty.toFixed(2)) }))
-        .filter(x => x.qty > 0)
-        .sort((a, b) => b.qty - a.qty);
-    }
-
-    return res.status(200).json({ status: 'success', data });
+    return res.status(200).json({ status: 'success', data: (payload && payload.data) ? payload.data : {} });
   } catch (error) {
     console.error('usagemenu error:', error);
     return res.status(500).json({ status: 'error', message: error.message });

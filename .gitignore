@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# office API secrets
+.env
+office-server/.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
