@@ -774,13 +774,14 @@ export default function StockList() {
                                     {tbl && tbl.loading && <div className="text-xs text-gray-400">กำลังโหลดโต๊ะ...</div>}
                                     {tbl && !tbl.loading && tbl.rows.length > 0 && (() => {
                                       const sumQty = tbl.rows.reduce((s, t) => s + (Number(t.qty) || 0), 0);
+                                      const unit = ((row.menu.match(/\(([^)]+)\)\s*$/) || [])[1] || '').trim();
                                       return (
                                         <div className="flex flex-wrap gap-1.5">
                                           {tbl.rows.map((t, i) => {
                                             const kg = sumQty > 0 ? (Number(row.qty) * (Number(t.qty) || 0) / sumQty) : 0;
                                             return (
                                               <span key={i} className="text-xs bg-white border border-emerald-200 rounded px-2 py-0.5 text-gray-600">
-                                                โต๊ะ {t.table} <span className="font-bold text-emerald-700">{t.qty}</span>
+                                                โต๊ะ {t.table} <span className="font-bold text-emerald-700">{t.qty}</span>{unit && <span className="text-emerald-400"> {unit}</span>}
                                                 <span className="text-gray-400"> · </span>
                                                 <span className="font-bold text-amber-600">{kg.toFixed(2)}</span><span className="text-amber-400"> กก.</span>
                                               </span>
