@@ -1,22 +1,34 @@
-# Endpoint ยอดใช้แยกเมนู (เพิ่มในเซิร์ฟเวอร์ express เดิม)
+# Narai Usage API (รันในออฟฟิศ)
 
-เพิ่ม endpoint เข้าไปใน **เซิร์ฟเวอร์ express เดิมที่รันพอร์ต 14365**
-(ตัวที่มี `/express/ctranbetweendate`) เพราะพอร์ตนั้นเปิดออกเน็ตอยู่แล้ว — ไม่ต้องแตะ router
+บริการเล็กๆ ต่อ MySQL POS แล้วส่งยอดใช้วัตถุดิบแยกตามเมนู (ตาราง `myfbdata<สาขา>.trn_usg`)
+ให้หน้าเว็บ (ผ่าน Vercel) — แยกต่างหาก ไม่ยุ่งกับเซิร์ฟเวอร์ express เดิม
 
-snippet `usagebymenu.route.js` **สร้าง MySQL connection ของตัวเอง** จึงไม่ต้องรู้/แก้ connection เดิมของเซิร์ฟเวอร์
+ปัจจุบัน**ติดตั้งและรันอยู่แล้ว**บนเครื่อง IT-Narai (192.168.2.143) ผ่าน pm2
+เปิดพอร์ตออกเน็ตด้วย **UPnP อัตโนมัติ** (พอร์ต 8787) — เข้าถึงได้ที่ `http://storenarai.dyndns.tv:8787`
 
-## ขั้นตอน (ที่เครื่องซึ่งรันเซิร์ฟเวอร์ 14365)
-1. ติดตั้ง driver: `npm install mysql2`
-2. ก๊อปโค้ดทั้งหมดใน `usagebymenu.route.js` ไปวางในไฟล์เดียวกับ `/express/ctranbetweendate` (ไฟล์ที่มีตัวแปร `app`)
-   - ถ้าไฟล์ใช้ `import` (ESM) เปลี่ยนบรรทัด `const mysql = require('mysql2/promise')` เป็น `import mysql from 'mysql2/promise'`
-3. restart เซิร์ฟเวอร์
-4. ทดสอบ: `http://storenarai.dyndns.tv:14365/express/usagebymenu?branch=zjp&start=2026-05-01&end=2026-05-31`
+## โครงสร้าง
+- `server.js` — ตัวบริการ (Express + mysql2). เปิดพอร์ต UPnP เองตอนสตาร์ท + รีเฟรชทุก 30 นาที
+- `.env` — ค่าเชื่อมต่อ DB (ไม่ถูก commit). ดูตัวอย่างใน `.env.example`
+
+## รัน / ดูแล
+```bash
+cd office-server
+npm install
+npm start            # ทดสอบรันครั้งเดียว
+# โปรดักชันใช้ pm2:
+pm2 start server.js --name narai-usage-api
+pm2 save
+```
+- ดู log: `pm2 logs narai-usage-api`
+- รีสตาร์ท: `pm2 restart narai-usage-api`
+- หยุด: `pm2 stop narai-usage-api`
 
 ## ตั้งค่า Vercel
-- `USAGE_API_BASE` = `http://storenarai.dyndns.tv:14365/express`
-- `USAGE_API_TOKEN` = ลบทิ้งได้ (ไม่ใช้)
+- `USAGE_API_BASE` = `http://storenarai.dyndns.tv:8787`
 - Redeploy
 
 ## ข้อควรรู้
+- **เครื่องนี้ต้องเปิดตลอด** (และล็อกอิน Windows ค้างไว้ เพื่อให้ pm2 สตาร์ทเองหลังรีบูต)
+  ถ้าต้องการให้รันแม้ไม่ล็อกอิน ควรติดตั้ง pm2 เป็น Windows Service
+- ถ้า router ปิด UPnP: ต้อง forward พอร์ต 8787 → 192.168.2.143 เองที่ router
 - ข้อมูล `trn_usg` อาจช้ากว่าปัจจุบันไม่กี่วัน (ขึ้นกับรอบ sync ของ POS)
-- ถ้าอยากเปลี่ยน user MySQL ให้เป็นแบบอ่านอย่างเดียว แก้ค่าในส่วน `usagePool` ของ snippet
