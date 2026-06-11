@@ -3,8 +3,8 @@
 //   GET {USAGE_API_BASE}/usagebymenu?branch=<code>&start=<YYYY-MM-DD>&end=<YYYY-MM-DD>
 //   -> { status:'success', data:{ "<itemCode>":[{menu, qty}, ...], ... } }
 // ตั้งค่า env บน Vercel: USAGE_API_BASE (จำเป็น), USAGE_API_TOKEN (ถ้าตั้ง token ฝั่งออฟฟิศ)
-const USAGE_API_BASE = process.env.USAGE_API_BASE || '';
-const USAGE_API_TOKEN = process.env.USAGE_API_TOKEN || '';
+// URL ของ Narai Usage API ที่รันในออฟฟิศ (ไม่ใช่ข้อมูลลับ — เป็น dyndns สาธารณะ)
+const USAGE_API_BASE = 'http://storenarai.dyndns.tv:8787';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -24,14 +24,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ status: 'success', data: {} });
   }
 
-  if (!USAGE_API_BASE) {
-    // ยังไม่ได้ตั้งค่า API ในออฟฟิศ -> คืนว่าง (หน้าจอจะ fallback ไปแสดงตามสูตร)
-    return res.status(200).json({ status: 'success', data: {}, note: 'ยังไม่ได้ตั้งค่า USAGE_API_BASE' });
-  }
-
   try {
-    const url = `${USAGE_API_BASE.replace(/\/+$/, '')}/usagebymenu?branch=${encodeURIComponent(branchKey)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
-    const r = await fetch(url, USAGE_API_TOKEN ? { headers: { 'x-api-token': USAGE_API_TOKEN } } : undefined);
+    const url = `${USAGE_API_BASE}/usagebymenu?branch=${encodeURIComponent(branchKey)}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+    const r = await fetch(url);
     if (!r.ok) {
       return res.status(502).json({ status: 'error', message: `Office API Error: ${r.status}` });
     }
