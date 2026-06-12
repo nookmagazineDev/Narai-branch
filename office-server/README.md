@@ -14,15 +14,20 @@
 - รีเฟรชสูตรทุก 6 ชม.
 - เปิดพอร์ตออกเน็ตด้วย **UPnP อัตโนมัติ** (พอร์ต 8787)
 
-## รัน / ดูแล (ติดตั้งแล้วบนเครื่อง IT-Narai ผ่าน pm2)
-```bash
-cd office-server
-npm install
-pm2 start server.js --name narai-usage-api
-pm2 save
+## รัน / ดูแล (ติดตั้งแล้วบนเครื่อง IT-Narai เป็น **Windows Service**)
+รันเป็น Windows Service ชื่อ `NaraiUsageAPI` (ผ่าน NSSM ที่ `C:\tools\nssm.exe`)
+→ สตาร์ทเองเมื่อเปิดเครื่อง **แม้ไม่ล็อกอิน** + รีสตาร์ทเองถ้าแครช
+
+คำสั่งดูแล (PowerShell, ต้อง Run as Administrator):
+```powershell
+Get-Service NaraiUsageAPI            # ดูสถานะ
+Restart-Service NaraiUsageAPI        # รีสตาร์ท (หลังแก้โค้ด/แก้ .env)
+Stop-Service NaraiUsageAPI           # หยุด
 ```
-- ดู log: `pm2 logs narai-usage-api`
+- log: `office-server\logs\service-out.log` และ `service-err.log`
 - เช็คสถานะ/จำนวนวันที่ cache: เปิด `http://localhost:8787/health`
+
+> เดิมรันผ่าน pm2 (สตาร์ทเฉพาะตอนล็อกอิน) เปลี่ยนมาเป็น Windows Service แล้วเพื่อให้ทนรีบูตโดยไม่ต้องล็อกอิน
 
 ## ตั้งค่า (ไม่บังคับ) — ไฟล์ .env
 - `PORT` (ค่าเริ่มต้น 8787)
