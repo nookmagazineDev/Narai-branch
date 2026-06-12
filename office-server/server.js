@@ -124,12 +124,14 @@ async function computeUsageByMenu(outletNum, start, end) {
       // วัตถุดิบบางตัว: ไม่นับเมนูหน่วย (ที่) — นับเฉพาะ (กก) (กันนับซ้ำเนื้อตัวเดียวกัน)
       if (EXCLUDE_PLATE_MENU_INGREDIENTS.has(it.ing) && /\(\s*ที่\s*\)/.test(name)) continue;
       if (!result[it.ing]) result[it.ing] = {};
-      result[it.ing][name] = (result[it.ing][name] || 0) + used;
+      const e = result[it.ing][name] || (result[it.ing][name] = { qty: 0, sold: 0 });
+      e.qty += used;   // ปริมาณวัตถุดิบที่ใช้
+      e.sold += q;     // จำนวนเมนูที่ขายออกไป
     }
   }
   const data = {};
   for (const ing of Object.keys(result)) {
-    data[ing] = Object.entries(result[ing]).map(([menu, qty]) => ({ menu, qty: Number(qty.toFixed(2)) }))
+    data[ing] = Object.entries(result[ing]).map(([menu, v]) => ({ menu, qty: Number(v.qty.toFixed(2)), sold: Number(v.sold.toFixed(2)) }))
       .filter((x) => x.qty > 0).sort((a, b) => b.qty - a.qty);
   }
   return data;

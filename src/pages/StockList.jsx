@@ -753,6 +753,7 @@ export default function StockList() {
                       <thead className="bg-emerald-50 border-b">
                         <tr>
                           <th className="px-3 py-2 font-semibold text-emerald-800 rounded-tl-md">เมนู</th>
+                          <th className="px-3 py-2 font-semibold text-emerald-800 text-right">ขาย</th>
                           <th className="px-3 py-2 font-semibold text-emerald-800 text-right rounded-tr-md">ปริมาณใช้</th>
                         </tr>
                       </thead>
@@ -766,11 +767,12 @@ export default function StockList() {
                                 <td className="px-3 py-2 text-emerald-700">
                                   <span className="inline-block w-3 text-emerald-400">{isOpen ? '▾' : '▸'}</span> {row.menu}
                                 </td>
+                                <td className="px-3 py-2 text-right font-semibold text-emerald-700">{row.sold != null ? row.sold : '-'}</td>
                                 <td className="px-3 py-2 text-gray-900 text-right font-bold">{row.qty}</td>
                               </tr>
                               {isOpen && (
                                 <tr className="bg-gray-50/70">
-                                  <td colSpan="2" className="px-3 py-2">
+                                  <td colSpan="3" className="px-3 py-2">
                                     {tbl && tbl.loading && <div className="text-xs text-gray-400">กำลังโหลดโต๊ะ...</div>}
                                     {tbl && !tbl.loading && tbl.rows.length > 0 && (() => {
                                       const sumQty = tbl.rows.reduce((s, t) => s + (Number(t.qty) || 0), 0);
@@ -801,6 +803,9 @@ export default function StockList() {
                         <tr className="border-t-2 border-emerald-200 bg-emerald-50/60">
                           <td className="px-3 py-2 font-bold text-emerald-800">ยอดรวม</td>
                           <td className="px-3 py-2 text-right font-bold text-emerald-800">
+                            {selectedUsageDetails.byMenu.reduce((s, r) => s + (Number(r.sold) || 0), 0).toFixed(2)}
+                          </td>
+                          <td className="px-3 py-2 text-right font-bold text-emerald-800">
                             {(selectedUsageDetails.posTotal != null
                               ? Number(selectedUsageDetails.posTotal)
                               : selectedUsageDetails.byMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0)
@@ -812,25 +817,8 @@ export default function StockList() {
                   </>
                 ) : (
                   <>
-                    {/* Fallback: เมนูที่มีวัตถุดิบนี้ตามสูตร (ยังไม่มีข้อมูลยอดขายรายเมนู) */}
-                    <p className="text-sm font-semibold text-emerald-800 mb-2">
-                      เมนูที่ใช้วัตถุดิบนี้ <span className="text-gray-400 font-normal">(ตามสูตร)</span>
-                      {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 && (
-                        <span className="ml-1 text-emerald-500 font-normal">({selectedUsageDetails.menus.length} เมนู)</span>
-                      )}
-                    </p>
-                    {selectedUsageDetails.menus && selectedUsageDetails.menus.length > 0 ? (
-                      <ul className="space-y-1 max-h-48 overflow-y-auto">
-                        {selectedUsageDetails.menus.map((menu, idx) => (
-                          <li key={idx} className="flex items-start gap-2 text-sm text-gray-700 bg-emerald-50/40 rounded px-3 py-1.5">
-                            <span className="text-emerald-400 mt-0.5">•</span>
-                            <span>{menu}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-gray-400 py-2">ไม่พบเมนูที่ใช้วัตถุดิบนี้ในสูตร</p>
-                    )}
+                    <p className="text-sm font-semibold text-emerald-800 mb-2">ใช้จากเมนู (ตามยอดขายจริง)</p>
+                    <p className="text-sm text-gray-400 py-2">ไม่มีเมนูที่ตัดวัตถุดิบนี้ในช่วงวันที่ที่เลือก</p>
                   </>
                 )}
               </div>
