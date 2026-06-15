@@ -13,6 +13,29 @@ export default function EmployeeList() {
   const [typeFilter, setTypeFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [uploadingHr, setUploadingHr] = useState(null);
+  const [logaEdits, setLogaEdits] = useState({});   // hrCode -> ค่าที่กำลังแก้
+  const [savingLoga, setSavingLoga] = useState(null);
+
+  const handleSaveLoga = async (emp) => {
+    if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
+    const value = logaEdits[emp.hrCode] !== undefined ? logaEdits[emp.hrCode] : (emp.loga || '');
+    setSavingLoga(emp.hrCode);
+    const toastId = toast.loading('กำลังบันทึกเลขที่ LOGA...');
+    try {
+      const res = await apiCall('updateEmployeeLoga', { hrCode: emp.hrCode, loga: value });
+      if (res.status === 'success') {
+        toast.success('บันทึกเลขที่ LOGA สำเร็จ', { id: toastId });
+        setEmployees(prev => prev.map(e => e.hrCode === emp.hrCode ? { ...e, loga: value, photoUrl: value } : e));
+        setLogaEdits(prev => { const n = { ...prev }; delete n[emp.hrCode]; return n; });
+      } else {
+        toast.error(res.message || 'บันทึกไม่สำเร็จ', { id: toastId });
+      }
+    } catch (err) {
+      toast.error(err.message || 'การเชื่อมต่อขัดข้อง', { id: toastId });
+    } finally {
+      setSavingLoga(null);
+    }
+  };
 
   const handlePhotoUpload = async (emp, file) => {
     if (!file) return;
@@ -306,6 +329,9 @@ export default function EmployeeList() {
                 <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="flex flex-col gap-1"><span>ระยะเวลาทำงาน</span></div>
                 </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <div className="flex flex-col gap-1"><span>เลขที่ LOGA</span></div>
+                </th>
                 <th scope="col" className="px-2 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="flex flex-col gap-1"><span>จัดการ</span></div>
                 </th>
@@ -314,7 +340,7 @@ export default function EmployeeList() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 10 : 9} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 11 : 10} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Loader2 className="w-8 h-8 animate-spin text-purple-500 mb-2" />
                       <p>กำลังโหลดข้อมูล...</p>
@@ -323,7 +349,7 @@ export default function EmployeeList() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 10 : 9} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 11 : 10} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Users className="w-12 h-12 text-gray-300 mb-3" />
                       <p className="text-lg font-medium text-gray-900">ไม่พบข้อมูลพนักงาน</p>
@@ -359,6 +385,31 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{emp.position || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{formatDate(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{calculateDuration(emp.startDate)}</td>
+                    {/* เลขที่ LOGA (คอลัมน์ BR) — แก้ไข/กรอกได้เฉพาะพนักงานที่ยังทำงาน */}
+                    <td className="px-2 py-2 whitespace-nowrap text-sm">
+                      {emp.status === 'ลาออก' ? (
+                        <span className="text-gray-500 font-mono">{(emp.loga ?? emp.photoUrl) || '-'}</span>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={logaEdits[emp.hrCode] !== undefined ? logaEdits[emp.hrCode] : ((emp.loga ?? emp.photoUrl) || '')}
+                            onChange={(e) => setLogaEdits(prev => ({ ...prev, [emp.hrCode]: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveLoga(emp); }}
+                            placeholder="กรอกเลข LOGA"
+                            className="w-28 px-2 py-1 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 focus:ring-purple-500"
+                          />
+                          <button
+                            onClick={() => handleSaveLoga(emp)}
+                            disabled={savingLoga === emp.hrCode}
+                            className="px-2 py-1 bg-purple-50 text-purple-600 border border-purple-200 rounded-lg text-xs font-medium hover:bg-purple-100 disabled:opacity-50"
+                            title="บันทึกกลับไปที่ชีท (คอลัมน์ BR)"
+                          >
+                            {savingLoga === emp.hrCode ? <Loader2 className="w-3 h-3 animate-spin" /> : 'บันทึก'}
+                          </button>
+                        </div>
+                      )}
+                    </td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
                       <div className="flex items-center justify-center gap-2">
                         <label className={`cursor-pointer inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>

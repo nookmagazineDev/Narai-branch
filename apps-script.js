@@ -242,7 +242,8 @@ function doPost(e) {
             status: row[6] || '',       // คอลัมน์ G (การทำงาน)
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
             position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
-            photoUrl: row[69] || ''     // คอลัมน์ BR (ลิงก์รูปพนักงาน)
+            loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
+            photoUrl: row[69] || ''     // (ฟิลด์เดิม ชี้ BR เดียวกัน)
           });
         }
       }
@@ -304,6 +305,28 @@ function doPost(e) {
       if (found) {
         response.status = 'success';
         response.message = 'แจ้งลาออกสำเร็จ';
+      } else {
+        response.status = 'error';
+        response.message = 'ไม่พบรหัสพนักงานนี้';
+      }
+
+    } else if (action === 'updateEmployeeLoga') {
+      // บันทึกเลขที่ LOGA กลับไปที่คอลัมน์ BR (column 70) ของแถวพนักงานนั้น
+      var sheet = ss.getSheetByName('DATA');
+      if (!sheet) throw new Error('Sheet DATA not found');
+      var hrCode = data.hrCode;
+      var values = sheet.getDataRange().getValues();
+      var found = false;
+      for (var i = 1; i < values.length; i++) {
+        if (values[i][2] == hrCode) {
+          sheet.getRange(i + 1, 70).setValue(data.loga || ''); // column 70 = BR = LOGA
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        response.status = 'success';
+        response.message = 'บันทึกเลขที่ LOGA เรียบร้อย';
       } else {
         response.status = 'error';
         response.message = 'ไม่พบรหัสพนักงานนี้';
