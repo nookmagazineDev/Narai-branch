@@ -1,3 +1,26 @@
+import mysql from 'mysql2/promise';
+
+// ใบรับ (ยอดรับเข้าสาขา) — ดึงตรงจาก MySQL: inventory.dyndns.tv / myfbdata.trans
+// ของที่รับเข้าสาขาถูกบันทึกเป็น Trn_Type IN ('TRF','RCV') โดยปลายทาง Trn_To = เลขสาขา
+// (ต้องกรอง type เพราะ SLS = การขาย ก็มี Trn_To = สาขาเช่นกัน)
+
+let pool;
+function getPool() {
+  if (!pool) {
+    pool = mysql.createPool({
+      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
+      port: Number(process.env.MYSQL_PORT) || 3306,
+      user: process.env.MYSQL_USER || 'root',
+      password: process.env.MYSQL_PASSWORD || '',
+      database: process.env.MYSQL_DATABASE || 'myfbdata',
+      waitForConnections: true,
+      connectionLimit: 5,
+      connectTimeout: 15000,
+    });
+  }
+  return pool;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -26,65 +49,43 @@ export default async function handler(req, res) {
   const branchKey = String(branch).toLowerCase().trim();
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
-  const url = `http://183.89.248.221:14369/api/orderd?outletid=${encodeURIComponent(outletId)}`;
-
   try {
-    const fetchRes = await fetch(url);
+    const [rows] = await getPool().query(
+      `SELECT Trn_itemCode AS itemCode, Trn_Unit AS unit,
+              DATE_FORMAT(Trn_DocDate, '%Y-%m-%d') AS d,
+              SUM(Trn_InvQty) AS qty
+         FROM trans
+        WHERE Trn_Type IN ('TRF','RCV')
+          AND Trn_To = ?
+          AND Trn_DocDate BETWEEN ? AND ?
+        GROUP BY Trn_itemCode, Trn_Unit, d`,
+      [outletId, startDate, endDate]
+    );
 
-    if (!fetchRes.ok) {
-      return res.status(fetchRes.status).json({ status: 'error', message: `API Error: ${fetchRes.status}` });
+    const receivedMap = {};
+    for (const r of rows) {
+      if (!r.itemCode) continue;
+      const normId = String(r.itemCode).replace(/^0+/, '').toLowerCase();
+      const qty = Number(r.qty) || 0;
+      if (!receivedMap[normId]) {
+        receivedMap[normId] = { total: 0, details: {}, unit: r.unit || '' };
+      }
+      receivedMap[normId].total += qty;
+      receivedMap[normId].details[r.d] = (receivedMap[normId].details[r.d] || 0) + qty;
+      if (!receivedMap[normId].unit && r.unit) receivedMap[normId].unit = r.unit;
     }
 
-    const apiData = await fetchRes.json();
-
-    if (Array.isArray(apiData)) {
-      const receivedMap = {};
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-
-      apiData.forEach(item => {
-        if (item.Ord_DelDate) {
-          const d = new Date(item.Ord_DelDate);
-          if (d >= start && d <= end) {
-            const itmCode = item.Ord_itemCode;
-            if (itmCode) {
-              const normId = String(itmCode).replace(/^0+/, '').toLowerCase();
-              const qty = parseFloat(item.Ord_Qty) || 0;
-              if (!receivedMap[normId]) {
-                receivedMap[normId] = { total: 0, details: {}, unit: item.Ord_Unit || '' };
-              }
-              receivedMap[normId].total += qty;
-
-              const dateKey = item.Ord_DelDate.split('T')[0];
-              if (!receivedMap[normId].details[dateKey]) {
-                receivedMap[normId].details[dateKey] = 0;
-              }
-              receivedMap[normId].details[dateKey] += qty;
-            }
-          }
-        }
+    // Fix floating point precision
+    Object.keys(receivedMap).forEach(key => {
+      receivedMap[key].total = Number(receivedMap[key].total.toFixed(2));
+      Object.keys(receivedMap[key].details).forEach(dateKey => {
+        receivedMap[key].details[dateKey] = Number(receivedMap[key].details[dateKey].toFixed(2));
       });
+    });
 
-      // Fix floating point precision
-      Object.keys(receivedMap).forEach(key => {
-        receivedMap[key].total = Number(receivedMap[key].total.toFixed(2));
-        Object.keys(receivedMap[key].details).forEach(dateKey => {
-          receivedMap[key].details[dateKey] = Number(receivedMap[key].details[dateKey].toFixed(2));
-        });
-      });
-
-      return res.status(200).json({ status: 'success', data: receivedMap });
-    } else {
-      return res.status(200).json({
-        status: 'error',
-        message: `${apiData.message} (รหัส: ${outletId} / สาขา: ${branchKey})` || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง'
-      });
-    }
-
+    return res.status(200).json({ status: 'success', data: receivedMap });
   } catch (error) {
-    console.error('Fetch error:', error);
+    console.error('MySQL orderd error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
   }
 }
