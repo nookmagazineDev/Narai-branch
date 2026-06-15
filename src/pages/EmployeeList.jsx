@@ -25,7 +25,7 @@ export default function EmployeeList() {
       const res = await apiCall('updateEmployeeLoga', { hrCode: emp.hrCode, loga: value });
       if (res.status === 'success') {
         toast.success('บันทึกเลขที่ LOGA สำเร็จ', { id: toastId });
-        setEmployees(prev => prev.map(e => e.hrCode === emp.hrCode ? { ...e, loga: value, photoUrl: value } : e));
+        setEmployees(prev => prev.map(e => e.hrCode === emp.hrCode ? { ...e, loga: value } : e));
         setLogaEdits(prev => { const n = { ...prev }; delete n[emp.hrCode]; return n; });
       } else {
         toast.error(res.message || 'บันทึกไม่สำเร็จ', { id: toastId });
@@ -388,12 +388,12 @@ export default function EmployeeList() {
                     {/* เลขที่ LOGA (คอลัมน์ BR) — แก้ไข/กรอกได้เฉพาะพนักงานที่ยังทำงาน */}
                     <td className="px-2 py-2 whitespace-nowrap text-sm">
                       {emp.status === 'ลาออก' ? (
-                        <span className="text-gray-500 font-mono">{(emp.loga ?? emp.photoUrl) || '-'}</span>
+                        <span className="text-gray-500 font-mono">{emp.loga || '-'}</span>
                       ) : (
                         <div className="flex items-center gap-1">
                           <input
                             type="text"
-                            value={logaEdits[emp.hrCode] !== undefined ? logaEdits[emp.hrCode] : ((emp.loga ?? emp.photoUrl) || '')}
+                            value={logaEdits[emp.hrCode] !== undefined ? logaEdits[emp.hrCode] : (emp.loga || '')}
                             onChange={(e) => setLogaEdits(prev => ({ ...prev, [emp.hrCode]: e.target.value }))}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleSaveLoga(emp); }}
                             placeholder="กรอกเลข LOGA"

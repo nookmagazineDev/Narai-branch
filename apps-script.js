@@ -243,7 +243,8 @@ function doPost(e) {
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
             position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
             loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
-            photoUrl: row[69] || ''     // (ฟิลด์เดิม ชี้ BR เดียวกัน)
+            photoFile: row[71] || '',   // คอลัมน์ BT (ชื่อไฟล์รูป)
+            photoUrl: row[72] || ''     // คอลัมน์ BU (ลิงก์รูป)
           });
         }
       }
@@ -282,8 +283,10 @@ function doPost(e) {
       driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       var url = driveFile.getUrl();
 
-      // เขียนลิงก์ลงคอลัมน์ BR (คอลัมน์ที่ 70)
-      sheet.getRange(rowIndex, 70).setValue(url);
+      // เขียนลิงก์รูปลงคอลัมน์ BU (คอลัมน์ที่ 73) และชื่อไฟล์รูปลงคอลัมน์ BT (คอลัมน์ที่ 72)
+      // หมายเหตุ: ไม่เขียนทับคอลัมน์ BR (70) ที่เป็นเลขที่ LOGA แล้ว
+      sheet.getRange(rowIndex, 73).setValue(url);
+      sheet.getRange(rowIndex, 72).setValue(data.fileName || (String(hrCode) + '.jpg'));
 
       response.status = 'success';
       response.message = 'อัปโหลดรูปสำเร็จ';
