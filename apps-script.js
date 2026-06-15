@@ -128,6 +128,7 @@ function doPost(e) {
       row[3] = data.fullName || "";
       row[4] = data.department || "";
       row[5] = data.type || "";
+      row[6] = "ทำงาน";            // คอลัมน์ G (สถานะ) — พนักงานใหม่ตั้งเป็น "ทำงาน"
       row[8] = data.position || "";
       row[12] = data.idCard || "";
       row[16] = data.address || "";
