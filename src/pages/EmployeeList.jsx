@@ -37,7 +37,7 @@ export default function EmployeeList() {
           toast.error(res.message || 'อัปโหลดไม่สำเร็จ', { id: toastId });
         }
       } catch (err) {
-        toast.error('การเชื่อมต่อขัดข้อง', { id: toastId });
+        toast.error(err.message || 'การเชื่อมต่อขัดข้อง', { id: toastId });
       } finally {
         setUploadingHr(null);
       }
