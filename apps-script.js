@@ -240,13 +240,52 @@ function doPost(e) {
             type: row[5] || '',         // คอลัมน์ F (ประเภท)
             status: row[6] || '',       // คอลัมน์ G (การทำงาน)
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
-            position: row[8] || ''      // คอลัมน์ I (ตำแหน่ง)
+            position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
+            photoUrl: row[69] || ''     // คอลัมน์ BR (ลิงก์รูปพนักงาน)
           });
         }
       }
 
       response.status = 'success';
       response.data = employees;
+
+    } else if (action === 'uploadEmployeePhoto') {
+      var sheet = ss.getSheetByName('DATA');
+      if (!sheet) throw new Error('Sheet DATA not found');
+      var hrCode = data.hrCode;
+      if (!hrCode) throw new Error('ไม่มีรหัสพนักงาน');
+      if (!data.base64) throw new Error('ไม่มีไฟล์รูป');
+
+      // หาแถวของพนักงานจากรหัส HR (คอลัมน์ C = index 2)
+      var values = sheet.getDataRange().getValues();
+      var rowIndex = -1;
+      for (var i = 1; i < values.length; i++) {
+        if (String(values[i][2]).trim() == String(hrCode).trim()) { rowIndex = i + 1; break; }
+      }
+      if (rowIndex === -1) throw new Error('ไม่พบรหัสพนักงานนี้ในระบบ');
+
+      var folder = DriveApp.getFolderById("1i-8K4E97vwcghQyT1yJ_TpFTt0irbZtR");
+      // ลบไฟล์เก่าที่ชื่อขึ้นต้นด้วยรหัสพนักงาน (กันไฟล์ซ้ำ)
+      var existing = folder.getFiles();
+      while (existing.hasNext()) {
+        var ef = existing.next();
+        var en = ef.getName();
+        if (en === data.fileName || en.indexOf(String(hrCode) + '.') === 0) ef.setTrashed(true);
+      }
+
+      var base64Data = data.base64.split(',')[1] || data.base64;
+      var decoded = Utilities.base64Decode(base64Data);
+      var blob = Utilities.newBlob(decoded, data.mimeType || 'image/jpeg', data.fileName || (String(hrCode) + '.jpg'));
+      var driveFile = folder.createFile(blob);
+      driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      var url = driveFile.getUrl();
+
+      // เขียนลิงก์ลงคอลัมน์ BR (คอลัมน์ที่ 70)
+      sheet.getRange(rowIndex, 70).setValue(url);
+
+      response.status = 'success';
+      response.message = 'อัปโหลดรูปสำเร็จ';
+      response.data = { url: url };
 
     } else if (action === 'resignEmployee') {
       var sheet = ss.getSheetByName('DATA');

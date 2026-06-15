@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiCall } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function EmployeeList() {
@@ -12,6 +12,38 @@ export default function EmployeeList() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [uploadingHr, setUploadingHr] = useState(null);
+
+  const handlePhotoUpload = async (emp, file) => {
+    if (!file) return;
+    if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
+    if (!file.type.startsWith('image/')) { toast.error('กรุณาเลือกไฟล์รูปภาพ'); return; }
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const reader = new FileReader();
+    reader.onload = async () => {
+      setUploadingHr(emp.hrCode);
+      const toastId = toast.loading('กำลังอัปโหลดรูป...');
+      try {
+        const res = await apiCall('uploadEmployeePhoto', {
+          hrCode: emp.hrCode,
+          fileName: `${emp.hrCode}.${ext}`,
+          mimeType: file.type,
+          base64: reader.result,
+        });
+        if (res.status === 'success') {
+          toast.success('อัปโหลดรูปสำเร็จ', { id: toastId });
+          fetchEmployees();
+        } else {
+          toast.error(res.message || 'อัปโหลดไม่สำเร็จ', { id: toastId });
+        }
+      } catch (err) {
+        toast.error('การเชื่อมต่อขัดข้อง', { id: toastId });
+      } finally {
+        setUploadingHr(null);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     fetchEmployees();
@@ -328,14 +360,36 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{formatDate(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{calculateDuration(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
-                      {emp.status !== 'ลาออก' && (
-                        <button
-                          onClick={() => handleResign(emp.hrCode, emp.fullName)}
-                          className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
-                        >
-                          แจ้งลาออก
-                        </button>
-                      )}
+                      <div className="flex items-center justify-center gap-2">
+                        <label className={`cursor-pointer inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>
+                          {uploadingHr === emp.hrCode ? (
+                            <><Loader2 className="w-3 h-3 animate-spin" /> กำลังอัป...</>
+                          ) : (
+                            <><Camera className="w-3 h-3" /> {emp.photoUrl ? 'เปลี่ยนรูป' : 'เพิ่มรูป'}</>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={uploadingHr === emp.hrCode}
+                            onChange={(e) => { handlePhotoUpload(emp, e.target.files[0]); e.target.value = ''; }}
+                          />
+                        </label>
+                        {emp.photoUrl && (
+                          <a href={emp.photoUrl} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-600 hover:text-emerald-800" title="ดูรูป">
+                            <ImageIcon className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {emp.status !== 'ลาออก' && (
+                          <button
+                            onClick={() => handleResign(emp.hrCode, emp.fullName)}
+                            className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
+                          >
+                            แจ้งลาออก
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
