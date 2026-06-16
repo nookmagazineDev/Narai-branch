@@ -45,6 +45,10 @@ export default function StockList() {
     }
   };
   const [selectedReceivedDetails, setSelectedReceivedDetails] = useState(null);
+  const [withdrawalDocs, setWithdrawalDocs] = useState([]);
+  const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
+  const [isLoadingWithdrawals, setIsLoadingWithdrawals] = useState(false);
+  const [expandedDoc, setExpandedDoc] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
   const [showPendingModal, setShowPendingModal] = useState(false);
@@ -137,6 +141,37 @@ export default function StockList() {
       toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ API');
     } finally {
       setIsFetchingApi(false);
+    }
+  };
+
+  const fetchWithdrawals = async () => {
+    if (!effectiveBranch || !apiStartDate || !apiEndDate) {
+      toast.error('กรุณาเลือกสาขา และระบุช่วงวันที่ให้ครบถ้วน');
+      return;
+    }
+    let currentOutletId = '';
+    if (isAll) {
+      const foundBranch = branches.find(b => b.name === effectiveBranch);
+      if (foundBranch) currentOutletId = foundBranch.outletId;
+    } else {
+      currentOutletId = user?.outletId || '';
+    }
+    setIsLoadingWithdrawals(true);
+    try {
+      const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
+      const res = await fetch(`/api/withdrawals?${qs}`).then(r => r.json());
+      if (res.status === 'success') {
+        setWithdrawalDocs(res.data || []);
+        setExpandedDoc(null);
+        setShowWithdrawalModal(true);
+        if ((res.data || []).length === 0) toast('ไม่พบใบเบิกในช่วงวันที่ที่เลือก', { icon: 'ℹ️' });
+      } else {
+        toast.error('ใบเบิก: ' + (res.message || 'เกิดข้อผิดพลาด'));
+      }
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    } finally {
+      setIsLoadingWithdrawals(false);
     }
   };
 
@@ -480,6 +515,12 @@ export default function StockList() {
                 disabled={isFetchingApi || !effectiveBranch || !apiStartDate || !apiEndDate}
                 className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
                 {isFetchingApi ? <Loader2 className="w-4 h-4 animate-spin" /> : 'ดึงข้อมูลยอดใช้,ยอดรับเข้า'}
+              </button>
+              <button
+                onClick={fetchWithdrawals}
+                disabled={isLoadingWithdrawals || !effectiveBranch || !apiStartDate || !apiEndDate}
+                className="px-4 py-1.5 bg-sky-600 text-white text-sm rounded-lg hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+                {isLoadingWithdrawals ? <Loader2 className="w-4 h-4 animate-spin" /> : <><FileText className="w-4 h-4" /> ใบเบิก</>}
               </button>
             </div>
           </div>
@@ -990,6 +1031,94 @@ export default function StockList() {
               >
                 ปิด
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Withdrawal (ใบเบิก) Modal */}
+      {showWithdrawalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowWithdrawalModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b bg-sky-50 flex justify-between items-center">
+              <h3 className="font-bold text-sky-800 flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                ใบเบิก · {branchLabel}
+                <span className="text-sky-500 font-normal text-sm">({withdrawalDocs.length} ใบ · {apiStartDate} ถึง {apiEndDate})</span>
+              </h3>
+              <button onClick={() => setShowWithdrawalModal(false)} className="text-sky-400 hover:text-sky-700 font-bold text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 max-h-[65vh] overflow-y-auto">
+              {withdrawalDocs.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <FileText className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                  <p>ไม่พบใบเบิกในช่วงวันที่ที่เลือก</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm border-collapse">
+                  <thead className="bg-sky-50 border-b">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-sky-800 font-semibold">เลขที่ใบเบิก</th>
+                      <th className="px-4 py-2 text-left text-sky-800 font-semibold">วันที่</th>
+                      <th className="px-4 py-2 text-right text-sky-800 font-semibold">จำนวนรายการ</th>
+                      <th className="px-4 py-2 text-right text-sky-800 font-semibold">ยอดรวม (จำนวน)</th>
+                      <th className="px-4 py-2 text-right text-sky-800 font-semibold">มูลค่า (บาท)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {withdrawalDocs.map((doc) => {
+                      const key = doc.invNo || `DOC-${doc.docNo}`;
+                      const isOpen = expandedDoc === key;
+                      return (
+                        <React.Fragment key={key}>
+                          <tr className="hover:bg-sky-50/50 cursor-pointer transition-colors" onClick={() => setExpandedDoc(isOpen ? null : key)}>
+                            <td className="px-4 py-3 font-mono font-semibold text-sky-700">
+                              <span className="inline-block w-3 text-sky-400">{isOpen ? '▾' : '▸'}</span> {doc.invNo || `(${doc.docNo})`}
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{doc.docDate}</td>
+                            <td className="px-4 py-3 text-right text-gray-700">{doc.itemCount}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-gray-800">{doc.totalQty}</td>
+                            <td className="px-4 py-3 text-right font-semibold text-gray-800">{doc.totalAmt.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-gray-50/70">
+                              <td colSpan="5" className="px-4 py-3">
+                                <table className="w-full text-xs border-collapse">
+                                  <thead className="bg-white border-b">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left text-gray-500 font-semibold">รหัส</th>
+                                      <th className="px-3 py-2 text-left text-gray-500 font-semibold">ชื่อสินค้า</th>
+                                      <th className="px-3 py-2 text-right text-gray-500 font-semibold">จำนวน</th>
+                                      <th className="px-3 py-2 text-left text-gray-500 font-semibold">หน่วย</th>
+                                      <th className="px-3 py-2 text-right text-gray-500 font-semibold">ราคา/หน่วย</th>
+                                      <th className="px-3 py-2 text-right text-gray-500 font-semibold">มูลค่า</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y">
+                                    {doc.items.map((it, i) => (
+                                      <tr key={i} className="hover:bg-sky-50/40">
+                                        <td className="px-3 py-2 font-mono text-gray-500">{it.itemCode}</td>
+                                        <td className="px-3 py-2 text-gray-800">{it.itemName}</td>
+                                        <td className="px-3 py-2 text-right font-semibold text-sky-700">{it.qty}</td>
+                                        <td className="px-3 py-2 text-gray-500">{it.unit}</td>
+                                        <td className="px-3 py-2 text-right text-gray-600">{it.unitPrice}</td>
+                                        <td className="px-3 py-2 text-right text-gray-700">{it.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
+              <button onClick={() => setShowWithdrawalModal(false)} className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium">ปิด</button>
             </div>
           </div>
         </div>
