@@ -51,7 +51,7 @@ export default function EmployeeList() {
       try {
         const res = await apiCall('uploadEmployeePhoto', {
           hrCode: emp.hrCode,
-          fileName: `${emp.hrCode}.${ext}`,
+          ext,
           mimeType: file.type,
           base64: reader.result,
         });

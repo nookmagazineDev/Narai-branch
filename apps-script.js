@@ -243,7 +243,7 @@ function doPost(e) {
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
             position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
             loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
-            photoFile: row[71] || '',   // คอลัมน์ BT (ชื่อไฟล์รูป)
+            photoFile: row[71] || '',   // คอลัมน์ BT (รหัสใหม่ / ใช้ตั้งชื่อไฟล์รูป)
             photoUrl: row[72] || ''     // คอลัมน์ BU (ลิงก์รูป)
           });
         }
@@ -267,30 +267,35 @@ function doPost(e) {
       }
       if (rowIndex === -1) throw new Error('ไม่พบรหัสพนักงานนี้ในระบบ');
 
+      // รหัสใหม่สำหรับตั้งชื่อไฟล์ = คอลัมน์ BT (index 71); ตัดนามสกุลไฟล์ที่อาจติดมาออก, ถ้าว่างใช้รหัส HR แทน
+      var btVal = String(values[rowIndex - 1][71] || '').trim();
+      var newCode = btVal.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '').trim() || String(hrCode).trim();
+      var ext = String(data.ext || (data.fileName ? data.fileName.split('.').pop() : '') || 'jpg').toLowerCase();
+      var fileName = newCode + '.' + ext;
+
       var folder = DriveApp.getFolderById("1i-8K4E97vwcghQyT1yJ_TpFTt0irbZtR");
-      // ลบไฟล์เก่าที่ชื่อขึ้นต้นด้วยรหัสพนักงาน (กันไฟล์ซ้ำ)
+      // ลบไฟล์เก่าที่ชื่อขึ้นต้นด้วยรหัสใหม่ หรือรหัส HR เดิม (กันไฟล์ซ้ำ)
       var existing = folder.getFiles();
       while (existing.hasNext()) {
         var ef = existing.next();
         var en = ef.getName();
-        if (en === data.fileName || en.indexOf(String(hrCode) + '.') === 0) ef.setTrashed(true);
+        if (en === fileName || en.indexOf(newCode + '.') === 0 || en.indexOf(String(hrCode) + '.') === 0) ef.setTrashed(true);
       }
 
       var base64Data = data.base64.split(',')[1] || data.base64;
       var decoded = Utilities.base64Decode(base64Data);
-      var blob = Utilities.newBlob(decoded, data.mimeType || 'image/jpeg', data.fileName || (String(hrCode) + '.jpg'));
+      var blob = Utilities.newBlob(decoded, data.mimeType || 'image/jpeg', fileName);
       var driveFile = folder.createFile(blob);
       driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       var url = driveFile.getUrl();
 
-      // เขียนลิงก์รูปลงคอลัมน์ BU (คอลัมน์ที่ 73) และชื่อไฟล์รูปลงคอลัมน์ BT (คอลัมน์ที่ 72)
-      // หมายเหตุ: ไม่เขียนทับคอลัมน์ BR (70) ที่เป็นเลขที่ LOGA แล้ว
+      // เก็บลิงก์รูปไว้ที่คอลัมน์ BU (คอลัมน์ที่ 73) สำหรับแสดงรูปบนหน้าจอ
+      // ไม่เขียนทับคอลัมน์ BT (72) อีกต่อไป เพราะ BT = รหัสใหม่ที่ใช้ตั้งชื่อไฟล์
       sheet.getRange(rowIndex, 73).setValue(url);
-      sheet.getRange(rowIndex, 72).setValue(data.fileName || (String(hrCode) + '.jpg'));
 
       response.status = 'success';
       response.message = 'อัปโหลดรูปสำเร็จ';
-      response.data = { url: url };
+      response.data = { url: url, fileName: fileName };
 
     } else if (action === 'resignEmployee') {
       var sheet = ss.getSheetByName('DATA');
