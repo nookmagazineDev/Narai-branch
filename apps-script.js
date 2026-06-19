@@ -243,7 +243,8 @@ function doPost(e) {
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
             position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
             loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
-            photoFile: row[71] || '',   // คอลัมน์ BT (รหัสใหม่ / ใช้ตั้งชื่อไฟล์รูป)
+            newCode: row[70] || '',     // คอลัมน์ BS (รหัสใหม่ / ใช้ตั้งชื่อไฟล์รูป)
+            photoFile: row[71] || '',   // คอลัมน์ BT (ชื่อไฟล์รูปเดิม)
             photoUrl: row[72] || ''     // คอลัมน์ BU (ลิงก์รูป)
           });
         }
@@ -267,9 +268,9 @@ function doPost(e) {
       }
       if (rowIndex === -1) throw new Error('ไม่พบรหัสพนักงานนี้ในระบบ');
 
-      // รหัสใหม่สำหรับตั้งชื่อไฟล์ = คอลัมน์ BT (index 71); ตัดนามสกุลไฟล์ที่อาจติดมาออก, ถ้าว่างใช้รหัส HR แทน
-      var btVal = String(values[rowIndex - 1][71] || '').trim();
-      var newCode = btVal.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '').trim() || String(hrCode).trim();
+      // รหัสใหม่สำหรับตั้งชื่อไฟล์ = คอลัมน์ BS (index 70); ตัดนามสกุลไฟล์ที่อาจติดมาออก, ถ้าว่างใช้รหัส HR แทน
+      var bsVal = String(values[rowIndex - 1][70] || '').trim();
+      var newCode = bsVal.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '').trim() || String(hrCode).trim();
       var ext = String(data.ext || (data.fileName ? data.fileName.split('.').pop() : '') || 'jpg').toLowerCase();
       var fileName = newCode + '.' + ext;
 
