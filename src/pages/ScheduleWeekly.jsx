@@ -22,6 +22,10 @@ function formatDateLocal(date) {
 
 export default function ScheduleWeekly() {
   const { user } = useAuth();
+  const isAll = user?.branch?.toLowerCase() === 'all';
+  const [branches, setBranches] = useState([]);
+  const [selectedBranch, setSelectedBranch] = useState('');
+  const effectiveBranch = isAll ? selectedBranch : user?.branch;
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState([]);
   const [weeklyTarget, setWeeklyTarget] = useState(0);
@@ -107,7 +111,7 @@ export default function ScheduleWeekly() {
 
 
   const exportScheduleToImage = async () => {
-    const b = user?.branch;
+    const b = effectiveBranch;
     if (!b || employees.length === 0) {
       toast.error('กรุณาเลือกสาขาและรอระบบโหลดข้อมูลให้เสร็จก่อน');
       return;
@@ -181,13 +185,22 @@ export default function ScheduleWeekly() {
     };
   });
 
+  // โหลดรายชื่อสาขาสำหรับ user สิทธิ์ all (ใช้ในฟิลเตอร์เลือกสาขา)
+  useEffect(() => {
+    if (isAll && branches.length === 0) {
+      apiCall('getBranches', {})
+        .then(res => { if (res.status === 'success') setBranches(res.data || []); })
+        .catch(() => {});
+    }
+  }, [isAll]);
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        
+
         // Fetch Branch Stats
-        const statsRes = await apiCall('getBranchStats', { branch: user?.branch || '' });
+        const statsRes = await apiCall('getBranchStats', { branch: effectiveBranch || '' });
         if (statsRes.status === 'success') {
           const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
           const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
@@ -196,7 +209,7 @@ export default function ScheduleWeekly() {
         }
 
         // Fetch employees
-        const empRes = await apiCall('getScheduleEmployees', { branch: user?.branch || '' });
+        const empRes = await apiCall('getScheduleEmployees', { branch: effectiveBranch || '' });
         if (empRes.status === 'success') {
           setEmployees(empRes.data);
         } else {
@@ -208,8 +221,8 @@ export default function ScheduleWeekly() {
         const end = new Date(weekStartDate);
         end.setDate(end.getDate() + 6);
         
-        const schedRes = await apiCall('getHistoryData', { 
-          branch: user?.branch || '',
+        const schedRes = await apiCall('getHistoryData', {
+          branch: effectiveBranch || '',
           startDate: formatDateLocal(start),
           endDate: formatDateLocal(end)
         });
@@ -259,10 +272,15 @@ export default function ScheduleWeekly() {
         setLoading(false);
       }
     };
-    if (user?.branch) {
+    if (effectiveBranch) {
       fetchData();
+    } else {
+      // user สิทธิ์ all ที่ยังไม่ได้เลือกสาขา — เคลียร์ข้อมูล รอเลือกสาขาก่อน
+      setEmployees([]);
+      setScheduleData({});
+      setLoading(false);
     }
-  }, [user, weekStartDate]);
+  }, [effectiveBranch, weekStartDate]);
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;
@@ -484,10 +502,22 @@ export default function ScheduleWeekly() {
               <Clock className="w-6 h-6 text-purple-600" />
               ลงตารางรายสัปดาห์
             </h1>
-            <p className="text-sm text-gray-500 mt-1">สาขา: <span className="font-semibold text-purple-600">{user?.branch}</span></p>
+            <p className="text-sm text-gray-500 mt-1">สาขา: <span className="font-semibold text-purple-600">{effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch)}</span></p>
           </div>
 
           <div className="flex items-center gap-4">
+            {isAll && (
+              <select
+                value={selectedBranch}
+                onChange={(e) => setSelectedBranch(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-purple-400 outline-none text-gray-700 min-w-[160px]"
+              >
+                <option value="">-- เลือกสาขา --</option>
+                {branches.map((br, idx) => (
+                  <option key={idx} value={br.name}>{br.name}</option>
+                ))}
+              </select>
+            )}
             <div className="flex items-center bg-gray-50 rounded-lg p-1 border border-gray-200">
               <button onClick={() => changeWeek(-1)} className="p-2 hover:bg-white rounded-md text-gray-600 transition-colors">
                 <ChevronLeft className="w-5 h-5" />
@@ -500,9 +530,9 @@ export default function ScheduleWeekly() {
               </button>
             </div>
             
-            <button 
+            <button
               onClick={handleSaveSchedule}
-              disabled={isSaving}
+              disabled={isSaving || !effectiveBranch}
               className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
@@ -518,6 +548,11 @@ export default function ScheduleWeekly() {
           <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
             <Loader2 className="w-10 h-10 animate-spin text-purple-500 mb-4" />
             <p>กำลังโหลดข้อมูลพนักงาน...</p>
+          </div>
+        ) : (isAll && !selectedBranch) ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2">
+            <Clock className="w-10 h-10 text-gray-300" />
+            <p>เลือกสาขาด้านบนเพื่อดูและแก้ไขตาราง</p>
           </div>
         ) : employees.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-gray-500">
