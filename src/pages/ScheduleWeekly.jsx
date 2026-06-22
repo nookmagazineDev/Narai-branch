@@ -20,6 +20,20 @@ function formatDateLocal(date) {
   return `${year}-${month}-${day}`;
 }
 
+// วันหยุดนักขัตฤกษ์ ปี 2026
+const publicHolidays = [
+  '2026-01-01', '2026-03-03', '2026-04-13', '2026-04-14',
+  '2026-04-15', '2026-05-01', '2026-06-03', '2026-07-28',
+  '2026-08-12', '2026-10-13', '2026-10-23', '2026-12-05',
+  '2026-12-31'
+];
+
+function formatNumber(num) {
+  const v = parseFloat(num);
+  if (isNaN(v)) return '0';
+  return v.toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
 export default function ScheduleWeekly() {
   const { user } = useAuth();
   const isAll = user?.branch?.toLowerCase() === 'all';
@@ -197,39 +211,50 @@ export default function ScheduleWeekly() {
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      try {
+      const branch = effectiveBranch || '';
 
-        // Fetch Branch Stats
-        const statsRes = await apiCall('getBranchStats', { branch: effectiveBranch || '' });
+      // 1) พนักงาน (สำคัญสุด) — โหลดแยกอิสระ ไม่ให้ API อื่นล้มแล้วทำพนักงานหาย
+      try {
+        const empRes = await apiCall('getScheduleEmployees', { branch });
+        setEmployees(empRes.status === 'success' ? (empRes.data || []) : []);
+        if (empRes.status !== 'success') toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+      } catch (err) {
+        setEmployees([]);
+        toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+      }
+
+      // 2) เป้าขาย / ค่าแรง Max — ไม่บังคับ ถ้าล้มต้องไม่บล็อกการแสดงตาราง
+      try {
+        const statsRes = await apiCall('getBranchStats', { branch });
         if (statsRes.status === 'success') {
           const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
           const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
           setWeeklyTarget(dTarget * 7);
           setWeeklyMaxWage(dMax * 7);
-        }
-
-        // Fetch employees
-        const empRes = await apiCall('getScheduleEmployees', { branch: effectiveBranch || '' });
-        if (empRes.status === 'success') {
-          setEmployees(empRes.data);
         } else {
-          toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+          setWeeklyTarget(0);
+          setWeeklyMaxWage(0);
         }
+      } catch (err) {
+        setWeeklyTarget(0);
+        setWeeklyMaxWage(0);
+      }
 
-        // Fetch schedule data for the week
+      // 3) ข้อมูลกะของสัปดาห์
+      try {
         const start = new Date(weekStartDate);
         const end = new Date(weekStartDate);
         end.setDate(end.getDate() + 6);
-        
+
         const schedRes = await apiCall('getHistoryData', {
-          branch: effectiveBranch || '',
+          branch,
           startDate: formatDateLocal(start),
           endDate: formatDateLocal(end)
         });
 
         if (schedRes.status === 'success') {
           const newScheduleData = {};
-          const sortedHistory = schedRes.data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+          const sortedHistory = (schedRes.data || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
           sortedHistory.forEach(record => {
             if (record.otherNote === 'ล้างข้อมูล') {
@@ -262,12 +287,13 @@ export default function ScheduleWeekly() {
               otherNote: record.otherNote || ''
             };
           });
-          
-          setScheduleData(newScheduleData);
-        }
 
+          setScheduleData(newScheduleData);
+        } else {
+          setScheduleData({});
+        }
       } catch (err) {
-        toast.error('เกิดข้อผิดพลาดในการโหลดข้อมูล');
+        setScheduleData({});
       } finally {
         setLoading(false);
       }
@@ -372,30 +398,45 @@ export default function ScheduleWeekly() {
     return parseFloat(wage.toFixed(2));
   };
 
-  // Calculate Summary dynamically
+  // Calculate Summary + per-day stats (เหมือนตัวเดิม: รวมค่าแรง F/T วันที่ยังไม่ลงด้วย)
   const summary = React.useMemo(() => {
+    const dates = daysOfWeek.map(d => d.dateStr);
+    const dailyWage = {};
+    const dailyCount = {};
+    dates.forEach(ds => { dailyWage[ds] = 0; dailyCount[ds] = 0; });
+
     let totalWage = 0;
     const workingEmpSet = new Set();
-    
-    Object.entries(scheduleData).forEach(([key, data]) => {
-      const emp = employees.find(e => key.startsWith(e.hrCode + '_'));
-      if (emp) {
-        const w = calculateCellWage(emp, data);
-        totalWage += w;
-        
-        const isStop = data.isStop || data.leave1 || data.leave2;
-        if (!isStop || w > 0) {
-          workingEmpSet.add(emp.hrCode);
+
+    employees.forEach(emp => {
+      const baseWage = parseFloat(emp.dailyWage) || 0;
+      dates.forEach(ds => {
+        const data = scheduleData[`${emp.hrCode}_${ds}`];
+        if (data && data.otherNote !== 'ล้างข้อมูล') {
+          const w = calculateCellWage(emp, data);
+          const isStop = data.isStop || data.leave1 || data.leave2;
+          if (!isStop && data.checkInHr) {
+            workingEmpSet.add(emp.hrCode);
+            dailyCount[ds]++;
+          }
+          dailyWage[ds] += w;
+          totalWage += w;
+        } else if (emp.type === 'F/T') {
+          dailyWage[ds] += baseWage;
+          totalWage += baseWage;
         }
-      }
+      });
     });
-    
+
     return {
       totalWage,
+      dailyWage,
+      dailyCount,
       workingCount: workingEmpSet.size,
       wagePercent: weeklyTarget > 0 ? ((totalWage / weeklyTarget) * 100).toFixed(2) : '0.00'
     };
-  }, [scheduleData, employees, weeklyTarget]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleData, employees, weeklyTarget, weekStartDate]);
 
   const handleSaveSchedule = async () => {
     if (Object.keys(scheduleData).length === 0) {
@@ -459,7 +500,7 @@ export default function ScheduleWeekly() {
             otAccumulated: ota,
             wage: wage,
             status: status,
-            empType: empType || '',
+            empType: emp.type || '',
             leaveNote: l1,
             unpaidLeave: l2,
             hourlyLeave: hl,
@@ -490,6 +531,72 @@ export default function ScheduleWeekly() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // สร้างการ์ดกะในแต่ละช่อง (เลียนแบบดีไซน์เดิม: badge ประเภทกะ/OT/ลา/นักขัตฤกษ์)
+  const renderCell = (emp, dateStr) => {
+    const cell = scheduleData[`${emp.hrCode}_${dateStr}`];
+    const isHoliday = publicHolidays.includes(dateStr);
+
+    if (!cell) {
+      return (
+        <div className="min-h-[55px] rounded-md border border-dashed border-gray-300 text-gray-400 flex items-center justify-center text-xs gap-1 hover:border-purple-400 hover:text-purple-600 transition-colors">
+          <span className="text-base leading-none">+</span> เพิ่มกะ
+        </div>
+      );
+    }
+
+    if (cell.isStop || cell.leave2) {
+      const reasons = [];
+      if (cell.leave1) reasons.push(cell.leave1);
+      if (cell.leave2) reasons.push(cell.leave2);
+      if (cell.otherNote) reasons.push(cell.otherNote);
+      return (
+        <div className="min-h-[55px] rounded-md border-2 border-amber-100 border-l-4 border-l-amber-400 bg-amber-50/60 text-amber-600 flex flex-col items-center justify-center text-xs p-1 gap-1">
+          <span className="font-bold">⊖ หยุด</span>
+          {reasons.length > 0 && (
+            <span className="bg-rose-500 text-white rounded px-1.5 py-0.5 text-[10px] leading-tight text-center" style={{ whiteSpace: 'normal' }}>
+              {reasons.join(', ')}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // กะทำงาน
+    const badges = [];
+    if (cell.ot && cell.ot !== '0') badges.push({ text: `OT ${cell.ot}`, cls: 'bg-blue-600 text-white' });
+    const leaveTexts = [];
+    if (cell.leave1) leaveTexts.push(cell.leave1);
+    if (cell.hrLeave && cell.hrLeave !== '0') leaveTexts.push(`ลาชม. ${cell.hrLeave}`);
+    if (cell.useAccum && cell.useAccum !== '0') leaveTexts.push(`ใช้ชม.สะสม ${cell.useAccum}ชม.`);
+    if (cell.otAccum && cell.otAccum !== '0') leaveTexts.push(`+สะสม ${cell.otAccum}`);
+    if (cell.otherNote) leaveTexts.push(cell.otherNote);
+    if (leaveTexts.length > 0) badges.push({ text: leaveTexts.join(', '), cls: 'bg-amber-400 text-gray-800' });
+    if (isHoliday && cell.checkInHr) badges.push({ text: 'นักขัตฤกษ์ ⭐', cls: 'bg-rose-500 text-white' });
+
+    let topBadges = badges;
+    if (badges.length === 0) {
+      const shiftName = emp.type === 'F/T' ? 'F/T' : emp.type === 'DAY9' ? 'DAY9' : emp.type === 'P/T' ? 'P/T' : 'DAY';
+      topBadges = [{ text: shiftName, cls: 'bg-amber-400 text-gray-800' }];
+    }
+
+    const timeStr = cell.checkInHr
+      ? `${cell.checkInHr}:${cell.checkInMin || '00'} - ${cell.checkOutHr ? `${cell.checkOutHr}:${cell.checkOutMin || '00'}` : '?'}`
+      : '';
+
+    return (
+      <div className="min-h-[55px] rounded-md border-2 border-blue-100 border-l-4 border-l-blue-500 bg-blue-50/40 hover:bg-blue-50 transition-colors p-1.5 flex flex-col justify-center gap-1">
+        <div className="flex flex-wrap gap-1">
+          {topBadges.map((b, i) => (
+            <span key={i} className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-tight ${b.cls}`} style={{ whiteSpace: 'normal' }}>
+              {b.text}
+            </span>
+          ))}
+        </div>
+        {timeStr && <div className="text-xs text-gray-600">{timeStr}</div>}
+      </div>
+    );
   };
 
   return (
@@ -542,6 +649,32 @@ export default function ScheduleWeekly() {
         </div>
       </div>
 
+      {/* Summary Panel */}
+      {effectiveBranch && !loading && employees.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 flex-shrink-0">
+          <div className="bg-cyan-500 text-white rounded-xl shadow-sm p-4">
+            <h6 className="text-sm opacity-90 m-0">👥 พนักงานทั้งหมดที่เข้างาน</h6>
+            <div className="mt-1"><span className="text-2xl font-bold">{summary.workingCount}</span> <span className="text-sm">คน</span></div>
+          </div>
+          <div className="bg-emerald-500 text-white rounded-xl shadow-sm p-4">
+            <h6 className="text-sm opacity-90 m-0">💵 ค่าแรงสัปดาห์ / <span className="bg-white text-rose-500 px-1 rounded">Max</span></h6>
+            <div className="mt-1">
+              <span className="text-2xl font-bold">{formatNumber(summary.totalWage)}</span>
+              <span className="mx-1">/</span>
+              <span className="text-lg font-bold bg-white text-rose-500 px-1 rounded">{formatNumber(weeklyMaxWage)}</span>
+            </div>
+          </div>
+          <div className="bg-rose-500 text-white rounded-xl shadow-sm p-4">
+            <h6 className="text-sm opacity-90 m-0">📈 เป้าขายสัปดาห์ (ประเมิน)</h6>
+            <div className="mt-1"><span className="text-lg font-bold">{weeklyTarget > 0 ? formatNumber(weeklyTarget) : '-'}</span></div>
+          </div>
+          <div className="bg-blue-500 text-white rounded-xl shadow-sm p-4">
+            <h6 className="text-sm opacity-90 m-0">🥧 ค่าแรง / เป้าขาย (%)</h6>
+            <div className="mt-1"><span className="text-lg font-bold">{summary.wagePercent}%</span></div>
+          </div>
+        </div>
+      )}
+
       {/* Main Table Area */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 flex-1 overflow-hidden flex flex-col">
         {loading ? (
@@ -563,76 +696,40 @@ export default function ScheduleWeekly() {
             <table className="w-full text-sm text-left border-collapse">
               <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th className="px-4 py-3 border-b border-r bg-gray-50 min-w-[200px] sticky left-0 z-20">พนักงาน</th>
-                  {daysOfWeek.map(d => (
-                    <th key={d.dateStr} className="px-2 py-3 border-b border-r text-center min-w-[120px]">
-                      <div className="font-bold">{d.dayName}</div>
-                      <div className="text-gray-500 font-normal">{d.shortDate}</div>
-                    </th>
-                  ))}
+                  <th className="px-4 py-3 border-b border-r bg-gray-50 min-w-[200px] sticky left-0 z-20">พนักงาน | ตำแหน่ง</th>
+                  {daysOfWeek.map(d => {
+                    const isHoliday = publicHolidays.includes(d.dateStr);
+                    return (
+                      <th key={d.dateStr} className="px-2 py-3 border-b border-r text-center min-w-[120px] align-top">
+                        <div className="font-bold">{d.dayName}{isHoliday && <span title="วันนักขัตฤกษ์"> ⭐</span>}</div>
+                        <div className="text-gray-500 font-normal">{d.shortDate}</div>
+                        <div className="mt-1 inline-block bg-emerald-500 text-white rounded px-1.5 py-0.5 text-[11px] font-normal">฿ {formatNumber(summary.dailyWage?.[d.dateStr] || 0)}</div>
+                        <div className="mt-1"><span className="inline-block bg-cyan-100 text-cyan-700 rounded px-1.5 py-0.5 text-[11px] font-normal">👤 {summary.dailyCount?.[d.dateStr] || 0} คน</span></div>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {employees.map(emp => (
                   <tr key={emp.hrCode} className="border-b hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-2 border-r bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#f3f4f6]">
-                      <div className="text-xs text-purple-600 font-bold mb-0.5">{emp.hrCode}</div>
                       <div className="font-medium text-gray-900 leading-tight">{emp.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">{emp.position}</div>
+                      <div className="text-[10px] text-gray-400 mt-0.5">รหัส: {emp.hrCode || '-'}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {emp.position}
+                        {emp.type && <span className="ml-1 inline-block border border-gray-200 bg-gray-50 text-gray-600 rounded px-1 text-[10px]">{emp.type}</span>}
+                      </div>
                     </td>
-                    {daysOfWeek.map(d => {
-                      const key = `${emp.hrCode}_${d.dateStr}`;
-                      const cell = scheduleData[key];
-                      
-                      return (
-                        <td 
-                          key={d.dateStr} 
-                          className="p-1 border-r cursor-pointer hover:bg-purple-50"
-                          onClick={() => handleCellClick(emp, d.dateStr)}
-                        >
-                          <div className={`h-14 rounded border border-transparent p-1 flex flex-col justify-center items-center text-xs ${
-                            !cell ? 'bg-gray-50 text-gray-400 border-dashed border-gray-200' :
-                            cell.isStop || cell.leave2 ? 'bg-red-50 text-red-600 border-red-100' :
-                            'bg-green-50 text-green-700 border-green-100'
-                          }`}>
-                            {!cell ? (
-                              <span>-</span>
-                            ) : cell.isStop || cell.leave2 ? (
-                              <>
-                                <span className="font-medium">{cell.leave2 || 'หยุด'}</span>
-                                {cell.otherNote && <span className="text-[10px] text-red-500 truncate w-full text-center" title={cell.otherNote}>{cell.otherNote}</span>}
-                              </>
-                            ) : (
-                              <>
-                                {(cell.checkInHr || cell.checkOutHr) ? (
-                                  <span className="font-bold">
-                                    {cell.checkInHr ? `${cell.checkInHr}:${cell.checkInMin || '00'}` : '?'} - {cell.checkOutHr ? `${cell.checkOutHr}:${cell.checkOutMin || '00'}` : '?'}
-                                  </span>
-                                ) : (
-                                  <span className="font-bold text-gray-400">? - ?</span>
-                                )}
-                                {(() => {
-                                  const notes = [];
-                                  if (cell.ot && cell.ot !== '0') notes.push(`OT ${cell.ot}`);
-                                  if (cell.otAccum && cell.otAccum !== '0') notes.push(`+สะสม ${cell.otAccum}`);
-                                  if (cell.leave1) notes.push(cell.leave1);
-                                  if (cell.hrLeave && cell.hrLeave !== '0') notes.push(`ลา ${cell.hrLeave}ชม.`);
-                                  if (cell.useAccum && cell.useAccum !== '0') notes.push(`ใช้สะสม ${cell.useAccum}ชม.`);
-                                  if (cell.otherNote) notes.push(cell.otherNote);
-                                  
-                                  if (notes.length === 0) return null;
-                                  return (
-                                    <span className="text-[10px] text-blue-600 font-medium leading-tight truncate w-full text-center" title={notes.join(', ')}>
-                                      {notes.join(', ')}
-                                    </span>
-                                  );
-                                })()}
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
+                    {daysOfWeek.map(d => (
+                      <td
+                        key={d.dateStr}
+                        className="p-1 border-r cursor-pointer hover:bg-purple-50/50 align-middle"
+                        onClick={() => handleCellClick(emp, d.dateStr)}
+                      >
+                        {renderCell(emp, d.dateStr)}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
