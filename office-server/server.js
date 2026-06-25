@@ -92,6 +92,7 @@ async function fetchDay(date) {
   const outlets = new Map();    // usage (สำหรับ usagebymenu): oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
   const dashItems = new Map();  // แดชบอร์ด: oid -> { itemCode -> {name, qty} } (ไม่ void, ไม่ใช่โต๊ะ 600) — แยกหมวดต้นทุน/นับคนตอน query
   const dashExclTbl = new Map();// แดชบอร์ด: oid -> { itemCode -> {name, qty} } เฉพาะโต๊ะ 600 (หมวด "ไม่นับคำนวณ")
+  const billAgg = new Map();    // ตารางรายการขาย: oid -> { checkID -> {cost, waiter} } (เชื่อมด้วย chkCheckID)
   for (const x of tranRows) {
     if (x.void) continue;
     const oid = Number(x.outletID);
@@ -105,6 +106,16 @@ async function fetchDay(date) {
     let de = di[ic]; if (!de) { de = { name, qty: 0 }; di[ic] = de; }
     de.qty += qty;
 
+    // ---- ต้นทุน+พนักงานรับออเดอร์ ต่อบิล (ตารางรายการขาย) — เชื่อมด้วย chkCheckID ----
+    // ต้นทุนต่อบิล = Σ ทุกรายการในบิล (ไม่ตัดไอเทม) เพื่อให้ตรงกับยอดในหน้ารายละเอียดบิล
+    const chk = x.chkCheckID;
+    if (chk != null && chk !== 0 && !dashExclTable(x.tableID)) {
+      let bm = billAgg.get(oid); if (!bm) { bm = {}; billAgg.set(oid, bm); }
+      let be = bm[chk]; if (!be) { be = { cost: 0, waiter: '' }; bm[chk] = be; }
+      be.cost += (menuCost[ic] ?? 0) * qty;
+      if (!be.waiter && x.waiterName) be.waiter = x.waiterName;
+    }
+
     // ---- usage (ยอดใช้แยกเมนู): ตัดโต๊ะ 600 + ไอเทมที่ตั้งว่าไม่คิด ----
     if (Number(x.tableID) === 600) continue;
     if (EXCLUDE_ITEMCODES.has(ic)) continue;
@@ -117,16 +128,44 @@ async function fetchDay(date) {
 
   // ---- บิลที่จ่ายแล้ว (ยอดขาย/จำนวนบิล): ตัดโต๊ะ 600 ----
   const dashBill = new Map();   // oid -> { sumBill, sumVat, count }
+  const billRows = new Map();   // ตารางรายการขาย: oid -> [ {checkID, ...ฟิลด์บิล, billCost, waiterName} ]
   for (const r of paidRows) {
     if (dashExclTable(r.tableID)) continue;
     const oid = Number(r.outletID);
     let b = dashBill.get(oid); if (!b) { b = { sumBill: 0, sumVat: 0, count: 0 }; dashBill.set(oid, b); }
-    b.sumBill += parseFloat(r.billTotal) || 0;
-    b.sumVat += parseFloat(r.vat) || 0;
+    const billTotal = parseFloat(r.billTotal) || 0;
+    const vat = parseFloat(r.vat) || 0;
+    const amount = parseFloat(r.amount ?? r.Amount ?? billTotal) || 0;
+    b.sumBill += billTotal;
+    b.sumVat += vat;
     b.count += 1;
+
+    // ---- แถวตารางรายการขาย (ผนวกต้นทุน+พนักงานรับออเดอร์ ที่เชื่อมด้วย checkID) ----
+    const be = billAgg.get(oid)?.[r.checkID];
+    let rows = billRows.get(oid); if (!rows) { rows = []; billRows.set(oid, rows); }
+    rows.push({
+      checkID: r.checkID,
+      orderID: r.orderID ?? '',
+      tableID: r.tableID ?? null,
+      cashierName: r.cashierName ?? '',
+      waiterName: (be && be.waiter) || r.waiterName || '',
+      amount: r2(amount),
+      beforeVat: r2(amount - vat),
+      vat: r2(vat),
+      billTotal: r2(billTotal),
+      billCost: r2(be ? be.cost : 0),
+      paidType: r.paidType ?? r.PaidType ?? '',
+      memberTel: r.memberTel ?? '',
+      cover: Number(r.cover) || 0,
+      coverAd: Number(r.coverAd) || 0,
+      coverAll: Number(r.coverAll) || 0,
+      startTime: r.startTime ?? '',
+      endTime: r.date ?? r.postTime ?? '',
+      checkDesc: r.checkDesc ?? '',
+    });
   }
 
-  return { outlets, dashItems, dashExclTbl, dashBill };
+  return { outlets, dashItems, dashExclTbl, dashBill, billRows };
 }
 
 async function getDay(date) {
@@ -135,8 +174,8 @@ async function getDay(date) {
   if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
-    const { outlets, dashItems, dashExclTbl, dashBill } = await fetchDay(date);
-    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashExclTbl, dashBill };
+    const { outlets, dashItems, dashExclTbl, dashBill, billRows } = await fetchDay(date);
+    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashExclTbl, dashBill, billRows };
     salesCache.set(date, entry);
     inflight.delete(date);
     return entry;
@@ -333,6 +372,90 @@ async function computeDashboard(outletNum, start, end) {
     excludedBreakdown,
   };
 }
+
+// ตารางรายการขาย: รายการบิลทั้งหมดของสาขาในช่วงเวลา (ระดับบิล + ต้นทุน/พนักงานรับออเดอร์)
+async function computeBills(outletNum, start, end) {
+  const days = dateRange(start, end);
+  const out = [];
+  const CONC = 6;
+  for (let i = 0; i < days.length; i += CONC) {
+    const slice = days.slice(i, i + CONC);
+    const chunk = await Promise.all(slice.map(getDay));
+    for (let j = 0; j < slice.length; j++) {
+      const date = slice[j];
+      const rows = chunk[j].billRows.get(outletNum);
+      if (rows) for (const r of rows) out.push({ date, ...r });
+    }
+  }
+  // เรียงล่าสุดก่อน (วันที่ + เวลาเริ่ม)
+  out.sort((a, b) => (b.date + (b.startTime || '')).localeCompare(a.date + (a.startTime || '')));
+  return out;
+}
+
+// รายละเอียดรายการในบิล (line items) — ดึง ctran ของวันนั้นแล้วกรองตาม outlet + checkID
+async function computeBillDetail(outletNum, date, checkID) {
+  const q = `?start=${encodeURIComponent(date)}&end=${encodeURIComponent(date)}`;
+  const r = await fetch(`${SALES_BASE}${q}`);
+  if (!r.ok) throw new Error('sales API ' + r.status);
+  const tranRows = ((await r.json()) || {}).data || [];
+  const cid = String(checkID);
+  const rows = [];
+  for (const x of tranRows) {
+    if (Number(x.outletID) !== outletNum) continue;
+    if (String(x.chkCheckID) !== cid) continue;
+    const qty = Number(x.quantity) || 0;
+    const ic = nstr(x.itemCode);
+    const unitCost = menuCost[ic] ?? 0;
+    rows.push({
+      itemCode: ic,
+      name: x.nameThai || x.nameEng || '-',
+      qty,
+      unitPrice: r2(x.unitPrice),
+      grossPrice: r2(x.grossPrice),
+      tax: r2(x.tax),
+      unitCost: r2(unitCost),
+      lineCost: r2(unitCost * qty),
+      tableID: x.tableID ?? null,
+      prtOrdTime: x.prtOrdTime ?? '',
+      orderID: x.orderID ?? '',
+      void: !!x.void,
+    });
+  }
+  return rows;
+}
+
+app.get('/bills', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase().trim();
+    const start = String(req.query.start || ''); const end = String(req.query.end || '');
+    if (!start || !end) return res.status(400).json({ status: 'error', message: 'missing start/end' });
+    const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
+    if (!outletNum) return res.status(400).json({ status: 'error', message: 'unknown branch/outlet' });
+    if (!Object.keys(recipe).length) await loadSheets();
+    const data = await computeBills(outletNum, start, end);
+    res.json({ status: 'success', branch, outletId: outletNum, start, end, count: data.length, data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+app.get('/billdetail', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase().trim();
+    const date = String(req.query.date || '');
+    const checkID = String(req.query.checkid || '');
+    if (!date || !checkID) return res.status(400).json({ status: 'error', message: 'missing date/checkid' });
+    const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
+    if (!outletNum) return res.status(400).json({ status: 'error', message: 'unknown branch/outlet' });
+    if (!Object.keys(recipe).length) await loadSheets();
+    const data = await computeBillDetail(outletNum, date, checkID);
+    res.json({ status: 'success', branch, outletId: outletNum, date, checkID, data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 app.get('/dashboard', async (req, res) => {
   try {

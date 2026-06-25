@@ -55,3 +55,29 @@ export async function fetchDashboard({ branch, outletId, startDate, endDate, sig
   }
   return json; // { status, branch, outletId, data:{...} }
 }
+
+// ดึงรายการบิลทั้งหมด (ตารางรายการขาย) ของสาขาในช่วงเวลา
+export async function fetchBills({ branch, outletId, startDate, endDate, signal }) {
+  const params = new URLSearchParams({ startDate, endDate });
+  if (branch) params.set('branch', String(branch).toLowerCase());
+  if (outletId) params.set('outletId', String(outletId));
+  const res = await fetch(`/api/bills?${params.toString()}`, { signal });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || json.status !== 'success') {
+    throw new Error((json && json.message) || `ดึงรายการบิลไม่สำเร็จ (${res.status})`);
+  }
+  return json; // { status, branch, outletId, count, data:[...] }
+}
+
+// ดึงรายละเอียดรายการในบิลเดียว (line items)
+export async function fetchBillDetail({ branch, outletId, date, checkID, signal }) {
+  const params = new URLSearchParams({ date, checkID: String(checkID) });
+  if (branch) params.set('branch', String(branch).toLowerCase());
+  if (outletId) params.set('outletId', String(outletId));
+  const res = await fetch(`/api/billdetail?${params.toString()}`, { signal });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || json.status !== 'success') {
+    throw new Error((json && json.message) || `ดึงรายละเอียดบิลไม่สำเร็จ (${res.status})`);
+  }
+  return json; // { status, ..., data:[...] }
+}
