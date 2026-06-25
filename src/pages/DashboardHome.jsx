@@ -6,6 +6,7 @@ import {
   Eye, X, ShoppingBag, Search, CheckCircle, XCircle, ReceiptText,
 } from 'lucide-react';
 import { fetchDashboard, fetchBills, fetchBillDetail, presetRange, PRESETS, fmtDate } from '../services/dashboardApi';
+import ProfitSummary from '../components/ProfitSummary';
 
 const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -585,6 +586,9 @@ export default function DashboardHome() {
           <DailySalesChart daily={d.daily} />
         )}
       </div>
+
+      {/* สรุปกำไร/ขาดทุน (รายรับ–รายจ่าย) — ต้นทุนจากใบเบิก */}
+      <ProfitSummary branch={branch} outletId={outletId} startDate={startDate} endDate={endDate} dash={d} />
 
       {/* Modal รายละเอียดต้นทุน */}
       <BreakdownModal

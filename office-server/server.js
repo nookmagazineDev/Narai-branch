@@ -357,6 +357,8 @@ async function computeDashboard(outletNum, start, end) {
   const avgPerBill = bills ? sumBill / bills : 0; // เฉลี่ยต่อบิล = ยอดบิลรวม (รวม VAT) / จำนวนบิล
   return {
     sales: r2(sales),
+    gross: r2(sumBill),   // Gross Sales = Σ billTotal (รวม VAT)
+    tax: r2(sumVat),      // VAT รวม
     cost: r2(totalCost),
     prepCost: r2(prepCost),
     prepQty: r2(prepQty),

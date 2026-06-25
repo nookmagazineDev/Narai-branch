@@ -69,6 +69,19 @@ export async function fetchBills({ branch, outletId, startDate, endDate, signal 
   return json; // { status, branch, outletId, count, data:[...] }
 }
 
+// ดึงใบเบิก (TRF/RCV) ของสาขาในช่วงเวลา — ใช้คิดต้นทุนจริงจากใบเบิกในตารางสรุปกำไร/ขาดทุน
+export async function fetchWithdrawals({ branch, outletId, startDate, endDate, signal }) {
+  const params = new URLSearchParams({ startDate, endDate });
+  if (branch) params.set('branch', String(branch).toLowerCase());
+  if (outletId) params.set('outletId', String(outletId));
+  const res = await fetch(`/api/withdrawals?${params.toString()}`, { signal });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || json.status !== 'success') {
+    throw new Error((json && json.message) || `ดึงใบเบิกไม่สำเร็จ (${res.status})`);
+  }
+  return json; // { status, data:[ { invNo, docNo, docDate, docType, items:[{itemCode,itemName,qty,unit,unitPrice,amount}] } ] }
+}
+
 // ดึงรายละเอียดรายการในบิลเดียว (line items)
 export async function fetchBillDetail({ branch, outletId, date, checkID, signal }) {
   const params = new URLSearchParams({ date, checkID: String(checkID) });
