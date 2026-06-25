@@ -526,6 +526,9 @@ export default function DashboardHome() {
         </div>
       )}
 
+      {/* สรุปกำไร/ขาดทุน (รายรับ–รายจ่าย) — ต้นทุนจากใบเบิก */}
+      <ProfitSummary branch={branch} outletId={outletId} startDate={startDate} endDate={endDate} dash={d} />
+
       {/* การ์ดสรุป */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -586,9 +589,6 @@ export default function DashboardHome() {
           <DailySalesChart daily={d.daily} />
         )}
       </div>
-
-      {/* สรุปกำไร/ขาดทุน (รายรับ–รายจ่าย) — ต้นทุนจากใบเบิก */}
-      <ProfitSummary branch={branch} outletId={outletId} startDate={startDate} endDate={endDate} dash={d} />
 
       {/* Modal รายละเอียดต้นทุน */}
       <BreakdownModal
