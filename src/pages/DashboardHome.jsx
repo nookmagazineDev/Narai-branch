@@ -10,25 +10,87 @@ const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH');
 
-// ---- การ์ดสรุป ----
-function StatCard({ title, value, sub, icon: Icon, accent, badge }) {
+// ---- การ์ดสรุป (กดดูรายละเอียดได้ถ้าส่ง onClick) ----
+function StatCard({ title, value, sub, icon: Icon, accent, onClick }) {
+  const clickable = typeof onClick === 'function';
+  const Wrapper = clickable ? 'button' : 'div';
   return (
-    <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+    <Wrapper
+      type={clickable ? 'button' : undefined}
+      onClick={onClick}
+      className={`w-full text-left bg-white rounded-2xl p-5 shadow-sm border border-gray-100 transition-all ${
+        clickable ? 'cursor-pointer hover:shadow-md hover:border-indigo-300' : 'hover:shadow-md'
+      }`}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-gray-500 text-sm font-medium truncate">{title}</h3>
-            {badge && (
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap">
-                {badge}
-              </span>
-            )}
-          </div>
+          <h3 className="text-gray-500 text-sm font-medium truncate">{title}</h3>
           <p className={`text-2xl font-bold mt-1 ${accent?.text || 'text-gray-800'}`}>{value}</p>
           {sub && <p className="text-xs text-gray-400 mt-1 truncate">{sub}</p>}
+          {clickable && <p className={`text-[11px] font-semibold mt-1 ${accent?.text || 'text-indigo-500'}`}>คลิกดูรายละเอียด →</p>}
         </div>
         <div className={`w-11 h-11 shrink-0 rounded-xl flex items-center justify-center ${accent?.bg || 'bg-gray-50'} ${accent?.icon || 'text-gray-500'}`}>
           <Icon className="w-5 h-5" />
+        </div>
+      </div>
+    </Wrapper>
+  );
+}
+
+// ---- Modal แสดง breakdown รายไอเทม (ต้นทุน/โต๊ะเตรียม/ไม่นับคำนวณ) ----
+function BreakdownModal({ open, onClose, title, rows, accent, showReason }) {
+  if (!open) return null;
+  const totalQty = rows.reduce((s, r) => s + (r.qty || 0), 0);
+  const totalCost = rows.reduce((s, r) => s + (r.totalCost || 0), 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-base font-bold">{title}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{rows.length.toLocaleString('th-TH')} รายการ</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {rows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">ไม่มีข้อมูล</div>
+          ) : (
+            <div className="overflow-auto max-h-[60vh] border border-gray-100 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="text-gray-600">
+                    {showReason && <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">เหตุผล</th>}
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อรายการ</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">จำนวน</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ต้นทุน/หน่วย</th>
+                    <th className={`px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 ${accent}`}>ต้นทุนรวม</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-gray-700">
+                  {rows.map((r, i) => (
+                    <tr key={i} className="hover:bg-gray-50/50">
+                      {showReason && <td className="px-3 py-2"><span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{r.reason}</span></td>}
+                      <td className="px-3 py-2 font-mono text-gray-400">{r.itemCode}</td>
+                      <td className="px-3 py-2 font-medium text-gray-800">{r.name}</td>
+                      <td className="px-3 py-2 text-right font-mono">{intf(r.qty)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-400">{baht(r.unitCost)}</td>
+                      <td className={`px-3 py-2 text-right font-mono font-bold ${accent}`}>{baht(r.totalCost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
+                    <td className="px-3 py-2.5" colSpan={showReason ? 3 : 2}>รวมทั้งหมด</td>
+                    <td className="px-3 py-2.5 text-right font-mono">{intf(totalQty)}</td>
+                    <td />
+                    <td className={`px-3 py-2.5 text-right font-mono ${accent}`}>{baht(totalCost)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -99,6 +161,7 @@ export default function DashboardHome() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [modal, setModal] = useState(null); // 'cost' | 'prep' | 'excluded'
   const abortRef = useRef(null);
 
   const load = useCallback(
@@ -233,11 +296,13 @@ export default function DashboardHome() {
         <StatCard
           title="ต้นทุนรวมทั้งหมด" value={baht(d.cost)} sub="ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)"
           icon={Layers} accent={{ text: 'text-rose-500', bg: 'bg-rose-50', icon: 'text-rose-500' }}
+          onClick={data ? () => setModal('cost') : undefined}
         />
         <StatCard
           title="ต้นทุนโต๊ะเตรียม(กก)" value={baht(d.prepCost)}
           sub={`${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
           icon={Scale} accent={{ text: 'text-orange-500', bg: 'bg-orange-50', icon: 'text-orange-500' }}
+          onClick={data ? () => setModal('prep') : undefined}
         />
         <StatCard
           title="กำไร / ขาดทุนสุทธิ" value={baht(d.profit)} sub="ยอดขาย − ต้นทุนรวม"
@@ -262,6 +327,7 @@ export default function DashboardHome() {
           title="รายการไม่นับคำนวณ" value={baht(d.excludedCost)}
           sub={`${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
           icon={Ban} accent={{ text: 'text-gray-500', bg: 'bg-gray-100', icon: 'text-gray-500' }}
+          onClick={data ? () => setModal('excluded') : undefined}
         />
       </div>
 
@@ -280,6 +346,19 @@ export default function DashboardHome() {
         )}
       </div>
 
+      {/* Modal รายละเอียดต้นทุน */}
+      <BreakdownModal
+        open={modal === 'cost'} onClose={() => setModal(null)}
+        title="รายละเอียดต้นทุนรวม" rows={d.costBreakdown || []} accent="text-rose-600"
+      />
+      <BreakdownModal
+        open={modal === 'prep'} onClose={() => setModal(null)}
+        title="รายละเอียดต้นทุนโต๊ะเตรียม(กก)" rows={d.prepBreakdown || []} accent="text-orange-600"
+      />
+      <BreakdownModal
+        open={modal === 'excluded'} onClose={() => setModal(null)}
+        title="รายการไม่นับคำนวณ" rows={d.excludedBreakdown || []} accent="text-gray-600" showReason
+      />
     </div>
   );
 }

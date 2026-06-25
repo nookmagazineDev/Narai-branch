@@ -46,6 +46,7 @@ function nstr(v) { return v == null ? '' : String(v).replace(/\.0+$/, '').trim()
 function normItem(id) { return id == null ? '' : String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase(); }
 function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return JSON.parse(t.substring(a, b + 1)); }
 function todayStr() { return new Date().toISOString().slice(0, 10); }
+function r2(n) { return Number((Number(n) || 0).toFixed(2)); }
 
 // ---------- สูตร (CostMenu + RcpDtls) + ราคาทุนต่อหน่วย ----------
 let bridge = {};   // sales itemCode (BOT) -> Kios (รหัสเมนูในสูตร)
@@ -89,18 +90,20 @@ async function fetchDay(date) {
   const paidRows = rPaid.ok ? (((await rPaid.json()) || {}).data || []) : [];
 
   const outlets = new Map();    // usage (สำหรับ usagebymenu): oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
-  const dashItems = new Map();  // แดชบอร์ด: oid -> { itemCode(nstr) -> qty } (ไม่ void, ตัดโต๊ะ 600) — แยกหมวดต้นทุน/นับคนตอน query
+  const dashItems = new Map();  // แดชบอร์ด: oid -> { itemCode -> {name, qty} } (ไม่ void, ไม่ใช่โต๊ะ 600) — แยกหมวดต้นทุน/นับคนตอน query
+  const dashExclTbl = new Map();// แดชบอร์ด: oid -> { itemCode -> {name, qty} } เฉพาะโต๊ะ 600 (หมวด "ไม่นับคำนวณ")
   for (const x of tranRows) {
     if (x.void) continue;
     const oid = Number(x.outletID);
     const ic = nstr(x.itemCode); if (!ic) continue;
     const qty = Number(x.quantity) || 0;
+    const name = x.nameThai || x.nameEng || '-';
 
-    // ---- แดชบอร์ด: เก็บ qty ต่อ itemCode (ตัดเฉพาะโต๊ะ 600) ----
-    if (!dashExclTable(x.tableID)) {
-      let di = dashItems.get(oid); if (!di) { di = {}; dashItems.set(oid, di); }
-      di[ic] = (di[ic] || 0) + qty;
-    }
+    // ---- แดชบอร์ด: เก็บ {ชื่อ, qty} ต่อ itemCode แยกโต๊ะ 600 (ไว้หมวด "ไม่นับคำนวณ") ----
+    const target = dashExclTable(x.tableID) ? dashExclTbl : dashItems;
+    let di = target.get(oid); if (!di) { di = {}; target.set(oid, di); }
+    let de = di[ic]; if (!de) { de = { name, qty: 0 }; di[ic] = de; }
+    de.qty += qty;
 
     // ---- usage (ยอดใช้แยกเมนู): ตัดโต๊ะ 600 + ไอเทมที่ตั้งว่าไม่คิด ----
     if (Number(x.tableID) === 600) continue;
@@ -123,7 +126,7 @@ async function fetchDay(date) {
     b.count += 1;
   }
 
-  return { outlets, dashItems, dashBill };
+  return { outlets, dashItems, dashExclTbl, dashBill };
 }
 
 async function getDay(date) {
@@ -132,8 +135,8 @@ async function getDay(date) {
   if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
-    const { outlets, dashItems, dashBill } = await fetchDay(date);
-    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashBill };
+    const { outlets, dashItems, dashExclTbl, dashBill } = await fetchDay(date);
+    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashExclTbl, dashBill };
     salesCache.set(date, entry);
     inflight.delete(date);
     return entry;
@@ -251,8 +254,9 @@ app.get('/usagebytable', async (req, res) => {
 async function computeDashboard(outletNum, start, end) {
   const days = dateRange(start, end);
   let sumBill = 0, sumVat = 0, bills = 0;
-  let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
   const daily = [];
+  const itemsAgg = {};   // ic -> {name, qty}  (ไม่ใช่โต๊ะ 600)
+  const exclTblAgg = {}; // ic -> {name, qty}  (โต๊ะ 600)
   const CONC = 6;
   for (let i = 0; i < days.length; i += CONC) {
     const slice = days.slice(i, i + CONC);
@@ -268,32 +272,65 @@ async function computeDashboard(outletNum, start, end) {
       bills += b ? b.count : 0;
       daily.push({ date, sales: Number((dayBill - dayVat).toFixed(2)) });
 
-      // ต้นทุน/ลูกค้า จากรายการ (detail)
+      // รวมรายการ (detail) ของสาขานี้
       const di = entry.dashItems.get(outletNum);
-      if (di) for (const [ic, qty] of Object.entries(di)) {
-        if (dashCoverItem(ic)) covers += qty;
-        const c = (menuCost[ic] ?? 0) * qty;
-        if (dashExclItem(ic)) { excludedCost += c; excludedQty += qty; }
-        else if (dashPrepKg(ic)) { prepCost += c; prepQty += qty; }
-        else totalCost += c;
+      if (di) for (const [ic, v] of Object.entries(di)) {
+        const a = itemsAgg[ic] || (itemsAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
+      }
+      const de = entry.dashExclTbl.get(outletNum);
+      if (de) for (const [ic, v] of Object.entries(de)) {
+        const a = exclTblAgg[ic] || (exclTblAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
       }
     }
   }
+
+  // แยกหมวดต้นทุน + สร้าง breakdown รายไอเทม (สำหรับ modal "คลิกดูรายละเอียด")
+  let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
+  const costBreakdown = [], prepBreakdown = [], excludedBreakdown = [];
+  for (const [ic, v] of Object.entries(itemsAgg)) {
+    if (dashCoverItem(ic)) covers += v.qty;
+    const unitCost = menuCost[ic] ?? 0;
+    const tc = unitCost * v.qty;
+    if (dashExclItem(ic)) {
+      excludedCost += tc; excludedQty += v.qty;
+      excludedBreakdown.push({ reason: 'ไอเทมเตรียม', itemCode: ic, name: v.name, unitCost, qty: r2(v.qty), totalCost: r2(tc) });
+    } else if (dashPrepKg(ic)) {
+      prepCost += tc; prepQty += v.qty;
+      prepBreakdown.push({ itemCode: ic, name: v.name, unitCost, qty: r2(v.qty), totalCost: r2(tc) });
+    } else {
+      totalCost += tc;
+      costBreakdown.push({ itemCode: ic, name: v.name, unitCost, qty: r2(v.qty), totalCost: r2(tc) });
+    }
+  }
+  for (const [ic, v] of Object.entries(exclTblAgg)) {
+    const unitCost = menuCost[ic] ?? 0;
+    const tc = unitCost * v.qty;
+    excludedCost += tc; excludedQty += v.qty;
+    excludedBreakdown.push({ reason: 'โต๊ะ 600', itemCode: ic, name: v.name, unitCost, qty: r2(v.qty), totalCost: r2(tc) });
+  }
+  const byCost = (a, b) => b.totalCost - a.totalCost || b.qty - a.qty;
+  const costRows = costBreakdown.filter(r => r.totalCost > 0).sort(byCost);
+  prepBreakdown.sort(byCost);
+  excludedBreakdown.sort(byCost);
+
   const sales = sumBill - sumVat;            // ยอดขายก่อน VAT
   const profit = sales - totalCost;
   const avgPerBill = bills ? sumBill / bills : 0; // เฉลี่ยต่อบิล = ยอดบิลรวม (รวม VAT) / จำนวนบิล
   return {
-    sales: Number(sales.toFixed(2)),
-    cost: Number(totalCost.toFixed(2)),
-    prepCost: Number(prepCost.toFixed(2)),
-    prepQty: Number(prepQty.toFixed(2)),
-    profit: Number(profit.toFixed(2)),
-    excludedCost: Number(excludedCost.toFixed(2)),
-    excludedQty: Number(excludedQty.toFixed(2)),
+    sales: r2(sales),
+    cost: r2(totalCost),
+    prepCost: r2(prepCost),
+    prepQty: r2(prepQty),
+    profit: r2(profit),
+    excludedCost: r2(excludedCost),
+    excludedQty: r2(excludedQty),
     bills,
-    covers: Number(covers.toFixed(2)),
-    avgPerBill: Number(avgPerBill.toFixed(2)),
+    covers: r2(covers),
+    avgPerBill: r2(avgPerBill),
     daily,
+    costBreakdown: costRows,
+    prepBreakdown,
+    excludedBreakdown,
   };
 }
 
