@@ -1,9 +1,9 @@
 // แดชบอร์ดสาขา — proxy ไปที่ Narai Usage API ที่รันในออฟฟิศ (ดู office-server/)
 //   GET {USAGE_API_BASE}/dashboard?branch=<code>&start=<YYYY-MM-DD>&end=<YYYY-MM-DD>
-//   -> { status, branch, outletId, data:{ sales, cost, profit, bills, covers, avgPerBill, costIsEstimate, daily:[{date,sales}] } }
+//   -> { status, branch, outletId, data:{ sales, cost, prepCost, prepQty, profit, excludedCost, excludedQty, bills, covers, avgPerBill, daily:[{date,sales}] } }
 // office-server มี cache รายวันอยู่แล้ว จึงตอบเร็วและส่ง payload เล็ก (เลี่ยงการดึงดิบ ~300MB/เดือนมาที่เบราว์เซอร์)
-// ตั้งค่า env บน Vercel: USAGE_API_BASE (ถ้าไม่ตั้งจะใช้ค่า dyndns ด้านล่าง)
-const USAGE_API_BASE = process.env.USAGE_API_BASE || 'http://storenarai.dyndns.tv:8787';
+// hardcode base เดียวกับ api/usagemenu.js ที่พิสูจน์แล้วว่า Vercel เข้าถึง office-server ได้ (ไม่ใช้ env เพื่อตัดความเสี่ยงตั้งผิด)
+const USAGE_API_BASE = 'http://storenarai.dyndns.tv:8787';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
