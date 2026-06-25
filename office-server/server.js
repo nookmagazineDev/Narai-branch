@@ -9,6 +9,8 @@ import natUpnp from 'nat-upnp';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'http://storenarai.dyndns.tv:14365/express/ctranbetweendate';
+// บิลที่จ่ายแล้ว (ระดับบิล: billTotal, vat) — ใช้คิดยอดขาย/จำนวนบิล/เฉลี่ยต่อบิล แบบเดียวกับ NARAI OFFICE
+const PAID_BASE = process.env.PAID_BASE || SALES_BASE.replace('ctranbetweendate', 'cpaidbetweendate');
 const WARM_DAYS = Number(process.env.WARM_DAYS) || 70; // อุ่น cache ย้อนหลังกี่วันตอนสตาร์ท
 const TODAY_TTL_MS = 20 * 60 * 1000; // ข้อมูล "วันนี้" รีเฟรชทุก 20 นาที
 
@@ -28,6 +30,18 @@ const EXCLUDE_PLATE_MENU_INGREDIENTS = new Set(
   String(process.env.EXCLUDE_PLATE_MENU_INGREDIENTS || '11010081').split(',').map(s => normItem(s)).filter(Boolean)
 );
 
+// ───────── กติกาแดชบอร์ด (ตรงกับ NARAI OFFICE) ─────────
+const DASH_EXCLUDE_TABLES = [600];                 // โต๊ะที่ตัดออก
+const DASH_EXCLUDE_ITEMS = [206001];               // itemCode เดี่ยวที่ตัดออก (ไปการ์ด "ไม่นับคำนวณ")
+const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode ที่ตัดออก
+const DASH_COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
+// วัตถุดิบ (กก) โต๊ะเตรียม — แยกออกจากต้นทุนที่ใช้คิดกำไร
+const DASH_PREP_KG_ITEMS = [206041, 206038, 205003, 205002, 205007, 205006, 205021, 206035, 206040, 205014, 205004, 206034];
+const dashExclTable = (t) => DASH_EXCLUDE_TABLES.indexOf(parseInt(t)) >= 0;
+const dashExclItem = (c) => { const ic = parseInt(c); return DASH_EXCLUDE_ITEMS.indexOf(ic) >= 0 || DASH_EXCLUDE_ITEM_RANGES.some(r => ic >= r[0] && ic <= r[1]); };
+const dashPrepKg = (c) => DASH_PREP_KG_ITEMS.indexOf(parseInt(c)) >= 0;
+const dashCoverItem = (c) => DASH_COVER_ITEMS.indexOf(parseInt(c)) >= 0;
+
 function nstr(v) { return v == null ? '' : String(v).replace(/\.0+$/, '').trim(); }
 function normItem(id) { return id == null ? '' : String(id).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase(); }
 function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return JSON.parse(t.substring(a, b + 1)); }
@@ -36,9 +50,7 @@ function todayStr() { return new Date().toISOString().slice(0, 10); }
 // ---------- สูตร (CostMenu + RcpDtls) + ราคาทุนต่อหน่วย ----------
 let bridge = {};   // sales itemCode (BOT) -> Kios (รหัสเมนูในสูตร)
 let recipe = {};   // เมนูcode -> { name, items:[{ing, per}] }
-let menuCost = {}; // รหัสขาย (BOT_ItemCode) -> ต้นทุนวัตถุดิบต่อหน่วย (บาท) — จาก CostMenu คอลัมน์ H
-// หมายเหตุต้นทุน: ค่านี้เป็น "ประมาณการ" จากต้นทุนต่อเมนูใน CostMenu ยังไม่หักกรณีบุฟเฟ่ต์นับเนื้อซ้ำ
-// (เมนู (กก) กับ (ที่) ของวัตถุดิบเดียวกัน) ซึ่ง NARAI OFFICE หักออก — ปรับ exclusion ได้ทาง env เมื่อทราบกติกาแน่นอน
+let menuCost = {}; // รหัสขาย (BOT_ItemCode) -> ต้นทุนต่อหน่วย (บาท) — จาก CostMenu คอลัมน์ H (= cost sheet gid 1742903365 คอลัมน์สุดท้าย)
 const COST_MENU_COL = Number(process.env.COST_MENU_COL || 7); // คอลัมน์ต้นทุนต่อหน่วยใน CostMenu (0-based, H=7)
 
 async function loadSheets() {
@@ -65,60 +77,53 @@ async function loadSheets() {
   console.log(`โหลดสูตรแล้ว: bridge ${Object.keys(b).length}, recipe ${Object.keys(r).length}, menuCost ${Object.keys(mc2).length}`);
 }
 
-// ต้นทุนรวม (ประมาณการ, บาท) จาก map รหัสขาย -> จำนวนที่ขาย x ต้นทุนต่อหน่วยใน CostMenu
-function computeCostFromSales(salesByItem) {
-  let total = 0;
-  for (const [ic, q] of Object.entries(salesByItem)) {
-    if (!q) continue;
-    const cpu = menuCost[ic]; if (cpu == null) continue;
-    total += q * cpu;
-  }
-  return total;
-}
-
-// ---------- cache ยอดขายรายวัน: date -> { outletID -> { itemCode -> qty } } ----------
-const salesCache = new Map();   // date -> { fetchedAt, outlets: Map }
+// ---------- cache ยอดขายรายวัน ----------
+const salesCache = new Map();   // date -> { fetchedAt, outlets, dashItems, dashBill }
 const inflight = new Map();     // date -> Promise (กันยิงซ้ำพร้อมกัน)
 
 async function fetchDay(date) {
-  const r = await fetch(`${SALES_BASE}?start=${encodeURIComponent(date)}&end=${encodeURIComponent(date)}`);
-  if (!r.ok) throw new Error('sales API ' + r.status);
-  const json = await r.json();
-  const rows = (json && json.data) ? json.data : [];
-  const outlets = new Map();          // usage: oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
-  const dashRaw = new Map();          // dashboard: oid -> { gross, orders: Map<orderID,{gross,cover}> }
-  for (const x of rows) {
+  const q = `?start=${encodeURIComponent(date)}&end=${encodeURIComponent(date)}`;
+  const [rTran, rPaid] = await Promise.all([fetch(`${SALES_BASE}${q}`), fetch(`${PAID_BASE}${q}`)]);
+  if (!rTran.ok) throw new Error('sales API ' + rTran.status);
+  const tranRows = ((await rTran.json()) || {}).data || [];
+  const paidRows = rPaid.ok ? (((await rPaid.json()) || {}).data || []) : [];
+
+  const outlets = new Map();    // usage (สำหรับ usagebymenu): oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
+  const dashItems = new Map();  // แดชบอร์ด: oid -> { itemCode(nstr) -> qty } (ไม่ void, ตัดโต๊ะ 600) — แยกหมวดต้นทุน/นับคนตอน query
+  for (const x of tranRows) {
     if (x.void) continue;
     const oid = Number(x.outletID);
-    const gross = Number(x.grossPrice) || 0;
-
-    // ---- ยอดขาย/บิล/ลูกค้า (นับทุกไอเทมที่ไม่ void รวมโต๊ะ 600) ----
-    let dr = dashRaw.get(oid); if (!dr) { dr = { gross: 0, orders: new Map() }; dashRaw.set(oid, dr); }
-    dr.gross += gross;
-    const ord = dr.orders.get(x.orderID) || { gross: 0, cover: 0 };
-    ord.gross += gross;
-    ord.cover = Math.max(ord.cover, Number(x.cover) || 0);
-    dr.orders.set(x.orderID, ord);
-
-    // ---- usage (สำหรับคิดต้นทุน): ตัดโต๊ะ 600 + ไอเทมที่ตั้งว่าไม่คิด ----
-    if (Number(x.tableID) === 600) continue;
     const ic = nstr(x.itemCode); if (!ic) continue;
+    const qty = Number(x.quantity) || 0;
+
+    // ---- แดชบอร์ด: เก็บ qty ต่อ itemCode (ตัดเฉพาะโต๊ะ 600) ----
+    if (!dashExclTable(x.tableID)) {
+      let di = dashItems.get(oid); if (!di) { di = {}; dashItems.set(oid, di); }
+      di[ic] = (di[ic] || 0) + qty;
+    }
+
+    // ---- usage (ยอดใช้แยกเมนู): ตัดโต๊ะ 600 + ไอเทมที่ตั้งว่าไม่คิด ----
+    if (Number(x.tableID) === 600) continue;
     if (EXCLUDE_ITEMCODES.has(ic)) continue;
     const tid = String(x.tableID == null ? '?' : x.tableID);
-    const qty = Number(x.quantity) || 0;
     let m = outlets.get(oid); if (!m) { m = {}; outlets.set(oid, m); }
     let e = m[ic]; if (!e) { e = { total: 0, tbl: {} }; m[ic] = e; }
     e.total += qty;
     e.tbl[tid] = (e.tbl[tid] || 0) + qty;
   }
-  // สรุป dashboard ต่อสาขา: นับบิลเฉพาะออเดอร์ที่มียอด > 0 (ตัดออเดอร์เตรียม/พนักงานยอด 0)
-  const dash = new Map();
-  for (const [oid, dr] of dashRaw) {
-    let bills = 0, covers = 0;
-    for (const o of dr.orders.values()) { if (o.gross > 0) { bills++; covers += o.cover; } }
-    dash.set(oid, { gross: dr.gross, bills, covers });
+
+  // ---- บิลที่จ่ายแล้ว (ยอดขาย/จำนวนบิล): ตัดโต๊ะ 600 ----
+  const dashBill = new Map();   // oid -> { sumBill, sumVat, count }
+  for (const r of paidRows) {
+    if (dashExclTable(r.tableID)) continue;
+    const oid = Number(r.outletID);
+    let b = dashBill.get(oid); if (!b) { b = { sumBill: 0, sumVat: 0, count: 0 }; dashBill.set(oid, b); }
+    b.sumBill += parseFloat(r.billTotal) || 0;
+    b.sumVat += parseFloat(r.vat) || 0;
+    b.count += 1;
   }
-  return { outlets, dash };
+
+  return { outlets, dashItems, dashBill };
 }
 
 async function getDay(date) {
@@ -127,8 +132,8 @@ async function getDay(date) {
   if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
-    const { outlets, dash } = await fetchDay(date);
-    const entry = { fetchedAt: Date.now(), outlets, dash };
+    const { outlets, dashItems, dashBill } = await fetchDay(date);
+    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashBill };
     salesCache.set(date, entry);
     inflight.delete(date);
     return entry;
@@ -239,39 +244,55 @@ app.get('/usagebytable', async (req, res) => {
   }
 });
 
-// แดชบอร์ดสาขา: ยอดขาย/ต้นทุน/กำไร/บิล/ลูกค้า + ยอดขายรายวัน (ดึงจาก cache รายวัน)
+// แดชบอร์ดสาขา: ยอดขาย/ต้นทุน/กำไร/บิล/ลูกค้า + ยอดขายรายวัน (สูตรตรงกับ NARAI OFFICE)
+//   ยอดขาย = Σ billTotal − Σ vat (จาก cpaidbetweendate, ตัดโต๊ะ 600)
+//   ต้นทุนรวม = Σ menuCost[itemCode]×qty (ตัดโต๊ะ 600, ตัดไอเทมไม่นับ, แยกวัตถุดิบโต๊ะเตรียม(กก))
+//   กำไร = ยอดขาย(ก่อน VAT) − ต้นทุนรวม | ลูกค้า = Σ qty ไอเทมบุฟเฟ่ | เฉลี่ย/บิล = Σ billTotal / จำนวนบิล
 async function computeDashboard(outletNum, start, end) {
   const days = dateRange(start, end);
-  let sales = 0, bills = 0, covers = 0;
+  let sumBill = 0, sumVat = 0, bills = 0;
+  let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
   const daily = [];
-  const salesByItem = {};
   const CONC = 6;
   for (let i = 0; i < days.length; i += CONC) {
     const slice = days.slice(i, i + CONC);
     const chunk = await Promise.all(slice.map(getDay));
     for (let j = 0; j < slice.length; j++) {
       const date = slice[j]; const entry = chunk[j];
-      const d = entry.dash.get(outletNum);
-      const dayGross = d ? d.gross : 0;
-      sales += dayGross;
-      bills += d ? d.bills : 0;
-      covers += d ? d.covers : 0;
-      daily.push({ date, sales: Number(dayGross.toFixed(2)) });
-      const u = entry.outlets.get(outletNum);
-      if (u) for (const [ic, e] of Object.entries(u)) salesByItem[ic] = (salesByItem[ic] || 0) + e.total;
+
+      // ยอดขาย/บิล จากบิลที่จ่ายแล้ว
+      const b = entry.dashBill.get(outletNum);
+      const dayBill = b ? b.sumBill : 0;
+      const dayVat = b ? b.sumVat : 0;
+      sumBill += dayBill; sumVat += dayVat;
+      bills += b ? b.count : 0;
+      daily.push({ date, sales: Number((dayBill - dayVat).toFixed(2)) });
+
+      // ต้นทุน/ลูกค้า จากรายการ (detail)
+      const di = entry.dashItems.get(outletNum);
+      if (di) for (const [ic, qty] of Object.entries(di)) {
+        if (dashCoverItem(ic)) covers += qty;
+        const c = (menuCost[ic] ?? 0) * qty;
+        if (dashExclItem(ic)) { excludedCost += c; excludedQty += qty; }
+        else if (dashPrepKg(ic)) { prepCost += c; prepQty += qty; }
+        else totalCost += c;
+      }
     }
   }
-  const cost = computeCostFromSales(salesByItem);
-  const profit = sales - cost;
-  const avgPerBill = bills ? (sales * 1.07) / bills : 0; // ยอดเฉลี่ยต่อบิล = ยอดรวม (รวม VAT 7%) / จำนวนบิล
+  const sales = sumBill - sumVat;            // ยอดขายก่อน VAT
+  const profit = sales - totalCost;
+  const avgPerBill = bills ? sumBill / bills : 0; // เฉลี่ยต่อบิล = ยอดบิลรวม (รวม VAT) / จำนวนบิล
   return {
     sales: Number(sales.toFixed(2)),
-    cost: Number(cost.toFixed(2)),
+    cost: Number(totalCost.toFixed(2)),
+    prepCost: Number(prepCost.toFixed(2)),
+    prepQty: Number(prepQty.toFixed(2)),
     profit: Number(profit.toFixed(2)),
+    excludedCost: Number(excludedCost.toFixed(2)),
+    excludedQty: Number(excludedQty.toFixed(2)),
     bills,
-    covers,
+    covers: Number(covers.toFixed(2)),
     avgPerBill: Number(avgPerBill.toFixed(2)),
-    costIsEstimate: true, // ต้นทุน/กำไรเป็นประมาณการจาก CostMenu (ยังไม่หักบุฟเฟ่ต์นับซ้ำ)
     daily,
   };
 }

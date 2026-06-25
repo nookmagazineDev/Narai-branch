@@ -40,13 +40,17 @@ Stop-Service NaraiUsageAPI           # หยุด
 - `GET /usagebymenu?branch&start&end` — ยอดใช้วัตถุดิบแยกตามเมนู
 - `GET /usagebytable?branch&start&end&menu` — เมนูที่เลือกขายโต๊ะไหนบ้าง
 - `GET /dashboard?branch&start&end` — **แดชบอร์ดสาขา** (ใหม่)
-  - คืน `{ status, branch, outletId, data:{ sales, cost, profit, bills, covers, avgPerBill, costIsEstimate, daily:[{date,sales}] } }`
+  - คืน `{ status, branch, outletId, data:{ sales, cost, prepCost, prepQty, profit, excludedCost, excludedQty, bills, covers, avgPerBill, daily:[{date,sales}] } }`
   - ใช้ cache รายวันชุดเดียวกับ usage จึงเร็ว และ payload เล็ก (เลี่ยงดึงดิบ ~300MB/เดือนมาที่เบราว์เซอร์)
-  - **ยอดขาย** = Σ `grossPrice` (ไม่ void), **บิล** = ออเดอร์ที่ยอด>0, **ลูกค้า** = Σ cover/ออเดอร์, **เฉลี่ย/บิล** = ยอด×1.07/บิล
-    (ตรวจกับหน้า NARAI OFFICE แล้ว: ยอดขาย/บิล ต่าง <0.5%, ลูกค้า ตรงเป๊ะ)
-  - ⚠️ **ต้นทุน/กำไรเป็นประมาณการ** (`costIsEstimate:true`): คิดจากต้นทุนต่อเมนูใน `CostMenu` คอลัมน์ H
-    ยังไม่หักกรณีบุฟเฟ่ต์ที่นับเนื้อ (กก)/(ที่) ซ้ำ จึง**สูงกว่า**ระบบ NARAI OFFICE — จะปรับให้ตรงเมื่อได้กติกาหักลบที่แน่นอน
-    (ปรับคอลัมน์ต้นทุนได้ด้วย env `COST_MENU_COL`, ค่าเริ่มต้น 7 = H)
+  - **สูตรตรงกับ NARAI OFFICE (ตรวจแล้วตรงทุกการ์ดถึงทศนิยม):**
+    - **ยอดขาย** = Σ `billTotal` − Σ `vat` จาก `cpaidbetweendate` (ตัดโต๊ะ 600)
+    - **บิล** = จำนวนบิลที่จ่ายแล้ว, **เฉลี่ย/บิล** = Σ`billTotal`/บิล (รวม VAT)
+    - **ลูกค้า** = Σ qty ไอเทมบุฟเฟ่ `[101001-101004,101107,101108]`
+    - **ต้นทุนรวม** = Σ `CostMenu`[itemCode]×qty (ตัดโต๊ะ 600 + ไอเทม `206001`/`500002-500026`, แยกวัตถุดิบ "โต๊ะเตรียม(กก)" ออก)
+    - **ต้นทุนโต๊ะเตรียม(กก)** = วัตถุดิบ `PREP_KG_ITEMS` (12 รหัส), **รายการไม่นับคำนวณ** = มูลค่าไอเทมที่ตัดออก
+    - **กำไร** = ยอดขาย(ก่อน VAT) − ต้นทุนรวม
+  - กติกา exclude/prep/cover ตั้งเป็นค่าคงที่ในไฟล์ (`DASH_EXCLUDE_*`, `DASH_PREP_KG_ITEMS`, `DASH_COVER_ITEMS`) — ตรงกับ NARAI OFFICE
+  - ต้องเข้าถึง `cpaidbetweendate` ได้ (ตั้ง env `PAID_BASE` ทับได้ ค่าเริ่มต้น = `SALES_BASE` แทน `ctranbetweendate`→`cpaidbetweendate`)
 
 ## ฝั่ง Vercel
 `api/usagemenu.js` และ `api/dashboard.js` ชี้มาที่ `http://storenarai.dyndns.tv:8787` (ตั้ง env `USAGE_API_BASE` ทับได้)

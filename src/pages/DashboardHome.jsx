@@ -2,7 +2,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   DollarSign, Layers, TrendingUp, FileText, Users, BarChart3,
-  RefreshCw, Calendar, AlertCircle,
+  RefreshCw, Calendar, AlertCircle, Scale, Ban,
 } from 'lucide-react';
 import { fetchDashboard, presetRange, PRESETS, fmtDate } from '../services/dashboardApi';
 
@@ -139,7 +139,6 @@ export default function DashboardHome() {
 
   const d = data || {};
   const profitPositive = (d.profit ?? 0) >= 0;
-  const estBadge = d.costIsEstimate ? 'ประมาณการ' : null;
 
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
 
@@ -226,17 +225,22 @@ export default function DashboardHome() {
       )}
 
       {/* การ์ดสรุป */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="ยอดขายรวมทั้งหมด" value={baht(d.sales)} sub="ก่อน VAT (Bill − VAT)"
           icon={DollarSign} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
         />
         <StatCard
-          title="ต้นทุนรวมทั้งหมด" value={baht(d.cost)} sub="ต้นทุนวัตถุดิบ" badge={estBadge}
+          title="ต้นทุนรวมทั้งหมด" value={baht(d.cost)} sub="ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)"
           icon={Layers} accent={{ text: 'text-rose-500', bg: 'bg-rose-50', icon: 'text-rose-500' }}
         />
         <StatCard
-          title="กำไร / ขาดทุนสุทธิ" value={baht(d.profit)} sub="ยอดขาย − ต้นทุน" badge={estBadge}
+          title="ต้นทุนโต๊ะเตรียม(กก)" value={baht(d.prepCost)}
+          sub={`${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
+          icon={Scale} accent={{ text: 'text-orange-500', bg: 'bg-orange-50', icon: 'text-orange-500' }}
+        />
+        <StatCard
+          title="กำไร / ขาดทุนสุทธิ" value={baht(d.profit)} sub="ยอดขาย − ต้นทุนรวม"
           icon={TrendingUp}
           accent={profitPositive
             ? { text: 'text-indigo-600', bg: 'bg-indigo-50', icon: 'text-indigo-600' }
@@ -253,6 +257,11 @@ export default function DashboardHome() {
         <StatCard
           title="จำนวนลูกค้าทั้งหมด" value={intf(d.covers)} sub="คน (Covers)"
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
+        />
+        <StatCard
+          title="รายการไม่นับคำนวณ" value={baht(d.excludedCost)}
+          sub={`${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
+          icon={Ban} accent={{ text: 'text-gray-500', bg: 'bg-gray-100', icon: 'text-gray-500' }}
         />
       </div>
 
@@ -271,12 +280,6 @@ export default function DashboardHome() {
         )}
       </div>
 
-      {d.costIsEstimate && (
-        <p className="text-xs text-gray-400">
-          * ต้นทุน/กำไร เป็นค่าประมาณการจากต้นทุนต่อเมนู (CostMenu) ยังไม่หักกรณีบุฟเฟ่ต์ที่นับวัตถุดิบซ้ำ —
-          ตัวเลขอาจสูงกว่าระบบ NARAI OFFICE จะปรับให้ตรงเมื่อได้กติกาการคิดต้นทุนที่แน่นอน
-        </p>
-      )}
     </div>
   );
 }
