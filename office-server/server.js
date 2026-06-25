@@ -33,15 +33,25 @@ function normItem(id) { return id == null ? '' : String(id).replace(/\.0+$/, '')
 function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return JSON.parse(t.substring(a, b + 1)); }
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 
-// ---------- สูตร (CostMenu + RcpDtls) ----------
+// ---------- สูตร (CostMenu + RcpDtls) + ราคาทุนต่อหน่วย ----------
 let bridge = {};   // sales itemCode (BOT) -> Kios (รหัสเมนูในสูตร)
 let recipe = {};   // เมนูcode -> { name, items:[{ing, per}] }
+let menuCost = {}; // รหัสขาย (BOT_ItemCode) -> ต้นทุนวัตถุดิบต่อหน่วย (บาท) — จาก CostMenu คอลัมน์ H
+// หมายเหตุต้นทุน: ค่านี้เป็น "ประมาณการ" จากต้นทุนต่อเมนูใน CostMenu ยังไม่หักกรณีบุฟเฟ่ต์นับเนื้อซ้ำ
+// (เมนู (กก) กับ (ที่) ของวัตถุดิบเดียวกัน) ซึ่ง NARAI OFFICE หักออก — ปรับ exclusion ได้ทาง env เมื่อทราบกติกาแน่นอน
+const COST_MENU_COL = Number(process.env.COST_MENU_COL || 7); // คอลัมน์ต้นทุนต่อหน่วยใน CostMenu (0-based, H=7)
 
 async function loadSheets() {
   const get = async (name) => parseGviz(await (await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(name)}`)).text());
   const [cm, rc] = await Promise.all([get('CostMenu'), get('RcpDtls')]);
-  const b = {}, r = {};
-  for (const row of (cm.table.rows || [])) { const c = row.c || []; const a = nstr(c[0] && c[0].v), k = nstr(c[2] && c[2].v); if (a && k) b[a] = k; }
+  const b = {}, r = {}, mc2 = {};
+  for (const row of (cm.table.rows || [])) {
+    const c = row.c || [];
+    const a = nstr(c[0] && c[0].v), k = nstr(c[2] && c[2].v);
+    if (a && k) b[a] = k;
+    const cost = Number(c[COST_MENU_COL] && c[COST_MENU_COL].v);
+    if (a && !isNaN(cost)) mc2[a] = cost;
+  }
   for (const row of (rc.table.rows || [])) {
     const c = row.c || []; const mc = nstr(c[0] && c[0].v); if (!mc || isNaN(Number(mc))) continue;
     const ing = normItem(c[4] && c[4].v); if (!ing) continue;
@@ -51,8 +61,19 @@ async function loadSheets() {
     if (!r[mc]) r[mc] = { name, items: [] };
     r[mc].items.push({ ing, per });
   }
-  bridge = b; recipe = r;
-  console.log(`โหลดสูตรแล้ว: bridge ${Object.keys(b).length}, recipe ${Object.keys(r).length}`);
+  bridge = b; recipe = r; menuCost = mc2;
+  console.log(`โหลดสูตรแล้ว: bridge ${Object.keys(b).length}, recipe ${Object.keys(r).length}, menuCost ${Object.keys(mc2).length}`);
+}
+
+// ต้นทุนรวม (ประมาณการ, บาท) จาก map รหัสขาย -> จำนวนที่ขาย x ต้นทุนต่อหน่วยใน CostMenu
+function computeCostFromSales(salesByItem) {
+  let total = 0;
+  for (const [ic, q] of Object.entries(salesByItem)) {
+    if (!q) continue;
+    const cpu = menuCost[ic]; if (cpu == null) continue;
+    total += q * cpu;
+  }
+  return total;
 }
 
 // ---------- cache ยอดขายรายวัน: date -> { outletID -> { itemCode -> qty } } ----------
@@ -64,12 +85,25 @@ async function fetchDay(date) {
   if (!r.ok) throw new Error('sales API ' + r.status);
   const json = await r.json();
   const rows = (json && json.data) ? json.data : [];
-  const outlets = new Map();
+  const outlets = new Map();          // usage: oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
+  const dashRaw = new Map();          // dashboard: oid -> { gross, orders: Map<orderID,{gross,cover}> }
   for (const x of rows) {
     if (x.void) continue;
-    if (Number(x.tableID) === 600) continue; // โต๊ะ 600 = เศษ/อาหารพนักงาน ไม่นับเป็นยอดใช้
-    const oid = Number(x.outletID); const ic = nstr(x.itemCode); if (!ic) continue;
-    if (EXCLUDE_ITEMCODES.has(ic)) continue; // ไอเทมที่ตั้งว่าไม่ต้องคิด
+    const oid = Number(x.outletID);
+    const gross = Number(x.grossPrice) || 0;
+
+    // ---- ยอดขาย/บิล/ลูกค้า (นับทุกไอเทมที่ไม่ void รวมโต๊ะ 600) ----
+    let dr = dashRaw.get(oid); if (!dr) { dr = { gross: 0, orders: new Map() }; dashRaw.set(oid, dr); }
+    dr.gross += gross;
+    const ord = dr.orders.get(x.orderID) || { gross: 0, cover: 0 };
+    ord.gross += gross;
+    ord.cover = Math.max(ord.cover, Number(x.cover) || 0);
+    dr.orders.set(x.orderID, ord);
+
+    // ---- usage (สำหรับคิดต้นทุน): ตัดโต๊ะ 600 + ไอเทมที่ตั้งว่าไม่คิด ----
+    if (Number(x.tableID) === 600) continue;
+    const ic = nstr(x.itemCode); if (!ic) continue;
+    if (EXCLUDE_ITEMCODES.has(ic)) continue;
     const tid = String(x.tableID == null ? '?' : x.tableID);
     const qty = Number(x.quantity) || 0;
     let m = outlets.get(oid); if (!m) { m = {}; outlets.set(oid, m); }
@@ -77,19 +111,27 @@ async function fetchDay(date) {
     e.total += qty;
     e.tbl[tid] = (e.tbl[tid] || 0) + qty;
   }
-  return outlets;
+  // สรุป dashboard ต่อสาขา: นับบิลเฉพาะออเดอร์ที่มียอด > 0 (ตัดออเดอร์เตรียม/พนักงานยอด 0)
+  const dash = new Map();
+  for (const [oid, dr] of dashRaw) {
+    let bills = 0, covers = 0;
+    for (const o of dr.orders.values()) { if (o.gross > 0) { bills++; covers += o.cover; } }
+    dash.set(oid, { gross: dr.gross, bills, covers });
+  }
+  return { outlets, dash };
 }
 
 async function getDay(date) {
   const cached = salesCache.get(date);
   const isToday = date >= todayStr();
-  if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached.outlets;
+  if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
-    const outlets = await fetchDay(date);
-    salesCache.set(date, { fetchedAt: Date.now(), outlets });
+    const { outlets, dash } = await fetchDay(date);
+    const entry = { fetchedAt: Date.now(), outlets, dash };
+    salesCache.set(date, entry);
     inflight.delete(date);
-    return outlets;
+    return entry;
   })().catch((e) => { inflight.delete(date); throw e; });
   inflight.set(date, p);
   return p;
@@ -108,8 +150,8 @@ async function computeUsageByMenu(outletNum, start, end) {
   const CONC = 6;
   for (let i = 0; i < days.length; i += CONC) {
     const chunk = await Promise.all(days.slice(i, i + CONC).map(getDay));
-    for (const outlets of chunk) {
-      const m = outlets.get(outletNum); if (!m) continue;
+    for (const entry of chunk) {
+      const m = entry.outlets.get(outletNum); if (!m) continue;
       for (const [ic, e] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + e.total;
     }
   }
@@ -144,8 +186,8 @@ async function computeTablesForMenu(outletNum, start, end, menuName) {
   const CONC = 6;
   for (let i = 0; i < days.length; i += CONC) {
     const chunk = await Promise.all(days.slice(i, i + CONC).map(getDay));
-    for (const outlets of chunk) {
-      const m = outlets.get(outletNum); if (!m) continue;
+    for (const entry of chunk) {
+      const m = entry.outlets.get(outletNum); if (!m) continue;
       for (const [ic, e] of Object.entries(m)) {
         const kc = bridge[ic]; if (!kc || !recipe[kc]) continue;
         if (recipe[kc].name !== menuName) continue;
@@ -191,6 +233,59 @@ app.get('/usagebytable', async (req, res) => {
     if (!Object.keys(recipe).length) await loadSheets();
     const data = await computeTablesForMenu(outletNum, start, end, menu);
     res.json({ status: 'success', data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// แดชบอร์ดสาขา: ยอดขาย/ต้นทุน/กำไร/บิล/ลูกค้า + ยอดขายรายวัน (ดึงจาก cache รายวัน)
+async function computeDashboard(outletNum, start, end) {
+  const days = dateRange(start, end);
+  let sales = 0, bills = 0, covers = 0;
+  const daily = [];
+  const salesByItem = {};
+  const CONC = 6;
+  for (let i = 0; i < days.length; i += CONC) {
+    const slice = days.slice(i, i + CONC);
+    const chunk = await Promise.all(slice.map(getDay));
+    for (let j = 0; j < slice.length; j++) {
+      const date = slice[j]; const entry = chunk[j];
+      const d = entry.dash.get(outletNum);
+      const dayGross = d ? d.gross : 0;
+      sales += dayGross;
+      bills += d ? d.bills : 0;
+      covers += d ? d.covers : 0;
+      daily.push({ date, sales: Number(dayGross.toFixed(2)) });
+      const u = entry.outlets.get(outletNum);
+      if (u) for (const [ic, e] of Object.entries(u)) salesByItem[ic] = (salesByItem[ic] || 0) + e.total;
+    }
+  }
+  const cost = computeCostFromSales(salesByItem);
+  const profit = sales - cost;
+  const avgPerBill = bills ? (sales * 1.07) / bills : 0; // ยอดเฉลี่ยต่อบิล = ยอดรวม (รวม VAT 7%) / จำนวนบิล
+  return {
+    sales: Number(sales.toFixed(2)),
+    cost: Number(cost.toFixed(2)),
+    profit: Number(profit.toFixed(2)),
+    bills,
+    covers,
+    avgPerBill: Number(avgPerBill.toFixed(2)),
+    costIsEstimate: true, // ต้นทุน/กำไรเป็นประมาณการจาก CostMenu (ยังไม่หักบุฟเฟ่ต์นับซ้ำ)
+    daily,
+  };
+}
+
+app.get('/dashboard', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase().trim();
+    const start = String(req.query.start || ''); const end = String(req.query.end || '');
+    if (!start || !end) return res.status(400).json({ status: 'error', message: 'missing start/end' });
+    const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
+    if (!outletNum) return res.status(400).json({ status: 'error', message: 'unknown branch/outlet' });
+    if (!Object.keys(recipe).length) await loadSheets();
+    const data = await computeDashboard(outletNum, start, end);
+    res.json({ status: 'success', branch, outletId: outletNum, start, end, data });
   } catch (e) {
     console.error(e);
     res.status(500).json({ status: 'error', message: e.message });

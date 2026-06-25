@@ -36,8 +36,22 @@ Stop-Service NaraiUsageAPI           # หยุด
 - `SALES_BASE` (URL ของ ctranbetweendate)
 - `UPNP=off` ถ้าจะปิด UPnP (กรณี forward พอร์ตเองที่ router)
 
+## Routes
+- `GET /usagebymenu?branch&start&end` — ยอดใช้วัตถุดิบแยกตามเมนู
+- `GET /usagebytable?branch&start&end&menu` — เมนูที่เลือกขายโต๊ะไหนบ้าง
+- `GET /dashboard?branch&start&end` — **แดชบอร์ดสาขา** (ใหม่)
+  - คืน `{ status, branch, outletId, data:{ sales, cost, profit, bills, covers, avgPerBill, costIsEstimate, daily:[{date,sales}] } }`
+  - ใช้ cache รายวันชุดเดียวกับ usage จึงเร็ว และ payload เล็ก (เลี่ยงดึงดิบ ~300MB/เดือนมาที่เบราว์เซอร์)
+  - **ยอดขาย** = Σ `grossPrice` (ไม่ void), **บิล** = ออเดอร์ที่ยอด>0, **ลูกค้า** = Σ cover/ออเดอร์, **เฉลี่ย/บิล** = ยอด×1.07/บิล
+    (ตรวจกับหน้า NARAI OFFICE แล้ว: ยอดขาย/บิล ต่าง <0.5%, ลูกค้า ตรงเป๊ะ)
+  - ⚠️ **ต้นทุน/กำไรเป็นประมาณการ** (`costIsEstimate:true`): คิดจากต้นทุนต่อเมนูใน `CostMenu` คอลัมน์ H
+    ยังไม่หักกรณีบุฟเฟ่ต์ที่นับเนื้อ (กก)/(ที่) ซ้ำ จึง**สูงกว่า**ระบบ NARAI OFFICE — จะปรับให้ตรงเมื่อได้กติกาหักลบที่แน่นอน
+    (ปรับคอลัมน์ต้นทุนได้ด้วย env `COST_MENU_COL`, ค่าเริ่มต้น 7 = H)
+
 ## ฝั่ง Vercel
-`api/usagemenu.js` ชี้มาที่ `http://storenarai.dyndns.tv:8787` อยู่แล้ว (hardcode) — ไม่ต้องตั้ง env
+`api/usagemenu.js` และ `api/dashboard.js` ชี้มาที่ `http://storenarai.dyndns.tv:8787` (ตั้ง env `USAGE_API_BASE` ทับได้)
+
+> ⚠️ route `/dashboard` เป็นโค้ดใหม่ใน `server.js` — ต้อง **`Restart-Service NaraiUsageAPI`** บนเครื่องออฟฟิศก่อน หน้าเว็บถึงจะดึงได้
 
 ## ข้อควรรู้
 - เครื่องนี้ต้องเปิดตลอด (pm2 สตาร์ทเองหลังล็อกอิน Windows)

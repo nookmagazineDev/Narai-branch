@@ -18,4 +18,11 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // โค้ดฝั่งเซิร์ฟเวอร์ (Vercel serverless + office-server) รันบน Node
+    files: ['api/**/*.js', 'office-server/**/*.js', '*.cjs'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 ])
