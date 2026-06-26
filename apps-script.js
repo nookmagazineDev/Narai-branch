@@ -196,6 +196,7 @@ function doPost(e) {
       // D (index 3): ชื่อ - สกุล
       // E (index 4): สังกัด
       // F (index 5): ประเภท
+      // H (index 7): วันที่เริ่มทำงาน
       // I (index 8): ตำแหน่ง
       // M (index 12): เลขประจำตัวประชาชน
       // Q (index 16): ที่อยู่
@@ -209,6 +210,7 @@ function doPost(e) {
       row[4] = data.department || "";
       row[5] = data.type || "";
       row[6] = "ทำงาน";            // คอลัมน์ G (สถานะ) — พนักงานใหม่ตั้งเป็น "ทำงาน"
+      row[7] = data.startDate || ""; // คอลัมน์ H (วันที่เริ่มทำงาน) ใช้วันที่บันทึกตรงกับฟอร์ม
       row[8] = data.position || "";
       row[12] = data.idCard || "";
       row[16] = data.address || "";
@@ -256,7 +258,6 @@ function doPost(e) {
         }
       }
       row[72] = fileUrls.join(", ");
-      row[73] = data.startDate || "";
 
       var row2 = [
         formattedDate,
