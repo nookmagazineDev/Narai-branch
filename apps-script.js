@@ -38,6 +38,56 @@ function generateNextHrCode(sheet) {
   return hrCode;
 }
 
+// --- Helper: แปลงค่าวันที่ (Date object หรือ string dd/mm/yyyy พ.ศ./ค.ศ.) ให้เป็น Date object ---
+function parseFlexibleDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  var s = String(val).trim();
+  if (!s) return null;
+  if (s.indexOf('/') !== -1) {
+    var parts = s.split('/');
+    if (parts.length === 3) {
+      var y = parseInt(parts[2], 10);
+      if (y > 2500) y -= 543;
+      var d = new Date(y, parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+      return isNaN(d.getTime()) ? null : d;
+    }
+  }
+  var d2 = new Date(s);
+  if (!isNaN(d2.getTime())) {
+    if (d2.getFullYear() > 2500) d2.setFullYear(d2.getFullYear() - 543);
+    return d2;
+  }
+  return null;
+}
+
+// --- Helper: คำนวณระยะเวลาทำงานทั้งหมด เป็นข้อความภาษาไทย (ปี/เดือน/วัน) ---
+function formatDurationThai(startVal, endVal) {
+  var start = parseFlexibleDate(startVal);
+  var end = parseFlexibleDate(endVal) || new Date();
+  if (!start) return '-';
+
+  var years = end.getFullYear() - start.getFullYear();
+  var months = end.getMonth() - start.getMonth();
+  var days = end.getDate() - start.getDate();
+
+  if (days < 0) {
+    months--;
+    days += 30;
+  }
+  if (months < 0) {
+    years--;
+    months += 12;
+  }
+
+  var parts = [];
+  if (years > 0) parts.push(years + ' ปี');
+  if (months > 0) parts.push(months + ' เดือน');
+  if (years === 0 && days > 0) parts.push(days + ' วัน');
+
+  return parts.length === 0 ? '0 วัน' : parts.join(' ');
+}
+
 function setupPermissions() {
   // บังคับให้ Google รู้ว่าเราต้องการสิทธิ์ "เขียน" ไฟล์ลง Drive
   var folder = DriveApp.getFolderById("1i-8K4E97vwcghQyT1yJ_TpFTt0irbZtR");
@@ -339,21 +389,56 @@ function doPost(e) {
       var sheet = ss.getSheetByName('DATA');
       if (!sheet) throw new Error('Sheet DATA not found');
       var hrCode = data.hrCode;
+      if (!hrCode) throw new Error('ไม่มีรหัสพนักงาน');
+      if (!data.resignDate) throw new Error('กรุณาระบุวันที่ลาออก');
+
       var values = sheet.getDataRange().getValues();
       var found = false;
+      var empRow = null;
       for (var i = 1; i < values.length; i++) {
         if (values[i][2] == hrCode) {
+          empRow = values[i];
           sheet.getRange(i + 1, 7).setValue('ลาออก'); // Column G is index 6, so column 7
           found = true;
           break;
         }
       }
-      if (found) {
-        response.status = 'success';
-        response.message = 'แจ้งลาออกสำเร็จ';
-      } else {
+
+      if (!found) {
         response.status = 'error';
         response.message = 'ไม่พบรหัสพนักงานนี้';
+      } else {
+        var sheetOut = ss.getSheetByName('พนักงานออก');
+        if (!sheetOut) {
+          sheetOut = ss.insertSheet('พนักงานออก');
+          var outHeaders = [
+            'Timestamp', 'รหัส HR', 'ชื่อ - สกุล', 'สังกัด', 'ประเภท',
+            'วันที่เข้าทำงาน', 'วันที่ลาออก', 'สาเหตุ', 'ระยะเวลาที่ทำงานทั้งหมด', 'ผู้บันทึก'
+          ];
+          sheetOut.appendRow(outHeaders);
+          sheetOut.getRange('A1:J1').setFontWeight('bold');
+        }
+
+        var now = new Date();
+        var formattedNow = Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+        var startDate = empRow[7]; // คอลัมน์ H (วันเริ่มงาน)
+        var durationText = formatDurationThai(startDate, data.resignDate);
+
+        sheetOut.appendRow([
+          formattedNow,
+          empRow[2] || '',          // รหัส HR
+          empRow[3] || '',          // ชื่อ - สกุล
+          empRow[4] || '',          // สังกัด
+          empRow[5] || '',          // ประเภท
+          startDate || '',          // วันที่เข้าทำงาน
+          data.resignDate || '',    // วันที่ลาออก
+          data.reason || '',        // สาเหตุ
+          durationText,             // ระยะเวลาที่ทำงานทั้งหมด
+          data.recorder || 'Unknown'
+        ]);
+
+        response.status = 'success';
+        response.message = 'แจ้งลาออกสำเร็จ';
       }
 
     } else if (action === 'updateEmployeeLoga') {

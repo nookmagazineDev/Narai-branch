@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiCall } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function EmployeeList() {
@@ -16,6 +16,10 @@ export default function EmployeeList() {
   const [logaEdits, setLogaEdits] = useState({});   // hrCode -> ค่าที่กำลังแก้
   const [savingLoga, setSavingLoga] = useState(null);
   const [editingLoga, setEditingLoga] = useState(null);   // hrCode ที่กำลังเปิดช่องแก้ไขอยู่
+  const [resignTarget, setResignTarget] = useState(null); // { hrCode, fullName } พนักงานที่กำลังจะแจ้งลาออก
+  const [resignDate, setResignDate] = useState('');
+  const [resignReason, setResignReason] = useState('');
+  const [resignSubmitting, setResignSubmitting] = useState(false);
 
   const handleSaveLoga = async (emp) => {
     if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
@@ -88,21 +92,43 @@ export default function EmployeeList() {
     }
   };
 
-  const handleResign = async (hrCode, fullName) => {
-    if (!window.confirm(`คุณแน่ใจหรือไม่ว่าต้องการแจ้งลาออกสำหรับพนักงาน: ${fullName} (${hrCode})?`)) {
-      return;
-    }
+  const openResignModal = (hrCode, fullName) => {
+    setResignTarget({ hrCode, fullName });
+    setResignDate(new Date().toISOString().slice(0, 10));
+    setResignReason('');
+  };
+
+  const closeResignModal = () => {
+    setResignTarget(null);
+    setResignDate('');
+    setResignReason('');
+  };
+
+  const handleResignSubmit = async () => {
+    if (!resignTarget) return;
+    if (!resignDate) { toast.error('กรุณาระบุวันที่ลาออก'); return; }
+    if (!resignReason.trim()) { toast.error('กรุณาระบุสาเหตุการลาออก'); return; }
+
+    setResignSubmitting(true);
     const toastId = toast.loading('กำลังบันทึกข้อมูล...');
     try {
-      const response = await apiCall('resignEmployee', { hrCode });
+      const response = await apiCall('resignEmployee', {
+        hrCode: resignTarget.hrCode,
+        resignDate,
+        reason: resignReason.trim(),
+        recorder: user?.username || 'Unknown'
+      });
       if (response.status === 'success') {
         toast.success('แจ้งลาออกสำเร็จ', { id: toastId });
+        closeResignModal();
         fetchEmployees();
       } else {
         toast.error(response.message || 'เกิดข้อผิดพลาด', { id: toastId });
       }
     } catch (err) {
       toast.error('การเชื่อมต่อขัดข้อง', { id: toastId });
+    } finally {
+      setResignSubmitting(false);
     }
   };
 
@@ -459,7 +485,7 @@ export default function EmployeeList() {
                         )}
                         {emp.status !== 'ลาออก' && (
                           <button
-                            onClick={() => handleResign(emp.hrCode, emp.fullName)}
+                            onClick={() => openResignModal(emp.hrCode, emp.fullName)}
                             className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
                           >
                             แจ้งลาออก
@@ -474,6 +500,65 @@ export default function EmployeeList() {
           </table>
         </div>
       </div>
+
+      {/* Resign Modal */}
+      {resignTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2.5 bg-red-100 text-red-600 rounded-xl">
+                <LogOut className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">แจ้งลาออก</h3>
+                <p className="text-sm text-gray-500">{resignTarget.fullName} ({resignTarget.hrCode})</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">วันที่ลาออก</label>
+                <input
+                  type="date"
+                  value={resignDate}
+                  onChange={(e) => setResignDate(e.target.value)}
+                  className="block w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">สาเหตุ</label>
+                <textarea
+                  value={resignReason}
+                  onChange={(e) => setResignReason(e.target.value)}
+                  rows={3}
+                  placeholder="ระบุสาเหตุการลาออก..."
+                  className="block w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={closeResignModal}
+                disabled={resignSubmitting}
+                className="px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleResignSubmit}
+                disabled={resignSubmitting}
+                className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {resignSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                ยืนยันแจ้งลาออก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
