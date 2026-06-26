@@ -12,6 +12,32 @@ function isSameDate(date1, date2) {
   return d1.getTime() === d2.getTime();
 }
 
+// --- Helper: gen รหัส HR รูปแบบ YYMMNNN (ปี ค.ศ. 2 หลัก + เดือน 2 หลัก + เลขรัน 3 หลัก) ---
+// ตรวจสอบเลขซ้ำจากคอลัมน์ C ของชีท DATA แล้ววิ่งเลขถัดไปให้อัตโนมัติ
+function generateNextHrCode(sheet) {
+  var now = new Date();
+  var prefix = Utilities.formatDate(now, "Asia/Bangkok", "yyMM");
+
+  var existing = {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 0) {
+    var hrValues = sheet.getRange(1, 3, lastRow).getValues();
+    for (var r = 0; r < hrValues.length; r++) {
+      var v = hrValues[r][0];
+      if (v) existing[String(v).trim()] = true;
+    }
+  }
+
+  var running = 1;
+  var hrCode;
+  do {
+    hrCode = prefix + ("00" + running).slice(-3);
+    running++;
+  } while (existing[hrCode]);
+
+  return hrCode;
+}
+
 function setupPermissions() {
   // บังคับให้ Google รู้ว่าเราต้องการสิทธิ์ "เขียน" ไฟล์ลง Drive
   var folder = DriveApp.getFolderById("1i-8K4E97vwcghQyT1yJ_TpFTt0irbZtR");
@@ -76,18 +102,22 @@ function doPost(e) {
         sheet = ss.insertSheet('DATA');
       }
 
-      // Check for duplicate HR Code in DATA sheet (Column C = 3)
+      // รหัส HR ถูก gen ขึ้นเองโดยระบบ (YYMMNNN) ห้ามแก้ไขจากฝั่ง client
+      // ตรวจสอบซ้ำกับคอลัมน์ C ของชีท DATA อีกครั้งกันกรณีชนกัน (race condition) แล้ววิ่งเลขถัดไปให้
       var hrCodeToCheck = data.hrCode;
-      if (hrCodeToCheck) {
-        var lastRow = sheet.getLastRow();
-        if (lastRow > 0) {
-          var hrValues = sheet.getRange(1, 3, lastRow).getValues();
-          for (var r = 0; r < hrValues.length; r++) {
-            if (hrValues[r][0] == hrCodeToCheck) {
-              throw new Error("รหัส HR นี้มีอยู่ในระบบแล้ว (ซ้ำ) กรุณาตรวจสอบและใช้รหัสอื่น");
-            }
+      var lastRow = sheet.getLastRow();
+      var hrTaken = false;
+      if (hrCodeToCheck && lastRow > 0) {
+        var hrValues = sheet.getRange(1, 3, lastRow).getValues();
+        for (var r = 0; r < hrValues.length; r++) {
+          if (hrValues[r][0] == hrCodeToCheck) {
+            hrTaken = true;
+            break;
           }
         }
+      }
+      if (!hrCodeToCheck || hrTaken) {
+        data.hrCode = generateNextHrCode(sheet);
       }
       var sheet2 = ss.getSheetByName('พนักงานเข้า');
       if (!sheet2) {
@@ -203,6 +233,14 @@ function doPost(e) {
 
       response.status = 'success';
       response.message = 'Employee added successfully';
+      response.data = { hrCode: data.hrCode };
+    } else if (action === 'getNextHrCode') {
+      var sheetHr = ss.getSheetByName('DATA');
+      if (!sheetHr) {
+        sheetHr = ss.insertSheet('DATA');
+      }
+      response.status = 'success';
+      response.data = { hrCode: generateNextHrCode(sheetHr) };
     } else if (action === 'getEmployees') {
       var sheet = ss.getSheetByName('DATA');
       if (!sheet) {

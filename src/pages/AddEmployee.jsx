@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiCall } from '../services/api';
 import toast from 'react-hot-toast';
 import { UserPlus, Save } from 'lucide-react';
@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 export default function AddEmployee() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [hrCodeLoading, setHrCodeLoading] = useState(false);
   const [formData, setFormData] = useState({
     hrCode: '',
     fullName: '',
@@ -25,6 +26,24 @@ export default function AddEmployee() {
     startDate: ''
   });
   const [files, setFiles] = useState([]);
+
+  const fetchNextHrCode = useCallback(async () => {
+    setHrCodeLoading(true);
+    try {
+      const response = await apiCall('getNextHrCode', {});
+      if (response.status === 'success') {
+        setFormData(prev => ({ ...prev, hrCode: response.data.hrCode }));
+      }
+    } catch (error) {
+      toast.error('ไม่สามารถสร้างรหัส HR ได้ กรุณาลองใหม่');
+    } finally {
+      setHrCodeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchNextHrCode();
+  }, [fetchNextHrCode]);
 
   const thaiDocs = ['บัตรประชาชน', 'ทะเบียนบ้าน', 'วุฒิการศึกษา', 'สมุดบัญชีธนาคาร'];
   const foreignerDocs = [
@@ -79,7 +98,7 @@ export default function AddEmployee() {
       };
       const response = await apiCall('addEmployee', payload);
       if (response.status === 'success') {
-        toast.success('เพิ่มพนักงานสำเร็จ');
+        toast.success(`เพิ่มพนักงานสำเร็จ (รหัส HR: ${response.data?.hrCode || formData.hrCode})`);
         // Reset form
         setFormData({
           hrCode: '', fullName: '', department: '', type: '', position: '',
@@ -87,6 +106,7 @@ export default function AddEmployee() {
           nationality: 'thai', documents: [], documentExpiry: {}, startDate: ''
         });
         setFiles([]);
+        fetchNextHrCode();
       }
     } catch (error) {
       toast.error(error.message || 'เกิดข้อผิดพลาดในการเพิ่มพนักงาน');
@@ -118,8 +138,16 @@ export default function AddEmployee() {
             
             <div className="space-y-4 md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
                <div>
-                <label className={labelClasses}>รหัส HR</label>
-                <input type="text" name="hrCode" value={formData.hrCode} onChange={handleChange} className={inputClasses} placeholder="HR-XXXX" required />
+                <label className={labelClasses}>รหัส HR (ระบบสร้างให้อัตโนมัติ)</label>
+                <input
+                  type="text"
+                  name="hrCode"
+                  value={hrCodeLoading ? 'กำลังสร้างรหัส...' : formData.hrCode}
+                  readOnly
+                  disabled
+                  className={`${inputClasses} bg-gray-100 text-gray-600 cursor-not-allowed`}
+                  required
+                />
               </div>
               <div>
                 <label className={labelClasses}>ชื่อ - สกุล</label>
