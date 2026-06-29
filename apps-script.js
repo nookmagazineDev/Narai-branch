@@ -356,9 +356,9 @@ function doPost(e) {
       }
       if (rowIndex === -1) throw new Error('ไม่พบรหัสพนักงานนี้ในระบบ');
 
-      // รหัสใหม่สำหรับตั้งชื่อไฟล์ = คอลัมน์ BT (index 71); ตัดนามสกุลไฟล์ที่อาจติดมาออก, ถ้าว่างใช้รหัส HR แทน
-      var btVal = String(values[rowIndex - 1][71] || '').trim();
-      var newCode = btVal.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '').trim() || String(hrCode).trim();
+      // รหัสสำหรับตั้งชื่อไฟล์ = คอลัมน์ C (index 2 = รหัส HR); ตัดนามสกุลไฟล์ที่อาจติดมาออก, ถ้าว่างใช้รหัส HR ที่ส่งมาแทน
+      var cVal = String(values[rowIndex - 1][2] || '').trim();
+      var newCode = cVal.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '').trim() || String(hrCode).trim();
       var ext = String(data.ext || (data.fileName ? data.fileName.split('.').pop() : '') || 'jpg').toLowerCase();
       var fileName = newCode + '.' + ext;
 
