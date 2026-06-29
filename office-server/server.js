@@ -8,11 +8,13 @@ import express from 'express';
 import natUpnp from 'nat-upnp';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
-const SALES_BASE = process.env.SALES_BASE || 'http://storenarai.dyndns.tv:14365/express/ctranbetweendate';
+const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/express/ctranbetweendate';
 // บิลที่จ่ายแล้ว (ระดับบิล: billTotal, vat) — ใช้คิดยอดขาย/จำนวนบิล/เฉลี่ยต่อบิล แบบเดียวกับ NARAI OFFICE
 const PAID_BASE = process.env.PAID_BASE || SALES_BASE.replace('ctranbetweendate', 'cpaidbetweendate');
 const WARM_DAYS = Number(process.env.WARM_DAYS) || 70; // อุ่น cache ย้อนหลังกี่วันตอนสตาร์ท
-const TODAY_TTL_MS = 20 * 60 * 1000; // ข้อมูล "วันนี้" รีเฟรชทุก 20 นาที
+const TODAY_TTL_MS = 20 * 60 * 1000; // ข้อมูลวันล่าสุดรีเฟรชทุก 20 นาที
+// รีเฟรช cache "วันนี้ + ย้อนหลังกี่วัน" ตาม TTL — กันข้อมูลค้างกรณี POS sync ช้า (วันเก่ากว่านี้ cache ถาวร)
+const RECENT_REFRESH_DAYS = Number(process.env.RECENT_REFRESH_DAYS) || 3;
 
 const branchMap = {
   sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61, smp: 63,
@@ -168,10 +170,18 @@ async function fetchDay(date) {
   return { outlets, dashItems, dashExclTbl, dashBill, billRows };
 }
 
+// จำนวนวันที่ date ห่างจากวันนี้ (UTC): 0 = วันนี้, ค่าลบ = อนาคต, บวก = อดีต
+function daysAgo(date) {
+  const a = new Date(date + 'T00:00:00Z').getTime();
+  const b = new Date(todayStr() + 'T00:00:00Z').getTime();
+  return Math.round((b - a) / 86400000);
+}
+
 async function getDay(date) {
   const cached = salesCache.get(date);
-  const isToday = date >= todayStr();
-  if (cached && !(isToday && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
+  // วันนี้ + ย้อนหลังไม่เกิน RECENT_REFRESH_DAYS วัน → เช็ครีเฟรชตาม TTL (กันข้อมูลค้างตอน POS ยัง sync ไม่ครบ)
+  const isRecent = daysAgo(date) <= RECENT_REFRESH_DAYS;
+  if (cached && !(isRecent && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
     const { outlets, dashItems, dashExclTbl, dashBill, billRows } = await fetchDay(date);
