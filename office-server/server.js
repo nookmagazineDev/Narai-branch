@@ -8,7 +8,7 @@ import express from 'express';
 import natUpnp from 'nat-upnp';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
-const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/express/ctranbetweendate';
+const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
 // บิลที่จ่ายแล้ว (ระดับบิล: billTotal, vat) — ใช้คิดยอดขาย/จำนวนบิล/เฉลี่ยต่อบิล แบบเดียวกับ NARAI OFFICE
 const PAID_BASE = process.env.PAID_BASE || SALES_BASE.replace('ctranbetweendate', 'cpaidbetweendate');
 const WARM_DAYS = Number(process.env.WARM_DAYS) || 70; // อุ่น cache ย้อนหลังกี่วันตอนสตาร์ท
