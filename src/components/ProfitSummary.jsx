@@ -12,8 +12,6 @@ const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const pct = (v, base) => (base ? `${((Number(v || 0) / base) * 100).toFixed(2)}%` : '0.00%');
-// normalize รหัสสินค้าให้ตรงกันระหว่างใบเบิก (zero-pad เช่น 01000005) กับชีทสต๊อก (ตัวเลข 1000005)
-const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
 
 // ───────── หมวดวัตถุดิบตามช่วงรหัส (เทียบเป็นเลขจำนวนเต็ม 8 หลัก) ─────────
 const CATS = [
@@ -183,7 +181,7 @@ function StockModal({ open, onClose, title, rows, countDate, total }) {
                     <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อสินค้า</th>
                     <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">คงเหลือ</th>
                     <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">หน่วย</th>
-                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ราคาเบิกล่าสุด</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ราคาต้นทุน</th>
                     <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">มูลค่า</th>
                   </tr>
                 </thead>
@@ -275,9 +273,9 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
       }
       setLines(flat);
       setStock(sRes ? {
-        current: { countDate: sRes.current?.countDate || '', items: sRes.current?.data || [] },
-        previous: { countDate: sRes.previous?.countDate || '', items: sRes.previous?.data || [] },
-      } : { current: { countDate: '', items: [] }, previous: { countDate: '', items: [] } });
+        current: { countDate: sRes.current?.countDate || '', data: sRes.current?.data || [] },
+        previous: { countDate: sRes.previous?.countDate || '', data: sRes.previous?.data || [] },
+      } : { current: { countDate: '', data: [] }, previous: { countDate: '', data: [] } });
       setLoadedRange(rangeKey);
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message || 'เกิดข้อผิดพลาด');
@@ -316,32 +314,11 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
 
   const totalFoodCost = cats.reduce((s, c) => s + c.total, 0);
 
-  // ราคาเบิกล่าสุดต่อสินค้า (จาก lines ใบเบิกที่โหลดไว้)
-  const priceByItem = useMemo(() => {
-    const m = {};
-    for (const ln of lines || []) {
-      const k = normCode(ln.itemCode);
-      if (!k) continue;
-      const cur = m[k];
-      if (!cur || String(ln.docDate) >= cur.date) m[k] = { price: ln.unitPrice, date: String(ln.docDate) };
-    }
-    return m;
-  }, [lines]);
-
-  // มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาเบิกล่าสุด (คิดทั้งเดือนนี้และเดือนที่แล้ว)
-  const stockRowsFor = useCallback((items) => {
-    return (items || [])
-      .map((it) => {
-        const k = normCode(it.itemCode);
-        const price = priceByItem[k]?.price || 0;
-        return { itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qty: Number(it.qty) || 0, unitPrice: price, value: (Number(it.qty) || 0) * price, priced: !!priceByItem[k] };
-      })
-      .sort((a, b) => b.value - a.value);
-  }, [priceByItem]);
-  const curStock = useMemo(() => stockRowsFor(stock?.current?.items), [stockRowsFor, stock]);
-  const prevStock = useMemo(() => stockRowsFor(stock?.previous?.items), [stockRowsFor, stock]);
-  const curStockValue = useMemo(() => curStock.reduce((s, r) => s + r.value, 0), [curStock]);
-  const prevStockValue = useMemo(() => prevStock.reduce((s, r) => s + r.value, 0), [prevStock]);
+  // มูลค่าสต๊อก (ราคาจากชีท 8.2 คิดมาจาก API แล้ว) — เดือนนี้ / เดือนที่แล้ว
+  const curStock = useMemo(() => (stock?.current?.data || []).slice().sort((a, b) => b.value - a.value), [stock]);
+  const prevStock = useMemo(() => (stock?.previous?.data || []).slice().sort((a, b) => b.value - a.value), [stock]);
+  const curStockValue = useMemo(() => curStock.reduce((s, r) => s + (r.value || 0), 0), [curStock]);
+  const prevStockValue = useMemo(() => prevStock.reduce((s, r) => s + (r.value || 0), 0), [prevStock]);
   const curUnpriced = useMemo(() => curStock.filter((r) => r.qty > 0 && !r.priced).length, [curStock]);
 
   // รายรับ
@@ -426,8 +403,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
               />
               <p className="px-3 py-2 text-[11px] text-gray-400">
-                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาเบิกล่าสุด (แสดงอ้างอิง ไม่เข้าสูตรกำไร)
-                {curUnpriced ? ` • เดือนนี้ ${curUnpriced} รายการไม่มีราคาเบิก` : ''}
+                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — แสดงอ้างอิง ไม่เข้าสูตรกำไร
+                {curUnpriced ? ` • เดือนนี้ ${curUnpriced} รายการไม่มีราคาในชีท 8.2` : ''}
               </p>
             </>
           )}

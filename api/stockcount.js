@@ -1,11 +1,17 @@
-// มูลค่าสต๊อกคงเหลือรายเดือน — อ่านจาก Google Sheet "ข้อมูลนับสตอค" (gviz, ชีทแชร์แบบ "ใครมีลิงก์ก็ดูได้")
+// มูลค่าสต๊อกคงเหลือรายเดือน — อ่านจาก Google Sheet เดียวกัน 2 ชีท (gviz, ต้องแชร์ "ใครมีลิงก์ก็ดูได้")
+//   - ชีท "ข้อมูลนับสตอค" (gid 923363118): ยอดคงเหลือรายสินค้า/สาขา/วันที่นับ
+//   - ชีท "8.2": ตารางราคากลาง [0]รหัส [1]ชื่อ [2]ราคา/หน่วย
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
-//   -> { status, branch, current:{countDate,data}, previous:{countDate,data} }
-//   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ จะได้ค่าว่าง (มูลค่า 0)
+//   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data} }
+//      data = [{itemCode,itemName,unit,qty,unitPrice,value,priced}]
+//   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
 //   previous = ยอดนับล่าสุด "ภายในเดือนก่อนหน้า"
-//   (ราคาต้นทุน/มูลค่า คิดฝั่งหน้าเว็บ โดยอิงราคาเบิกล่าสุดจากใบเบิก)
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
-const GID = '923363118'; // ชีท "ข้อมูลนับสตอค"
+const GID_STOCK = '923363118'; // ชีท "ข้อมูลนับสตอค"
+const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา
+
+// normalize รหัส: ตัด .0 ท้าย + เลข 0 นำหน้า ให้ตรงกันทุกชีท
+const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
 
 // "Date(2026,4,31)" -> "2026-05-31" (เดือน gviz เป็น 0-based)
 function parseGvizDate(v) {
@@ -21,6 +27,14 @@ function prevMonth(ym) {
   return `${py}-${String(pm).padStart(2, '0')}`;
 }
 
+async function fetchGviz(url) {
+  const r = await fetch(url);
+  const text = await r.text();
+  if (text.startsWith('<')) throw new Error('อ่านชีทไม่ได้ (ต้องตั้งแชร์ "ใครมีลิงก์ก็ดูได้")');
+  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  return JSON.parse(text.substring(a, b + 1));
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -34,24 +48,32 @@ export default async function handler(req, res) {
 
   const curMonth = endStr.slice(0, 7);
   const preMonth = prevMonth(curMonth);
+  const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${GID}`;
-    const r = await fetch(url);
-    const text = await r.text();
-    if (text.startsWith('<')) {
-      return res.status(502).json({ status: 'error', message: 'อ่านชีทสต๊อกไม่ได้ (ต้องตั้งแชร์ "ใครมีลิงก์ก็ดูได้")' });
+    const [stockJ, priceJ] = await Promise.all([
+      fetchGviz(`${base}&gid=${GID_STOCK}`),
+      fetchGviz(`${base}&sheet=${encodeURIComponent(PRICE_SHEET)}`),
+    ]);
+
+    // ราคากลางจากชีท 8.2: รหัส -> ราคา/หน่วย
+    const priceMap = {};
+    for (const rw of (priceJ.table.rows || [])) {
+      const c = rw.c || [];
+      const code = normCode(c[0] && c[0].v);
+      if (!code) continue;
+      const price = Number(c[2] && c[2].v);
+      if (!Number.isNaN(price)) priceMap[code] = price;
     }
-    const a = text.indexOf('{'), b = text.lastIndexOf('}');
-    const j = JSON.parse(text.substring(a, b + 1));
-    // แถว: [0]วันที่ [1]ผู้นับ [2]สาขา [3]รหัสสินค้า [4]ชื่อ [5]หน่วย [6]คงเหลือ
-    const brRows = (j.table.rows || [])
+
+    // แถวสต๊อกของสาขานี้ (พร้อมวันที่)
+    const brRows = (stockJ.table.rows || [])
       .map((rw) => (rw.c || []).map((c) => (c ? c.v : null)))
       .filter((rw) => String(rw[2] || '').toLowerCase().trim() === branchKey)
       .map((rw) => ({ ds: parseGvizDate(rw[0]), rw }))
       .filter((x) => x.ds);
 
-    // เลือกยอดนับล่าสุดภายในเดือนที่กำหนด (maxDate = จำกัดไม่ให้เกินวันนี้ในเดือนปัจจุบัน)
+    // เลือกยอดนับล่าสุดภายในเดือนที่กำหนด แล้วผูกราคา + คิดมูลค่า
     const pick = (monthPrefix, maxDate) => {
       let cd = '';
       for (const { ds } of brRows) {
@@ -59,21 +81,29 @@ export default async function handler(req, res) {
         if (maxDate && ds > maxDate) continue;
         if (ds > cd) cd = ds;
       }
-      if (!cd) return { countDate: '', data: [] };
+      if (!cd) return { countDate: '', total: 0, data: [] };
       const map = {};
       for (const { ds, rw } of brRows) {
         if (ds !== cd) continue;
-        const code = String(rw[3] == null ? '' : rw[3]).replace(/\.0+$/, '').trim();
+        const code = normCode(rw[3]);
         if (!code) continue;
         const qty = Number(rw[6]) || 0;
         const e = map[code] || (map[code] = { itemCode: code, itemName: rw[4] || '-', unit: rw[5] || '', qty: 0 });
         e.qty += qty;
       }
-      return { countDate: cd, data: Object.values(map) };
+      let total = 0;
+      const data = Object.values(map).map((it) => {
+        const has = Object.prototype.hasOwnProperty.call(priceMap, it.itemCode);
+        const unitPrice = has ? priceMap[it.itemCode] : 0;
+        const value = it.qty * unitPrice;
+        total += value;
+        return { ...it, unitPrice, value, priced: has };
+      }).sort((a, b) => b.value - a.value);
+      return { countDate: cd, total, data };
     };
 
     const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end)
-    const previous = pick(preMonth, null);     // เดือนที่แล้ว (ทั้งเดือน)
+    const previous = pick(preMonth, null);      // เดือนที่แล้ว (ทั้งเดือน)
     return res.status(200).json({ status: 'success', branch: branchKey, current, previous });
   } catch (error) {
     console.error('stockcount error:', error);
