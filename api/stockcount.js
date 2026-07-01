@@ -1,7 +1,8 @@
-// มูลค่าสต๊อกคงเหลือล่าสุด — อ่านจาก Google Sheet "ข้อมูลนับสตอค" (gviz, ชีทแชร์แบบ "ใครมีลิงก์ก็ดูได้")
+// มูลค่าสต๊อกคงเหลือรายเดือน — อ่านจาก Google Sheet "ข้อมูลนับสตอค" (gviz, ชีทแชร์แบบ "ใครมีลิงก์ก็ดูได้")
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
-//   -> { status, branch, countDate, count, data:[{itemCode,itemName,unit,qty}] }
-//   เลือก "วันนับล่าสุดของสาขานั้นที่ <= end" แล้วคืนยอดคงเหลือรายสินค้าของวันนั้น
+//   -> { status, branch, current:{countDate,data}, previous:{countDate,data} }
+//   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ จะได้ค่าว่าง (มูลค่า 0)
+//   previous = ยอดนับล่าสุด "ภายในเดือนก่อนหน้า"
 //   (ราคาต้นทุน/มูลค่า คิดฝั่งหน้าเว็บ โดยอิงราคาเบิกล่าสุดจากใบเบิก)
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
 const GID = '923363118'; // ชีท "ข้อมูลนับสตอค"
@@ -11,6 +12,13 @@ function parseGvizDate(v) {
   const m = String(v == null ? '' : v).match(/Date\((\d+),(\d+),(\d+)/);
   if (!m) return '';
   return `${m[1]}-${String(+m[2] + 1).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+}
+// "2026-06" -> "2026-05"
+function prevMonth(ym) {
+  const [y, m] = String(ym).split('-').map(Number);
+  const py = m > 1 ? y : y - 1;
+  const pm = m > 1 ? m - 1 : 12;
+  return `${py}-${String(pm).padStart(2, '0')}`;
 }
 
 export default async function handler(req, res) {
@@ -24,6 +32,9 @@ export default async function handler(req, res) {
   const endStr = String(req.query.end || '9999-12-31');
   if (!branchKey) return res.status(400).json({ status: 'error', message: 'ระบุสาขาไม่ครบถ้วน' });
 
+  const curMonth = endStr.slice(0, 7);
+  const preMonth = prevMonth(curMonth);
+
   try {
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${GID}`;
     const r = await fetch(url);
@@ -34,33 +45,36 @@ export default async function handler(req, res) {
     const a = text.indexOf('{'), b = text.lastIndexOf('}');
     const j = JSON.parse(text.substring(a, b + 1));
     // แถว: [0]วันที่ [1]ผู้นับ [2]สาขา [3]รหัสสินค้า [4]ชื่อ [5]หน่วย [6]คงเหลือ
-    const rows = (j.table.rows || []).map((rw) => (rw.c || []).map((c) => (c ? c.v : null)));
+    const brRows = (j.table.rows || [])
+      .map((rw) => (rw.c || []).map((c) => (c ? c.v : null)))
+      .filter((rw) => String(rw[2] || '').toLowerCase().trim() === branchKey)
+      .map((rw) => ({ ds: parseGvizDate(rw[0]), rw }))
+      .filter((x) => x.ds);
 
-    // หา "วันนับล่าสุด <= end" ของสาขานี้
-    let countDate = '';
-    for (const rw of rows) {
-      if (String(rw[2] || '').toLowerCase().trim() !== branchKey) continue;
-      const ds = parseGvizDate(rw[0]);
-      if (!ds || ds > endStr) continue;
-      if (ds > countDate) countDate = ds;
-    }
-    if (!countDate) {
-      return res.status(200).json({ status: 'success', branch: branchKey, countDate: '', count: 0, data: [] });
-    }
+    // เลือกยอดนับล่าสุดภายในเดือนที่กำหนด (maxDate = จำกัดไม่ให้เกินวันนี้ในเดือนปัจจุบัน)
+    const pick = (monthPrefix, maxDate) => {
+      let cd = '';
+      for (const { ds } of brRows) {
+        if (!ds.startsWith(monthPrefix)) continue;
+        if (maxDate && ds > maxDate) continue;
+        if (ds > cd) cd = ds;
+      }
+      if (!cd) return { countDate: '', data: [] };
+      const map = {};
+      for (const { ds, rw } of brRows) {
+        if (ds !== cd) continue;
+        const code = String(rw[3] == null ? '' : rw[3]).replace(/\.0+$/, '').trim();
+        if (!code) continue;
+        const qty = Number(rw[6]) || 0;
+        const e = map[code] || (map[code] = { itemCode: code, itemName: rw[4] || '-', unit: rw[5] || '', qty: 0 });
+        e.qty += qty;
+      }
+      return { countDate: cd, data: Object.values(map) };
+    };
 
-    // รวมยอดคงเหลือรายสินค้าของวันนับนั้น
-    const map = {};
-    for (const rw of rows) {
-      if (String(rw[2] || '').toLowerCase().trim() !== branchKey) continue;
-      if (parseGvizDate(rw[0]) !== countDate) continue;
-      const code = String(rw[3] == null ? '' : rw[3]).replace(/\.0+$/, '').trim();
-      if (!code) continue;
-      const qty = Number(rw[6]) || 0;
-      const e = map[code] || (map[code] = { itemCode: code, itemName: rw[4] || '-', unit: rw[5] || '', qty: 0 });
-      e.qty += qty;
-    }
-    const data = Object.values(map);
-    return res.status(200).json({ status: 'success', branch: branchKey, countDate, count: data.length, data });
+    const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end)
+    const previous = pick(preMonth, null);     // เดือนที่แล้ว (ทั้งเดือน)
+    return res.status(200).json({ status: 'success', branch: branchKey, current, previous });
   } catch (error) {
     console.error('stockcount error:', error);
     return res.status(500).json({ status: 'error', message: error.message });

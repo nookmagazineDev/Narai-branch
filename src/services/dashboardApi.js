@@ -92,7 +92,7 @@ export async function fetchStockCount({ branch, endDate, signal }) {
   if (!res.ok || !json || json.status !== 'success') {
     throw new Error((json && json.message) || `ดึงข้อมูลสต๊อกไม่สำเร็จ (${res.status})`);
   }
-  return json; // { status, branch, countDate, count, data:[{itemCode,itemName,unit,qty}] }
+  return json; // { status, branch, current:{countDate,data:[...]}, previous:{countDate,data:[...]} }
 }
 
 // ดึงรายละเอียดรายการในบิลเดียว (line items)

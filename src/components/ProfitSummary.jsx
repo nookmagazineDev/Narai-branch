@@ -159,14 +159,14 @@ function CategoryModal({ cat, onClose }) {
 }
 
 // ───────── Modal: รายละเอียดมูลค่าสต๊อกคงเหลือ ─────────
-function StockModal({ open, onClose, rows, countDate, total }) {
+function StockModal({ open, onClose, title, rows, countDate, total }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
       <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[86vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
           <div>
-            <h3 className="text-base font-bold flex items-center gap-2"><Boxes className="w-4 h-4 text-indigo-300" /> มูลค่าสต๊อกคงเหลือ</h3>
+            <h3 className="text-base font-bold flex items-center gap-2"><Boxes className="w-4 h-4 text-indigo-300" /> {title || 'มูลค่าสต๊อกคงเหลือ'}</h3>
             <p className="text-xs text-gray-400 mt-0.5">{countDate ? `นับ ณ ${countDate} • ` : ''}{rows.length} รายการ • รวม {baht(total)}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
@@ -241,8 +241,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [member, setMember] = useState('');
   const [delivery, setDelivery] = useState('');
   const [openCat, setOpenCat] = useState(null);
-  const [stock, setStock] = useState(null);       // { countDate, items:[{itemCode,itemName,unit,qty}] }
-  const [showStock, setShowStock] = useState(false);
+  const [stock, setStock] = useState(null);       // { current:{countDate,items}, previous:{countDate,items} }
+  const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, total } | null
 
   const rangeKey = `${startDate}~${endDate}`;
   const stale = lines !== null && loadedRange !== rangeKey;
@@ -274,7 +274,10 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
         }
       }
       setLines(flat);
-      setStock(sRes ? { countDate: sRes.countDate || '', items: sRes.data || [] } : { countDate: '', items: [] });
+      setStock(sRes ? {
+        current: { countDate: sRes.current?.countDate || '', items: sRes.current?.data || [] },
+        previous: { countDate: sRes.previous?.countDate || '', items: sRes.previous?.data || [] },
+      } : { current: { countDate: '', items: [] }, previous: { countDate: '', items: [] } });
       setLoadedRange(rangeKey);
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message || 'เกิดข้อผิดพลาด');
@@ -325,19 +328,21 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
     return m;
   }, [lines]);
 
-  // มูลค่าสต๊อก = ยอดคงเหลือปลายงวด × ราคาเบิกล่าสุด
-  const stockRows = useMemo(() => {
-    const items = stock?.items || [];
-    return items
+  // มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาเบิกล่าสุด (คิดทั้งเดือนนี้และเดือนที่แล้ว)
+  const stockRowsFor = useCallback((items) => {
+    return (items || [])
       .map((it) => {
         const k = normCode(it.itemCode);
         const price = priceByItem[k]?.price || 0;
         return { itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qty: Number(it.qty) || 0, unitPrice: price, value: (Number(it.qty) || 0) * price, priced: !!priceByItem[k] };
       })
       .sort((a, b) => b.value - a.value);
-  }, [stock, priceByItem]);
-  const stockValue = useMemo(() => stockRows.reduce((s, r) => s + r.value, 0), [stockRows]);
-  const stockUnpriced = useMemo(() => stockRows.filter((r) => r.qty > 0 && !r.priced).length, [stockRows]);
+  }, [priceByItem]);
+  const curStock = useMemo(() => stockRowsFor(stock?.current?.items), [stockRowsFor, stock]);
+  const prevStock = useMemo(() => stockRowsFor(stock?.previous?.items), [stockRowsFor, stock]);
+  const curStockValue = useMemo(() => curStock.reduce((s, r) => s + r.value, 0), [curStock]);
+  const prevStockValue = useMemo(() => prevStock.reduce((s, r) => s + r.value, 0), [prevStock]);
+  const curUnpriced = useMemo(() => curStock.filter((r) => r.qty > 0 && !r.priced).length, [curStock]);
 
   // รายรับ
   const grossSales = Number(dash?.gross ?? ((dash?.sales || 0) + (dash?.tax || 0)));
@@ -407,6 +412,25 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
           <Row label="ยอดขาย Member" percent={pct(parseFloat(member) || 0, grossSales)} input={moneyInput(member, setMember)} />
           <Row label="Delivery Service" percent={pct(parseFloat(delivery) || 0, grossSales)} input={moneyInput(delivery, setDelivery)} />
           <Row label="Net Sale" value={netSale} percent={pct(netSale, grossSales)} bold accent="text-emerald-700" />
+          {stock && (
+            <>
+              <div className="px-3 pt-3 pb-1 text-xs font-bold text-indigo-700 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> มูลค่าสต๊อกคงเหลือ</div>
+              <Row
+                label={`เดือนนี้${stock.current.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
+                value={curStockValue} percent={pct(curStockValue, netSale)} indent accent="text-indigo-600"
+                onClick={curStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกคงเหลือ (เดือนนี้)', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
+              />
+              <Row
+                label={`เดือนที่แล้ว${stock.previous.countDate ? ` (นับ ${stock.previous.countDate})` : ' (ไม่มีข้อมูล)'}`}
+                value={prevStockValue} percent={pct(prevStockValue, netSale)} indent accent="text-indigo-500"
+                onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
+              />
+              <p className="px-3 py-2 text-[11px] text-gray-400">
+                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาเบิกล่าสุด (แสดงอ้างอิง ไม่เข้าสูตรกำไร)
+                {curUnpriced ? ` • เดือนนี้ ${curUnpriced} รายการไม่มีราคาเบิก` : ''}
+              </p>
+            </>
+          )}
           <p className="px-3 py-2 text-[11px] text-gray-400">* Member / Delivery เป็นช่องบันทึกอ้างอิง (ยังไม่นำเข้าสูตรกำไร)</p>
         </div>
 
@@ -434,20 +458,6 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 />
               ))}
               <Row label="สรุปค่าใช้จ่ายรวม" value={totalCost} percent={pct(totalCost, netSale)} bold accent="text-rose-700" />
-              {stock && (
-                <Row
-                  label={`มูลค่าสต๊อกคงเหลือ${stock.countDate ? ` ณ ${stock.countDate}` : ''}`}
-                  value={stockValue} percent={pct(stockValue, netSale)} accent="text-indigo-600"
-                  onClick={stockRows.length ? () => setShowStock(true) : undefined}
-                />
-              )}
-              {stock && (
-                <p className="px-3 py-2 text-[11px] text-gray-400">
-                  * มูลค่าสต๊อก = ยอดคงเหลือปลายงวด × ราคาเบิกล่าสุด (แสดงอ้างอิง ไม่เข้าสูตรกำไร)
-                  {stock.countDate ? '' : ' • ยังไม่มีข้อมูลนับสต๊อกของสาขา/ช่วงนี้'}
-                  {stockUnpriced ? ` • ${stockUnpriced} รายการไม่มีราคาเบิกในช่วงนี้` : ''}
-                </p>
-              )}
             </>
           )}
         </div>
@@ -464,7 +474,10 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
       )}
 
       <CategoryModal cat={openCat} onClose={() => setOpenCat(null)} />
-      <StockModal open={showStock} onClose={() => setShowStock(false)} rows={stockRows} countDate={stock?.countDate} total={stockValue} />
+      <StockModal
+        open={!!stockModal} onClose={() => setStockModal(null)}
+        title={stockModal?.title} rows={stockModal?.rows || []} countDate={stockModal?.countDate} total={stockModal?.total || 0}
+      />
     </div>
   );
 }
