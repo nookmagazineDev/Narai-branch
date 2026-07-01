@@ -387,6 +387,125 @@ function DailySalesChart({ daily }) {
   );
 }
 
+// ---- นิยามเมตริกที่กดดู drill-down รายวันได้ ----
+// kind 'bill' = ลงลึกเป็นรายการบิลของวันนั้น | 'cost'/'prep'/'excluded' = breakdown รายไอเทมของวันนั้น
+const METRICS = {
+  sales:    { key: 'sales',        label: 'ยอดขายรวมทั้งหมด',     kind: 'bill',     fmt: 'baht', colLabel: 'ยอดขาย',  accent: 'text-emerald-600' },
+  bills:    { key: 'bills',        label: 'จำนวนบิลทั้งหมด',       kind: 'bill',     fmt: 'int',  colLabel: 'จำนวนบิล', accent: 'text-amber-600' },
+  cost:     { key: 'cost',         label: 'ต้นทุนรวมทั้งหมด',      kind: 'cost',     breakdownKey: 'costBreakdown',     fmt: 'baht', colLabel: 'ต้นทุน', accent: 'text-rose-600' },
+  prep:     { key: 'prepCost',     label: 'ต้นทุนโต๊ะเตรียม(กก)',  kind: 'prep',     breakdownKey: 'prepBreakdown',     fmt: 'baht', colLabel: 'ต้นทุน', accent: 'text-orange-600' },
+  excluded: { key: 'excludedCost', label: 'รายการไม่นับคำนวณ',      kind: 'excluded', breakdownKey: 'excludedBreakdown', fmt: 'baht', colLabel: 'ต้นทุน', accent: 'text-gray-600' },
+};
+
+// ---- Modal: สรุปเมตริกรายวัน → คลิกวันเพื่อดูรายละเอียดของวันนั้น ----
+function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId }) {
+  const [day, setDay] = useState(null);          // วันที่เลือกดูรายละเอียด
+  const [loading, setLoading] = useState(false); // โหลด breakdown ของวัน (เฉพาะ kind ต้นทุน)
+  const [error, setError] = useState('');
+  const [dayRows, setDayRows] = useState([]);
+
+  useEffect(() => { if (!open) setDay(null); }, [open]);
+
+  useEffect(() => {
+    if (!open || !day || metric.kind === 'bill') return;
+    let alive = true;
+    const controller = new AbortController();
+    setLoading(true); setError(''); setDayRows([]);
+    fetchDashboard({ branch, outletId, startDate: day, endDate: day, signal: controller.signal })
+      .then((res) => { if (alive) setDayRows(res.data?.[metric.breakdownKey] || []); })
+      .catch((e) => { if (alive && e.name !== 'AbortError') setError(e.message || 'เกิดข้อผิดพลาด'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; controller.abort(); };
+  }, [open, day, metric, branch, outletId]);
+
+  if (!open) return null;
+
+  // ---- ชั้นที่ 2: รายละเอียดของวันที่เลือก ----
+  if (day) {
+    if (metric.kind === 'bill') {
+      return <BillsModal open onClose={() => setDay(null)} branch={branch} outletId={outletId} startDate={day} endDate={day} />;
+    }
+    if (loading || error) {
+      return (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => setDay(null)}>
+          <div className="bg-white rounded-2xl p-8 shadow-2xl text-sm" onClick={(e) => e.stopPropagation()}>
+            {loading
+              ? <div className="flex items-center gap-2 text-gray-500"><RefreshCw className="w-5 h-5 animate-spin" /> กำลังโหลดรายละเอียด {day}…</div>
+              : <div className="flex items-center gap-2 text-red-600"><XCircle className="w-5 h-5" /> {error}</div>}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <BreakdownModal
+        open onClose={() => setDay(null)}
+        title={`${metric.label} • ${day}`} rows={dayRows}
+        accent={metric.accent} showReason={metric.kind === 'excluded'}
+      />
+    );
+  }
+
+  // ---- ชั้นที่ 1: สรุปรายวัน ----
+  const fmt = metric.fmt === 'int' ? intf : baht;
+  const rows = [...(daily || [])]
+    .filter((r) => (Number(r[metric.key]) || 0) > 0)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const total = rows.reduce((s, r) => s + (Number(r[metric.key]) || 0), 0);
+  const isBill = metric.kind === 'bill';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-base font-bold">{metric.label} — สรุปรายวัน</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{rows.length.toLocaleString('th-TH')} วัน • คลิกที่วันเพื่อดูรายละเอียด</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {rows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">ไม่มีข้อมูลในช่วงนี้</div>
+          ) : (
+            <div className="overflow-auto max-h-[62vh] border border-gray-100 rounded-xl">
+              <table className="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr className="text-gray-600">
+                    <th className="px-4 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                    {isBill && <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">จำนวนบิล</th>}
+                    <th className={`px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 ${metric.accent}`}>{metric.colLabel}</th>
+                    <th className="px-4 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-gray-700">
+                  {rows.map((r) => (
+                    <tr key={r.date} className="hover:bg-indigo-50/40 cursor-pointer" onClick={() => setDay(r.date)}>
+                      <td className="px-4 py-2.5 font-medium text-gray-800">{r.date}</td>
+                      {isBill && <td className="px-4 py-2.5 text-right font-mono text-gray-500">{intf(r.bills)}</td>}
+                      <td className={`px-4 py-2.5 text-right font-mono font-semibold ${metric.accent}`}>{fmt(r[metric.key])}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <span className="inline-flex items-center gap-1 px-2 py-1 border border-indigo-200 text-indigo-600 rounded-lg text-[10px] font-semibold"><Eye className="w-3 h-3" /> ดู</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
+                    <td className="px-4 py-2.5">รวมทั้งหมด</td>
+                    {isBill && <td />}
+                    <td className={`px-4 py-2.5 text-right font-mono ${metric.accent}`}>{fmt(total)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardHome() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
@@ -407,8 +526,7 @@ export default function DashboardHome() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState(null); // 'cost' | 'prep' | 'excluded'
-  const [showBills, setShowBills] = useState(false); // ตารางรายการขาย
+  const [drill, setDrill] = useState(null); // เมตริกที่กดดู drill-down รายวัน
   const abortRef = useRef(null);
 
   const load = useCallback(
@@ -588,18 +706,18 @@ export default function DashboardHome() {
         <StatCard
           title="ยอดขายรวมทั้งหมด" value={baht(d.sales)} sub="ก่อน VAT (Bill − VAT)"
           icon={DollarSign} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
-          onClick={data ? () => setShowBills(true) : undefined}
+          onClick={data ? () => setDrill(METRICS.sales) : undefined}
         />
         <StatCard
           title="ต้นทุนรวมทั้งหมด" value={baht(d.cost)} sub="ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)"
           icon={Layers} accent={{ text: 'text-rose-500', bg: 'bg-rose-50', icon: 'text-rose-500' }}
-          onClick={data ? () => setModal('cost') : undefined}
+          onClick={data ? () => setDrill(METRICS.cost) : undefined}
         />
         <StatCard
           title="ต้นทุนโต๊ะเตรียม(กก)" value={baht(d.prepCost)}
           sub={`${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
           icon={Scale} accent={{ text: 'text-orange-500', bg: 'bg-orange-50', icon: 'text-orange-500' }}
-          onClick={data ? () => setModal('prep') : undefined}
+          onClick={data ? () => setDrill(METRICS.prep) : undefined}
         />
         <StatCard
           title="กำไร / ขาดทุนสุทธิ" value={baht(d.profit)} sub="ยอดขาย − ต้นทุนรวม"
@@ -611,7 +729,7 @@ export default function DashboardHome() {
         <StatCard
           title="จำนวนบิลทั้งหมด" value={intf(d.bills)} sub="ใบเสร็จรับเงิน • ดูรายการบิล"
           icon={FileText} accent={{ text: 'text-amber-600', bg: 'bg-amber-50', icon: 'text-amber-600' }}
-          onClick={data ? () => setShowBills(true) : undefined}
+          onClick={data ? () => setDrill(METRICS.bills) : undefined}
         />
         <StatCard
           title="ยอดเฉลี่ยต่อบิล" value={baht(d.avgPerBill)} sub="เฉลี่ยต่อบิล (รวม VAT)"
@@ -625,7 +743,7 @@ export default function DashboardHome() {
           title="รายการไม่นับคำนวณ" value={baht(d.excludedCost)}
           sub={`${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
           icon={Ban} accent={{ text: 'text-gray-500', bg: 'bg-gray-100', icon: 'text-gray-500' }}
-          onClick={data ? () => setModal('excluded') : undefined}
+          onClick={data ? () => setDrill(METRICS.excluded) : undefined}
         />
       </div>
 
@@ -644,25 +762,14 @@ export default function DashboardHome() {
         )}
       </div>
 
-      {/* Modal รายละเอียดต้นทุน */}
-      <BreakdownModal
-        open={modal === 'cost'} onClose={() => setModal(null)}
-        title="รายละเอียดต้นทุนรวม" rows={d.costBreakdown || []} accent="text-rose-600"
-      />
-      <BreakdownModal
-        open={modal === 'prep'} onClose={() => setModal(null)}
-        title="รายละเอียดต้นทุนโต๊ะเตรียม(กก)" rows={d.prepBreakdown || []} accent="text-orange-600"
-      />
-      <BreakdownModal
-        open={modal === 'excluded'} onClose={() => setModal(null)}
-        title="รายการไม่นับคำนวณ" rows={d.excludedBreakdown || []} accent="text-gray-600" showReason
-      />
-
-      {/* ตารางรายการขาย (กดดูรายการบิล → กดดูรายละเอียดบิล) */}
-      <BillsModal
-        open={showBills} onClose={() => setShowBills(false)}
-        branch={branch} outletId={outletId} startDate={startDate} endDate={endDate}
-      />
+      {/* Drill-down: สรุปรายวัน → คลิกวัน → รายละเอียด (บิล/breakdown ต้นทุน) */}
+      {drill && (
+        <DailyDrilldownModal
+          open onClose={() => setDrill(null)}
+          metric={drill} daily={d.daily || []}
+          branch={branch} outletId={outletId}
+        />
+      )}
     </div>
   );
 }

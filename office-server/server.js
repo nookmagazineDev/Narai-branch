@@ -317,19 +317,39 @@ async function computeDashboard(outletNum, start, end) {
       const b = entry.dashBill.get(outletNum);
       const dayBill = b ? b.sumBill : 0;
       const dayVat = b ? b.sumVat : 0;
+      const dayBills = b ? b.count : 0;
       sumBill += dayBill; sumVat += dayVat;
-      bills += b ? b.count : 0;
-      daily.push({ date, sales: Number((dayBill - dayVat).toFixed(2)) });
+      bills += dayBills;
 
-      // รวมรายการ (detail) ของสาขานี้
+      // รวมรายการ (detail) ของสาขานี้ + คิดต้นทุน/นับคนแยกรายวัน (สำหรับ drill-down รายวัน)
+      let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0;
       const di = entry.dashItems.get(outletNum);
       if (di) for (const [ic, v] of Object.entries(di)) {
         const a = itemsAgg[ic] || (itemsAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
+        if (dashCoverItem(ic)) dCovers += v.qty;
+        const tc = (menuCost[ic] ?? 0) * v.qty;
+        if (dashExclItem(ic)) { dExcl += tc; dExclQty += v.qty; }
+        else if (dashPrepKg(ic)) { dPrep += tc; dPrepQty += v.qty; }
+        else dCost += tc;
       }
       const de = entry.dashExclTbl.get(outletNum);
       if (de) for (const [ic, v] of Object.entries(de)) {
         const a = exclTblAgg[ic] || (exclTblAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
+        const tc = (menuCost[ic] ?? 0) * v.qty;
+        dExcl += tc; dExclQty += v.qty;
       }
+      daily.push({
+        date,
+        sales: r2(dayBill - dayVat),
+        gross: r2(dayBill),
+        cost: r2(dCost),
+        prepCost: r2(dPrep),
+        prepQty: r2(dPrepQty),
+        excludedCost: r2(dExcl),
+        excludedQty: r2(dExclQty),
+        bills: dayBills,
+        covers: r2(dCovers),
+      });
     }
   }
 
