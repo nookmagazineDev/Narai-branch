@@ -439,7 +439,13 @@ export default function DashboardHome() {
       .then((res) => {
         if (!alive) return;
         if (res?.status === 'success' && Array.isArray(res.data)) {
-          const list = res.data.filter((b) => String(b.name).toLowerCase() !== 'all');
+          // กรองแถว header ('ชื่อสาขา'), 'all' และค่าที่ outletId ไม่ใช่ตัวเลข (ไม่ใช่สาขาจริง)
+          const list = res.data.filter((b) => {
+            const name = String(b?.name || '').trim().toLowerCase();
+            if (!name || name === 'all' || name === 'ชื่อสาขา') return false;
+            const oid = b?.outletId;
+            return oid === '' || oid == null || !Number.isNaN(Number(oid));
+          });
           setBranchList(list);
           setSelBranch((prev) => prev || list[0] || null);
         }

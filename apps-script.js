@@ -590,7 +590,7 @@ function doPost(e) {
       if (userSheet) {
         var uData = userSheet.getDataRange().getValues();
         var branchSet = {};
-        for (var r = 0; r < uData.length; r++) {
+        for (var r = 1; r < uData.length; r++) { // เริ่มที่ 1 เพื่อข้ามแถว header (ชื่อสาขา/รหัสสาขา)
           var br = uData[r][2]; // Column C = Branch
           var oId = uData[r][3]; // Column D = Outlet ID
           if (br && String(br).toLowerCase() !== 'all' && !branchSet[String(br).toLowerCase()]) {
