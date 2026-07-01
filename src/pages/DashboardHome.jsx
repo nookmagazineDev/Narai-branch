@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   DollarSign, Layers, TrendingUp, FileText, Users, BarChart3,
   RefreshCw, Calendar, AlertCircle, Scale, Ban,
-  Eye, X, ShoppingBag, Search, CheckCircle, XCircle, ReceiptText,
+  Eye, X, ShoppingBag, Search, CheckCircle, XCircle, ReceiptText, Store,
 } from 'lucide-react';
 import { fetchDashboard, fetchBills, fetchBillDetail, presetRange, PRESETS, fmtDate } from '../services/dashboardApi';
+import { apiCall } from '../services/api';
 import ProfitSummary from '../components/ProfitSummary';
 
 const baht = (n) =>
@@ -388,8 +389,15 @@ function DailySalesChart({ daily }) {
 
 export default function DashboardHome() {
   const { user } = useAuth();
-  const branch = user?.branch || '';
-  const outletId = user?.outletId || '';
+  const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+
+  // ผู้ใช้ระดับ all: เลือกสาขาที่จะดูได้ | ผู้ใช้ปกติ: ใช้สาขาของตัวเอง
+  const [branchList, setBranchList] = useState([]);
+  const [selBranch, setSelBranch] = useState(null); // { name, outletId }
+
+  // สาขาที่ใช้ดึงข้อมูลจริง
+  const branch = isAdmin ? (selBranch?.name || '') : (user?.branch || '');
+  const outletId = isAdmin ? (selBranch?.outletId || '') : (user?.outletId || '');
 
   const [preset, setPreset] = useState('thisMonth');
   const initial = presetRange('thisMonth');
@@ -423,12 +431,30 @@ export default function DashboardHome() {
     [branch, outletId]
   );
 
-  // ออโต้โหลด "เดือนนี้" ทุกครั้งที่เข้าหน้า/หลัง login
+  // โหลดรายชื่อสาขา (เฉพาะผู้ใช้ระดับ all) แล้วเลือกสาขาแรกอัตโนมัติ
   useEffect(() => {
-    const r = presetRange('thisMonth');
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load(r.startDate, r.endDate);
-  }, [load]);
+    if (!isAdmin) return;
+    let alive = true;
+    apiCall('getBranches')
+      .then((res) => {
+        if (!alive) return;
+        if (res?.status === 'success' && Array.isArray(res.data)) {
+          const list = res.data.filter((b) => String(b.name).toLowerCase() !== 'all');
+          setBranchList(list);
+          setSelBranch((prev) => prev || list[0] || null);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [isAdmin]);
+
+  // ออโต้โหลดข้อมูลเมื่อเข้าหน้า/เปลี่ยนสาขา (ใช้ช่วงวันที่ที่เลือกอยู่)
+  useEffect(() => {
+    if (!branch && !outletId) return;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    load(startDate, endDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branch, outletId, load]);
 
   const applyPreset = (key) => {
     setPreset(key);
@@ -460,9 +486,31 @@ export default function DashboardHome() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm font-medium rounded-full">
-            สาขา: {branch || outletId || '-'}
-          </span>
+          {isAdmin ? (
+            <div className="flex items-center gap-1.5 pl-3 pr-1 py-1 bg-purple-100 rounded-full">
+              <Store className="w-4 h-4 text-purple-600 shrink-0" />
+              <select
+                value={selBranch?.name || ''}
+                onChange={(e) => {
+                  const b = branchList.find((x) => x.name === e.target.value);
+                  if (b) setSelBranch(b);
+                }}
+                className="bg-transparent text-purple-800 text-sm font-medium pr-2 py-0.5 focus:outline-none cursor-pointer"
+                title="เลือกสาขาที่ต้องการดู"
+              >
+                {branchList.length === 0 && <option value="">กำลังโหลดสาขา…</option>}
+                {branchList.map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name}{b.outletId ? ` (${b.outletId})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <span className="px-3 py-1.5 bg-purple-100 text-purple-800 text-sm font-medium rounded-full">
+              สาขา: {branch || outletId || '-'}
+            </span>
+          )}
           <button
             onClick={() => load(startDate, endDate)}
             disabled={loading}
