@@ -5,13 +5,15 @@
 //   ค่าใช้จ่ายอื่น (เช่า/น้ำ/ไฟ/…): กรอกเอง (ไม่บันทึกค่า)
 //   กำไร = Net Sale − (Total Food Cost + ค่าใช้จ่ายรวม)
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { RefreshCw, X, Eye, Wallet, AlertCircle, ChevronRight, PieChart } from 'lucide-react';
-import { fetchWithdrawals } from '../services/dashboardApi';
+import { RefreshCw, X, Eye, Wallet, AlertCircle, ChevronRight, PieChart, Boxes } from 'lucide-react';
+import { fetchWithdrawals, fetchStockCount } from '../services/dashboardApi';
 
 const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const pct = (v, base) => (base ? `${((Number(v || 0) / base) * 100).toFixed(2)}%` : '0.00%');
+// normalize รหัสสินค้าให้ตรงกันระหว่างใบเบิก (zero-pad เช่น 01000005) กับชีทสต๊อก (ตัวเลข 1000005)
+const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
 
 // ───────── หมวดวัตถุดิบตามช่วงรหัส (เทียบเป็นเลขจำนวนเต็ม 8 หลัก) ─────────
 const CATS = [
@@ -156,6 +158,62 @@ function CategoryModal({ cat, onClose }) {
   );
 }
 
+// ───────── Modal: รายละเอียดมูลค่าสต๊อกคงเหลือ ─────────
+function StockModal({ open, onClose, rows, countDate, total }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[86vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-base font-bold flex items-center gap-2"><Boxes className="w-4 h-4 text-indigo-300" /> มูลค่าสต๊อกคงเหลือ</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{countDate ? `นับ ณ ${countDate} • ` : ''}{rows.length} รายการ • รวม {baht(total)}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {rows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">ไม่มีข้อมูลสต๊อก</div>
+          ) : (
+            <div className="overflow-auto max-h-[64vh] border border-gray-100 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="text-gray-600">
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อสินค้า</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">คงเหลือ</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">หน่วย</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ราคาเบิกล่าสุด</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">มูลค่า</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-gray-700">
+                  {rows.map((r, i) => (
+                    <tr key={i} className={`hover:bg-gray-50/50 ${!r.priced && r.qty > 0 ? 'bg-amber-50/40' : ''}`}>
+                      <td className="px-3 py-2 font-mono text-gray-400">{r.itemCode}</td>
+                      <td className="px-3 py-2 font-medium text-gray-800">{r.itemName}</td>
+                      <td className="px-3 py-2 text-right font-mono">{intf(r.qty)}</td>
+                      <td className="px-3 py-2 text-gray-500">{r.unit || '-'}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-500">{r.priced ? baht(r.unitPrice) : <span className="text-amber-600">ไม่มีราคา</span>}</td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold text-indigo-600">{baht(r.value)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
+                    <td className="px-3 py-2.5" colSpan={5}>รวมมูลค่าสต๊อก</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-indigo-700">{baht(total)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // แถวในตาราง P&L
 function Row({ label, value, percent, bold, accent, indent, onClick, input }) {
   return (
@@ -183,6 +241,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [member, setMember] = useState('');
   const [delivery, setDelivery] = useState('');
   const [openCat, setOpenCat] = useState(null);
+  const [stock, setStock] = useState(null);       // { countDate, items:[{itemCode,itemName,unit,qty}] }
+  const [showStock, setShowStock] = useState(false);
 
   const rangeKey = `${startDate}~${endDate}`;
   const stale = lines !== null && loadedRange !== rangeKey;
@@ -193,9 +253,12 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
     setLoading(true);
     setError('');
     try {
-      const res = await fetchWithdrawals({ branch, outletId, startDate, endDate, signal: controller.signal });
+      const [wRes, sRes] = await Promise.all([
+        fetchWithdrawals({ branch, outletId, startDate, endDate, signal: controller.signal }),
+        fetchStockCount({ branch, endDate, signal: controller.signal }).catch(() => null), // ไม่มีข้อมูลสต๊อกก็ไม่เป็นไร
+      ]);
       const flat = [];
-      for (const doc of res.data || []) {
+      for (const doc of wRes.data || []) {
         for (const it of doc.items || []) {
           flat.push({
             itemCode: String(it.itemCode || ''),
@@ -211,6 +274,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
         }
       }
       setLines(flat);
+      setStock(sRes ? { countDate: sRes.countDate || '', items: sRes.data || [] } : { countDate: '', items: [] });
       setLoadedRange(rangeKey);
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message || 'เกิดข้อผิดพลาด');
@@ -248,6 +312,32 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   }, [lines]);
 
   const totalFoodCost = cats.reduce((s, c) => s + c.total, 0);
+
+  // ราคาเบิกล่าสุดต่อสินค้า (จาก lines ใบเบิกที่โหลดไว้)
+  const priceByItem = useMemo(() => {
+    const m = {};
+    for (const ln of lines || []) {
+      const k = normCode(ln.itemCode);
+      if (!k) continue;
+      const cur = m[k];
+      if (!cur || String(ln.docDate) >= cur.date) m[k] = { price: ln.unitPrice, date: String(ln.docDate) };
+    }
+    return m;
+  }, [lines]);
+
+  // มูลค่าสต๊อก = ยอดคงเหลือปลายงวด × ราคาเบิกล่าสุด
+  const stockRows = useMemo(() => {
+    const items = stock?.items || [];
+    return items
+      .map((it) => {
+        const k = normCode(it.itemCode);
+        const price = priceByItem[k]?.price || 0;
+        return { itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qty: Number(it.qty) || 0, unitPrice: price, value: (Number(it.qty) || 0) * price, priced: !!priceByItem[k] };
+      })
+      .sort((a, b) => b.value - a.value);
+  }, [stock, priceByItem]);
+  const stockValue = useMemo(() => stockRows.reduce((s, r) => s + r.value, 0), [stockRows]);
+  const stockUnpriced = useMemo(() => stockRows.filter((r) => r.qty > 0 && !r.priced).length, [stockRows]);
 
   // รายรับ
   const grossSales = Number(dash?.gross ?? ((dash?.sales || 0) + (dash?.tax || 0)));
@@ -344,6 +434,20 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 />
               ))}
               <Row label="สรุปค่าใช้จ่ายรวม" value={totalCost} percent={pct(totalCost, netSale)} bold accent="text-rose-700" />
+              {stock && (
+                <Row
+                  label={`มูลค่าสต๊อกคงเหลือ${stock.countDate ? ` ณ ${stock.countDate}` : ''}`}
+                  value={stockValue} percent={pct(stockValue, netSale)} accent="text-indigo-600"
+                  onClick={stockRows.length ? () => setShowStock(true) : undefined}
+                />
+              )}
+              {stock && (
+                <p className="px-3 py-2 text-[11px] text-gray-400">
+                  * มูลค่าสต๊อก = ยอดคงเหลือปลายงวด × ราคาเบิกล่าสุด (แสดงอ้างอิง ไม่เข้าสูตรกำไร)
+                  {stock.countDate ? '' : ' • ยังไม่มีข้อมูลนับสต๊อกของสาขา/ช่วงนี้'}
+                  {stockUnpriced ? ` • ${stockUnpriced} รายการไม่มีราคาเบิกในช่วงนี้` : ''}
+                </p>
+              )}
             </>
           )}
         </div>
@@ -360,6 +464,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
       )}
 
       <CategoryModal cat={openCat} onClose={() => setOpenCat(null)} />
+      <StockModal open={showStock} onClose={() => setShowStock(false)} rows={stockRows} countDate={stock?.countDate} total={stockValue} />
     </div>
   );
 }
