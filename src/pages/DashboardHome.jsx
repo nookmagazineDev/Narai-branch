@@ -527,6 +527,7 @@ export default function DashboardHome() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [drill, setDrill] = useState(null); // เมตริกที่กดดู drill-down รายวัน
+  const [showCovers, setShowCovers] = useState(false); // breakdown ประเภทลูกค้า
   const abortRef = useRef(null);
 
   const load = useCallback(
@@ -766,6 +767,7 @@ export default function DashboardHome() {
         <StatCard
           title="จำนวนลูกค้าทั้งหมด" value={intf(d.covers)} sub="คน (Covers)"
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
+          onClick={data && (d.coversBreakdown || []).length ? () => setShowCovers(true) : undefined}
         />
         <StatCard
           title="รายการไม่นับคำนวณ" value={disp(d.excludedCost)}
@@ -789,6 +791,36 @@ export default function DashboardHome() {
           <DailySalesChart daily={d.daily} />
         )}
       </div>
+
+      {/* Modal: แยกประเภทลูกค้า (Buffet/Premium/Kid/ฟรี) */}
+      {showCovers && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => setShowCovers(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2"><Users className="w-4 h-4 text-sky-300" /> จำนวนลูกค้าแยกประเภท</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{rangeText}</p>
+              </div>
+              <button onClick={() => setShowCovers(false)} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="border border-gray-100 rounded-xl overflow-hidden">
+                {(d.coversBreakdown || []).map((g) => (
+                  <div key={g.key} className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 last:border-b-0 hover:bg-sky-50/40">
+                    <span className="text-sm text-gray-700">{g.label}</span>
+                    <span className="font-mono font-semibold text-sky-700 tabular-nums">{intf(g.qty)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 font-bold text-gray-800">
+                  <span className="text-sm">จำนวนลูกค้าทั้งหมด (Covers)</span>
+                  <span className="font-mono tabular-nums">{intf(d.covers)}</span>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">* เด็กฟรี / ผู้สูงอายุฟรี เป็นข้อมูลแสดง ไม่นับรวมในจำนวนลูกค้าทั้งหมด</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Drill-down: สรุปรายวัน → คลิกวัน → รายละเอียด (บิล/breakdown ต้นทุน) */}
       {drill && (

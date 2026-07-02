@@ -37,6 +37,15 @@ const DASH_EXCLUDE_TABLES = [600];                 // โต๊ะที่ต�
 const DASH_EXCLUDE_ITEMS = [206001];               // itemCode เดี่ยวที่ตัดออก (ไปการ์ด "ไม่นับคำนวณ")
 const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode ที่ตัดออก
 const DASH_COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
+// แยกประเภทลูกค้า (โลจิกเดียวกับ naraipizzeria หัวข้อยอดรายวัน) — เด็กฟรี/ผู้สูงอายุฟรี ไม่นับรวมใน covers
+const DASH_COVER_GROUPS = [
+  { key: 'buffet259', label: 'จำนวน Buffet 259', codes: [101107, 101001] },
+  { key: 'buffet359', label: 'จำนวน Premium 359', codes: [101002] },
+  { key: 'kid159', label: 'จำนวน Kid Premium 159', codes: [101004, 101104] },
+  { key: 'kid109', label: 'จำนวน Kid Buffet 109', codes: [101108] },
+  { key: 'kidFree', label: 'จำนวนเด็กฟรี (101005)', codes: [101005] },
+  { key: 'elderFree', label: 'จำนวนผู้สูงอายุฟรี', codes: [401087, 401105, 401112] },
+];
 // วัตถุดิบ (กก) โต๊ะเตรียม — แยกออกจากต้นทุนที่ใช้คิดกำไร
 const DASH_PREP_KG_ITEMS = [206041, 206038, 205003, 205002, 205007, 205006, 205021, 206035, 206040, 205014, 205004, 206034];
 const dashExclTable = (t) => DASH_EXCLUDE_TABLES.indexOf(parseInt(t)) >= 0;
@@ -356,8 +365,12 @@ async function computeDashboard(outletNum, start, end) {
   // แยกหมวดต้นทุน + สร้าง breakdown รายไอเทม (สำหรับ modal "คลิกดูรายละเอียด")
   let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
   const costBreakdown = [], prepBreakdown = [], excludedBreakdown = [];
+  const coverGroups = DASH_COVER_GROUPS.map((g) => ({ key: g.key, label: g.label, qty: 0 }));
   for (const [ic, v] of Object.entries(itemsAgg)) {
     if (dashCoverItem(ic)) covers += v.qty;
+    const icn = parseInt(ic);
+    const gi = DASH_COVER_GROUPS.findIndex((g) => g.codes.indexOf(icn) >= 0);
+    if (gi >= 0) coverGroups[gi].qty += v.qty;
     const unitCost = menuCost[ic] ?? 0;
     const tc = unitCost * v.qty;
     if (dashExclItem(ic)) {
@@ -397,6 +410,7 @@ async function computeDashboard(outletNum, start, end) {
     excludedQty: r2(excludedQty),
     bills,
     covers: r2(covers),
+    coversBreakdown: coverGroups.map((g) => ({ ...g, qty: r2(g.qty) })),
     avgPerBill: r2(avgPerBill),
     daily,
     costBreakdown: costRows,
