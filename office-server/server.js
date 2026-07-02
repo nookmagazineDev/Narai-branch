@@ -31,6 +31,11 @@ const EXCLUDE_ITEMCODES = new Set(String(process.env.EXCLUDE_ITEMCODES || '').sp
 const EXCLUDE_PLATE_MENU_INGREDIENTS = new Set(
   String(process.env.EXCLUDE_PLATE_MENU_INGREDIENTS || '11010081').split(',').map(s => normItem(s)).filter(Boolean)
 );
+// รหัสเมนูขายที่ให้ตัดออกจากกฎด้านบนด้วย (ชื่อใน BOM ไม่มี "(ที่)" แล้ว จึงระบุรหัสตรงๆ)
+// ค่าเริ่มต้น = สันคอหมูสไลด์ 102001, สันคอหมูอนามัยสไลซ์ 180007
+const EXCLUDE_PLATE_MENU_CODES = new Set(
+  String(process.env.EXCLUDE_PLATE_MENU_CODES || '102001,180007').split(',').map(s => s.trim()).filter(Boolean)
+);
 
 // ───────── กติกาแดชบอร์ด (ตรงกับ NARAI OFFICE) ─────────
 const DASH_EXCLUDE_TABLES = [600];                 // โต๊ะที่ตัดออก
@@ -60,15 +65,25 @@ function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 function r2(n) { return Number((Number(n) || 0).toFixed(2)); }
 
-// ---------- สูตร (CostMenu + RcpDtls) + ราคาทุนต่อหน่วย ----------
+// ---------- สูตร (BOM เป็นหลัก + CostMenu/RcpDtls เป็น fallback) + ราคาทุนต่อหน่วย ----------
+// BOM: ชีทสูตรใหม่ ผูก "เลขPOS" (รหัสขาย) ตรงๆ — [0]เลขPOS [1]ชื่อเมนู [3/8]รหัสวัตถุดิบ [5]ปริมาณ [6]ตัวคูณ [7]ขนาดบรรจุ
+//   สัดส่วนใช้ต่อ 1 เสิร์ฟ = [5]×[6]÷[7] (เทียบกับสูตรเดิมตรงกัน ~99.5%)
+// เมนูที่ไม่มีใน BOM (เช่น เครื่องดื่ม Refill, เกี๊ยวซ่า) ยังใช้สูตรเดิมผ่าน bridge+RcpDtls
+const BOM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
+const BOM_GID = '419926693'; // ชีท BOM
 let bridge = {};   // sales itemCode (BOT) -> Kios (รหัสเมนูในสูตร)
 let recipe = {};   // เมนูcode -> { name, items:[{ing, per}] }
+let usageRecipe = {}; // sales itemCode -> { name, items:[{ing, per}], src:'bom'|'old' } — ใช้คิดยอดใช้
 let menuCost = {}; // รหัสขาย (BOT_ItemCode) -> ต้นทุนต่อหน่วย (บาท) — จาก CostMenu คอลัมน์ H (= cost sheet gid 1742903365 คอลัมน์สุดท้าย)
 const COST_MENU_COL = Number(process.env.COST_MENU_COL || 7); // คอลัมน์ต้นทุนต่อหน่วยใน CostMenu (0-based, H=7)
 
 async function loadSheets() {
   const get = async (name) => parseGviz(await (await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(name)}`)).text());
-  const [cm, rc] = await Promise.all([get('CostMenu'), get('RcpDtls')]);
+  const getBom = async () => parseGviz(await (await fetch(`https://docs.google.com/spreadsheets/d/${BOM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${BOM_GID}`)).text());
+  const [cm, rc, bm] = await Promise.all([
+    get('CostMenu'), get('RcpDtls'),
+    getBom().catch((e) => { console.log('โหลด BOM ล้มเหลว (จะใช้สูตรเดิมทั้งหมด): ' + e.message); return null; }),
+  ]);
   const b = {}, r = {}, mc2 = {};
   for (const row of (cm.table.rows || [])) {
     const c = row.c || [];
@@ -86,8 +101,27 @@ async function loadSheets() {
     if (!r[mc]) r[mc] = { name, items: [] };
     r[mc].items.push({ ing, per });
   }
-  bridge = b; recipe = r; menuCost = mc2;
-  console.log(`โหลดสูตรแล้ว: bridge ${Object.keys(b).length}, recipe ${Object.keys(r).length}, menuCost ${Object.keys(mc2).length}`);
+  // สูตรสำหรับคิดยอดใช้: BOM ก่อน แล้วเติมเมนูที่ BOM ไม่มีด้วยสูตรเดิม
+  const ur = {};
+  if (bm) for (const row of (bm.table.rows || [])) {
+    const c = row.c || [];
+    const pos = nstr(c[0] && c[0].v); if (!pos || isNaN(Number(pos))) continue;
+    const ing = normItem((c[8] && c[8].v != null) ? c[8].v : (c[3] && c[3].v)); if (!ing) continue;
+    const qty = Number(c[5] && c[5].v), mult = Number(c[6] && c[6].v) || 1, packSize = Number(c[7] && c[7].v);
+    if (!qty || !packSize) continue;
+    const name = (c[1] && c[1].v != null) ? String(c[1].v).trim() : '(ไม่ทราบชื่อเมนู)';
+    if (!ur[pos]) ur[pos] = { name, items: [], src: 'bom' };
+    ur[pos].items.push({ ing, per: (qty * mult) / packSize });
+  }
+  let fallbackCount = 0;
+  for (const [sc, kc] of Object.entries(b)) {
+    if (ur[sc] || !r[kc]) continue;
+    ur[sc] = { name: r[kc].name, items: r[kc].items, src: 'old' };
+    fallbackCount++;
+  }
+  bridge = b; recipe = r; menuCost = mc2; usageRecipe = ur;
+  const bomCount = Object.values(ur).filter((x) => x.src === 'bom').length;
+  console.log(`โหลดสูตรแล้ว: BOM ${bomCount} เมนู + fallback เดิม ${fallbackCount} เมนู, bridge ${Object.keys(b).length}, menuCost ${Object.keys(mc2).length}`);
 }
 
 // ---------- cache ยอดขายรายวัน ----------
@@ -222,16 +256,17 @@ async function computeUsageByMenu(outletNum, start, end) {
       for (const [ic, e] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + e.total;
     }
   }
-  // กระจายลงวัตถุดิบตามสูตร
+  // กระจายลงวัตถุดิบตามสูตร (BOM เป็นหลัก, สูตรเดิมเป็น fallback)
   const result = {};
   for (const [ic, q] of Object.entries(sales)) {
     if (!q) continue;
-    const kc = bridge[ic]; if (!kc || !recipe[kc]) continue;
-    const { name, items } = recipe[kc];
+    const rec = usageRecipe[ic]; if (!rec) continue;
+    const { name, items } = rec;
     for (const it of items) {
       const used = q * it.per; if (!used) continue;
       // วัตถุดิบบางตัว: ไม่นับเมนูหน่วย (ที่) — นับเฉพาะ (กก) (กันนับซ้ำเนื้อตัวเดียวกัน)
-      if (EXCLUDE_PLATE_MENU_INGREDIENTS.has(it.ing) && /\(\s*ที่\s*\)/.test(name)) continue;
+      // ชื่อใน BOM ไม่มี "(ที่)" แล้ว จึงเช็ครหัสเมนูใน EXCLUDE_PLATE_MENU_CODES ด้วย
+      if (EXCLUDE_PLATE_MENU_INGREDIENTS.has(it.ing) && (/\(\s*ที่\s*\)/.test(name) || EXCLUDE_PLATE_MENU_CODES.has(ic))) continue;
       if (!result[it.ing]) result[it.ing] = {};
       const e = result[it.ing][name] || (result[it.ing][name] = { qty: 0, sold: 0 });
       e.qty += used;   // ปริมาณวัตถุดิบที่ใช้
@@ -256,8 +291,7 @@ async function computeTablesForMenu(outletNum, start, end, menuName) {
     for (const entry of chunk) {
       const m = entry.outlets.get(outletNum); if (!m) continue;
       for (const [ic, e] of Object.entries(m)) {
-        const kc = bridge[ic]; if (!kc || !recipe[kc]) continue;
-        if (recipe[kc].name !== menuName) continue;
+        const rec = usageRecipe[ic]; if (!rec || rec.name !== menuName) continue;
         for (const [t, q] of Object.entries(e.tbl)) byTable[t] = (byTable[t] || 0) + q;
       }
     }
