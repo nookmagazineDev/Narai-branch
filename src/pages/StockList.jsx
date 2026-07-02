@@ -560,8 +560,8 @@ export default function StockList() {
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
-                      {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">กรอกคงเหลือ</th>}
-                      {!isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32">ขอเบิก</th>}
+                      {!isAll && <th className="px-2 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32 min-w-[110px]">กรอกคงเหลือ</th>}
+                      {!isAll && <th className="px-2 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32 min-w-[110px]">ขอเบิก</th>}
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
@@ -708,20 +708,20 @@ export default function StockList() {
 
                           {/* Input fields — hidden for 'all' */}
                           {!isAll && (
-                            <td className="px-4 py-3 whitespace-nowrap">
-                              <input type="number" min="0" step="any"
+                            <td className="px-2 py-3 whitespace-nowrap">
+                              <input type="number" min="0" step="any" inputMode="decimal"
                                 value={item.remaining}
                                 onChange={(e) => handleInputChange(originalIndex, 'remaining', e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-center text-sm"
+                                className="w-full min-w-[96px] px-2 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-center text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 placeholder="จำนวน" />
                             </td>
                           )}
                           {!isAll && (
-                            <td className="px-4 py-3 whitespace-nowrap">
-                              <input type="number" min="0" step="any"
+                            <td className="px-2 py-3 whitespace-nowrap">
+                              <input type="number" min="0" step="any" inputMode="decimal"
                                 value={item.requested}
                                 onChange={(e) => handleInputChange(originalIndex, 'requested', e.target.value)}
-                                className="w-full px-3 py-2 border border-purple-200 bg-purple-50/30 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-center text-sm font-semibold text-purple-700 placeholder:font-normal placeholder:text-gray-400"
+                                className="w-full min-w-[96px] px-2 py-2 border border-purple-200 bg-purple-50/30 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-center text-base sm:text-sm font-semibold text-purple-700 placeholder:font-normal placeholder:text-gray-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 placeholder="เบิก" />
                             </td>
                           )}
