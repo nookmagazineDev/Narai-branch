@@ -592,6 +592,12 @@ export default function DashboardHome() {
   const d = data || {};
   const profitPositive = (d.profit ?? 0) >= 0;
 
+  // หน่วยแสดงผลการ์ด: บาท หรือ % ของยอดขาย (ยอดขาย = ฐาน 100%)
+  const [unit, setUnit] = useState('baht'); // 'baht' | 'pct'
+  const salesBase = Number(d.sales) || 0;
+  const pctf = (v) => (salesBase ? `${((Number(v || 0) / salesBase) * 100).toLocaleString('th-TH', { maximumFractionDigits: 2 })}%` : '—');
+  const disp = (v) => (unit === 'pct' ? pctf(v) : baht(v));
+
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
 
   return (
@@ -701,26 +707,48 @@ export default function DashboardHome() {
       {/* สรุปกำไร/ขาดทุน (รายรับ–รายจ่าย) — ต้นทุนจากใบเบิก */}
       <ProfitSummary branch={branch} outletId={outletId} startDate={startDate} endDate={endDate} dash={d} />
 
+      {/* สลับหน่วยแสดงผลการ์ด: บาท / % ของยอดขาย */}
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-xs text-gray-400">แสดงผลเป็น</span>
+        <div className="inline-flex rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+          <button
+            onClick={() => setUnit('baht')}
+            className={`px-4 py-1.5 text-sm font-medium transition-colors ${unit === 'baht' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            ฿ บาท
+          </button>
+          <button
+            onClick={() => setUnit('pct')}
+            className={`px-4 py-1.5 text-sm font-medium transition-colors ${unit === 'pct' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+          >
+            % ของยอดขาย
+          </button>
+        </div>
+      </div>
+
       {/* การ์ดสรุป */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="ยอดขายรวมทั้งหมด" value={baht(d.sales)} sub="ก่อน VAT (Bill − VAT)"
+          title="ยอดขายรวมทั้งหมด" value={unit === 'pct' ? '100%' : baht(d.sales)}
+          sub={unit === 'pct' ? baht(d.sales) : 'ก่อน VAT (Bill − VAT)'}
           icon={DollarSign} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
           onClick={data ? () => setDrill(METRICS.sales) : undefined}
         />
         <StatCard
-          title="ต้นทุนรวมทั้งหมด" value={baht(d.cost)} sub="ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)"
+          title="ต้นทุนรวมทั้งหมด" value={disp(d.cost)}
+          sub={unit === 'pct' ? baht(d.cost) : 'ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)'}
           icon={Layers} accent={{ text: 'text-rose-500', bg: 'bg-rose-50', icon: 'text-rose-500' }}
           onClick={data ? () => setDrill(METRICS.cost) : undefined}
         />
         <StatCard
-          title="ต้นทุนโต๊ะเตรียม(กก)" value={baht(d.prepCost)}
-          sub={`${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
+          title="ต้นทุนโต๊ะเตรียม(กก)" value={disp(d.prepCost)}
+          sub={unit === 'pct' ? baht(d.prepCost) : `${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
           icon={Scale} accent={{ text: 'text-orange-500', bg: 'bg-orange-50', icon: 'text-orange-500' }}
           onClick={data ? () => setDrill(METRICS.prep) : undefined}
         />
         <StatCard
-          title="กำไร / ขาดทุนสุทธิ" value={baht(d.profit)} sub="ยอดขาย − ต้นทุนรวม"
+          title="กำไร / ขาดทุนสุทธิ" value={disp(d.profit)}
+          sub={unit === 'pct' ? baht(d.profit) : 'ยอดขาย − ต้นทุนรวม'}
           icon={TrendingUp}
           accent={profitPositive
             ? { text: 'text-indigo-600', bg: 'bg-indigo-50', icon: 'text-indigo-600' }
@@ -740,8 +768,8 @@ export default function DashboardHome() {
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
         />
         <StatCard
-          title="รายการไม่นับคำนวณ" value={baht(d.excludedCost)}
-          sub={`${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
+          title="รายการไม่นับคำนวณ" value={disp(d.excludedCost)}
+          sub={unit === 'pct' ? baht(d.excludedCost) : `${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
           icon={Ban} accent={{ text: 'text-gray-500', bg: 'bg-gray-100', icon: 'text-gray-500' }}
           onClick={data ? () => setDrill(METRICS.excluded) : undefined}
         />
