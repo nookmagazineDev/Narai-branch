@@ -246,14 +246,21 @@ function dateRange(start, end) {
 
 async function computeUsageByMenu(outletNum, start, end) {
   const days = dateRange(start, end);
-  // รวมยอดขายต่อ itemCode ของสาขานั้น ตลอดช่วง
+  // รวมยอดขายต่อ itemCode ของสาขานั้น ตลอดช่วง + แยกรายวัน (ไว้คิดยอดใช้รายวัน)
   const sales = {};
+  const salesDaily = {}; // ic -> { date -> qty }
   const CONC = 6;
   for (let i = 0; i < days.length; i += CONC) {
-    const chunk = await Promise.all(days.slice(i, i + CONC).map(getDay));
-    for (const entry of chunk) {
-      const m = entry.outlets.get(outletNum); if (!m) continue;
-      for (const [ic, e] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + e.total;
+    const slice = days.slice(i, i + CONC);
+    const chunk = await Promise.all(slice.map(getDay));
+    for (let j = 0; j < slice.length; j++) {
+      const date = slice[j];
+      const m = chunk[j].outlets.get(outletNum); if (!m) continue;
+      for (const [ic, e] of Object.entries(m)) {
+        sales[ic] = (sales[ic] || 0) + e.total;
+        const sd = salesDaily[ic] || (salesDaily[ic] = {});
+        sd[date] = (sd[date] || 0) + e.total;
+      }
     }
   }
   // วัตถุดิบไหนมีเมนูหน่วย (กก) ขายในช่วงนี้ → นับจากเมนู (กก) อย่างเดียว
@@ -267,8 +274,9 @@ async function computeUsageByMenu(outletNum, start, end) {
     if (isKgMenu(rec.name)) for (const it of rec.items) kgOnlyIngs.add(it.ing);
   }
 
-  // กระจายลงวัตถุดิบตามสูตร (BOM เป็นหลัก, สูตรเดิมเป็น fallback)
+  // กระจายลงวัตถุดิบตามสูตร (BOM เป็นหลัก, สูตรเดิมเป็น fallback) — รวมทั้งช่วง + รายวัน
   const result = {};
+  const dailyUsage = {}; // ing -> { date -> qty }
   for (const [ic, q] of Object.entries(sales)) {
     if (!q) continue;
     const rec = usageRecipe[ic]; if (!rec) continue;
@@ -284,6 +292,11 @@ async function computeUsageByMenu(outletNum, start, end) {
       const e = result[it.ing][name] || (result[it.ing][name] = { qty: 0, sold: 0 });
       e.qty += used;   // ปริมาณวัตถุดิบที่ใช้
       e.sold += q;     // จำนวนเมนูที่ขายออกไป
+      const du = dailyUsage[it.ing] || (dailyUsage[it.ing] = {});
+      for (const [dt, dq] of Object.entries(salesDaily[ic] || {})) {
+        const u = dq * it.per; if (!u) continue;
+        du[dt] = (du[dt] || 0) + u;
+      }
     }
   }
   const data = {};
@@ -291,7 +304,13 @@ async function computeUsageByMenu(outletNum, start, end) {
     data[ing] = Object.entries(result[ing]).map(([menu, v]) => ({ menu, qty: Number(v.qty.toFixed(2)), sold: Number(v.sold.toFixed(2)) }))
       .filter((x) => x.qty > 0).sort((a, b) => b.qty - a.qty);
   }
-  return data;
+  const daily = {};
+  for (const [ing, dm] of Object.entries(dailyUsage)) {
+    const out = {};
+    for (const [dt, v] of Object.entries(dm)) { const r = Number(v.toFixed(2)); if (r > 0) out[dt] = r; }
+    if (Object.keys(out).length) daily[ing] = out;
+  }
+  return { data, daily };
 }
 
 // แยกตามโต๊ะ: เมนูที่เลือก ขายที่โต๊ะไหนบ้าง (จำนวนที่ขาย)
@@ -329,8 +348,8 @@ app.get('/usagebymenu', async (req, res) => {
     const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
     if (!outletNum) return res.json({ status: 'success', data: {} });
     if (!Object.keys(recipe).length) await loadSheets();
-    const data = await computeUsageByMenu(outletNum, start, end);
-    res.json({ status: 'success', data });
+    const out = await computeUsageByMenu(outletNum, start, end);
+    res.json({ status: 'success', data: out.data, daily: out.daily });
   } catch (e) {
     console.error(e);
     res.status(500).json({ status: 'error', message: e.message });

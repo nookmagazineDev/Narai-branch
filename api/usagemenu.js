@@ -31,7 +31,11 @@ export default async function handler(req, res) {
       return res.status(502).json({ status: 'error', message: `Office API Error: ${r.status}` });
     }
     const payload = await r.json();
-    return res.status(200).json({ status: 'success', data: (payload && payload.data) ? payload.data : {} });
+    return res.status(200).json({
+      status: 'success',
+      data: (payload && payload.data) ? payload.data : {},
+      daily: (payload && payload.daily) ? payload.daily : {}, // ยอดใช้แยกรายวันต่อวัตถุดิบ
+    });
   } catch (error) {
     console.error('usagemenu error:', error);
     return res.status(500).json({ status: 'error', message: error.message });

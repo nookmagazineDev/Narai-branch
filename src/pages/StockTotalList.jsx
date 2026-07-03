@@ -106,23 +106,42 @@ export default function StockTotalList() {
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
       
-      const receivedPromises = validBranches.map(b => 
+      const receivedPromises = validBranches.map(b =>
         fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
 
-      const [usageResults, receivedResults] = await Promise.all([
+      // ยอดใช้จากสูตร BOM × ยอดขายจริง (office-server) — ใช้เป็นหลักแทนชีท UsageHistory
+      const usageMenuPromises = validBranches.map(b =>
+        fetch(`/api/usagemenu?branch=${encodeURIComponent(b.name)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
+        .then(r => r.json()).catch(() => ({ status: 'error' }))
+      );
+
+      const [usageResults, receivedResults, usageMenuResults] = await Promise.all([
         Promise.all(usagePromises),
-        Promise.all(receivedPromises)
+        Promise.all(receivedPromises),
+        Promise.all(usageMenuPromises)
       ]);
 
       let baseItems = stockRes.data;
 
-      // Aggregate Usage
+      // Aggregate Usage — สูตร BOM × ยอดขายจริง เป็นหลัก, วัตถุดิบนอกสูตร/office-server ล่ม ใช้ชีท UsageHistory
       const branchUsageMap = {};
       usageResults.forEach((res, idx) => {
         const bName = String(validBranches[idx].name).toLowerCase();
-        branchUsageMap[bName] = res.status === 'success' && res.data ? res.data : {};
+        const sheetData = res.status === 'success' && res.data ? res.data : {};
+        const menuRes = usageMenuResults[idx];
+        const daily = (menuRes && menuRes.status === 'success' && menuRes.daily) ? menuRes.daily : null;
+        if (daily && Object.keys(daily).length) {
+          const bom = {};
+          Object.entries(daily).forEach(([ing, dm]) => {
+            const total = Number(Object.values(dm).reduce((s, q) => s + (Number(q) || 0), 0).toFixed(2));
+            if (total > 0) bom[ing] = { total, details: dm };
+          });
+          branchUsageMap[bName] = { ...sheetData, ...bom };
+        } else {
+          branchUsageMap[bName] = sheetData;
+        }
       });
 
       // Aggregate Received

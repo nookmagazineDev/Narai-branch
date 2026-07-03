@@ -119,19 +119,24 @@ export default function StockList() {
         fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
 
-      // ยอดใช้แยกตามเมนูที่ขายจริง (Method 2) — ถ้าไม่มีข้อมูลจะเป็น {}
+      // ยอดใช้แยกตามเมนูที่ขายจริง (สูตร BOM × ยอดขาย จาก office-server) — ถ้าไม่มีข้อมูลจะเป็น {}
       const byMenuMap = usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {};
+      const byMenuDaily = usageMenuRes.status === 'success' ? (usageMenuRes.daily || {}) : {};
       setUsageByMenu(byMenuMap);
 
       setItems(prevItems => prevItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+        // ยอดใช้: คำนวณจากสูตร BOM × ยอดขายจริง เป็นหลัก
+        // ถ้า office-server ล่ม/วัตถุดิบไม่อยู่ในสูตรไหนเลย → fallback ตัวเลขชีท UsageHistory
         let apiUsage = usageRes.status === 'success' ? (usageRes.data[normId] || null) : item.apiUsage;
-        // วัตถุดิบที่ยอดใช้มาจากเมนู (กก) ล้วน: ใช้น้ำหนักชั่งกิโลจริงจาก POS
-        // แทนตัวเลข UsageHistory (สูตรภายใน POS) ให้เลขนอกตาราง = เลขในป๊อปอัป
-        const kgRows = byMenuMap[normId];
-        if (kgRows && kgRows.length && kgRows.every(r => /\(\s*กก/.test(String(r.menu || '')))) {
-          const kgTotal = Number(kgRows.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2));
-          if (kgTotal > 0) apiUsage = { details: {}, ...(apiUsage || {}), total: kgTotal, kgOnly: true };
+        if (apiUsage) apiUsage = { ...apiUsage, source: 'sheet' };
+        const bomRows = byMenuMap[normId];
+        if (bomRows && bomRows.length) {
+          const bomTotal = Number(bomRows.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2));
+          if (bomTotal > 0) {
+            const kgOnly = bomRows.every(r => /\(\s*กก/.test(String(r.menu || '')));
+            apiUsage = { total: bomTotal, details: byMenuDaily[normId] || {}, source: 'bom', kgOnly };
+          }
         }
         return {
           ...item,
@@ -655,15 +660,13 @@ export default function StockList() {
                                 onClick={() => {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
                                   setExpandedMenu(null);
-                                  // ปรับยอดแยกเมนู (ประมาณจากสูตร) ให้ผลรวม = ยอดใช้จากระบบ (POS) โดยคงสัดส่วนเมนูเดิม
-                                  // ยกเว้น: ยอดใช้ที่มาจากเมนู (กก) ล้วน = น้ำหนักชั่งกิโลจริงจาก POS อยู่แล้ว ไม่ต้องปรับ
-                                  const rawByMenu = usageByMenu[nid] || [];
-                                  const kgOnly = rawByMenu.length > 0 && rawByMenu.every(r => /\(\s*กก/.test(String(r.menu || '')));
-                                  const estTotal = rawByMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-                                  const posTotal = Number(item.apiUsage.total) || 0;
-                                  const scale = (!kgOnly && posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
-                                  const byMenu = rawByMenu.map(r => ({ ...r, qty: Number((Number(r.qty) * scale).toFixed(2)) }));
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal: kgOnly ? null : posTotal, scaled: scale !== 1, kgOnly });
+                                  // ยอดใช้หลัก = สูตร BOM × ยอดขายจริง อยู่แล้ว — แสดงตามจริงไม่ต้องปรับสเกล
+                                  const byMenu = (usageByMenu[nid] || []).map(r => ({ ...r, qty: Number((Number(r.qty) || 0).toFixed(2)) }));
+                                  setSelectedUsageDetails({
+                                    name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [],
+                                    byMenu, posTotal: null, scaled: false,
+                                    kgOnly: !!item.apiUsage.kgOnly, source: item.apiUsage.source,
+                                  });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
@@ -672,9 +675,11 @@ export default function StockList() {
                             ) : (
                               <div className="font-semibold text-emerald-600 text-sm">-</div>
                             )}
-                            {item.apiUsage?.kgOnly && (
+                            {item.apiUsage?.kgOnly ? (
                               <div className="text-[10px] text-amber-500 mt-0.5">ชั่งกิโลจริง (เมนู กก)</div>
-                            )}
+                            ) : item.apiUsage?.source === 'sheet' ? (
+                              <div className="text-[10px] text-gray-400 mt-0.5">จากชีท UsageHistory</div>
+                            ) : null}
                           </td>
                           )}
 
@@ -802,8 +807,9 @@ export default function StockList() {
                     </p>
                     <p className="text-[11px] text-gray-400 mb-1">
                       แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย — แต่ละโต๊ะแสดง <span className="font-semibold text-emerald-600">ขาย (จำนวนที่สั่ง)</span> · <span className="font-semibold text-amber-600">ใช้ (กก.)</span>
-                      {selectedUsageDetails.scaled && <span className="text-emerald-500"> · ปรับยอดให้รวม = ยอดใช้จากระบบ (POS)</span>}
-                      {selectedUsageDetails.kgOnly && <span className="text-amber-600"> · ยอดชั่งกิโลจริงจาก POS (เมนู กก) ไม่ปรับสเกล</span>}
+                      {selectedUsageDetails.kgOnly
+                        ? <span className="text-amber-600"> · ยอดชั่งกิโลจริงจาก POS (เมนู กก)</span>
+                        : selectedUsageDetails.source === 'bom' && <span className="text-emerald-500"> · คำนวณจากสูตร BOM × ยอดขายจริง</span>}
                     </p>
                     <table className="w-full text-sm text-left border-collapse">
                       <thead className="bg-emerald-50 border-b">
