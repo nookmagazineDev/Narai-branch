@@ -256,6 +256,17 @@ async function computeUsageByMenu(outletNum, start, end) {
       for (const [ic, e] of Object.entries(m)) sales[ic] = (sales[ic] || 0) + e.total;
     }
   }
+  // วัตถุดิบไหนมีเมนูหน่วย (กก) ขายในช่วงนี้ → นับจากเมนู (กก) อย่างเดียว
+  // เพราะยอดขาย (กก) คือน้ำหนักชั่งจริงจาก POS (BOM: F×ยอดขาย÷H โดย F=H → ใช้ = ยอดขายตรงๆ)
+  // กันนับซ้ำเนื้อก้อนเดียวกันจากเมนูจานสไลด์/เมนูอื่นที่ใช้วัตถุดิบเดียวกัน
+  const isKgMenu = (n) => /\(\s*กก/.test(n);
+  const kgOnlyIngs = new Set();
+  for (const [ic, q] of Object.entries(sales)) {
+    if (!q) continue;
+    const rec = usageRecipe[ic]; if (!rec) continue;
+    if (isKgMenu(rec.name)) for (const it of rec.items) kgOnlyIngs.add(it.ing);
+  }
+
   // กระจายลงวัตถุดิบตามสูตร (BOM เป็นหลัก, สูตรเดิมเป็น fallback)
   const result = {};
   for (const [ic, q] of Object.entries(sales)) {
@@ -264,6 +275,8 @@ async function computeUsageByMenu(outletNum, start, end) {
     const { name, items } = rec;
     for (const it of items) {
       const used = q * it.per; if (!used) continue;
+      // วัตถุดิบที่มีเมนู (กก): นับเฉพาะเมนู (กก) — ตัดเมนูอื่นทั้งหมด
+      if (kgOnlyIngs.has(it.ing) && !isKgMenu(name)) continue;
       // วัตถุดิบบางตัว: ไม่นับเมนูหน่วย (ที่) — นับเฉพาะ (กก) (กันนับซ้ำเนื้อตัวเดียวกัน)
       // ชื่อใน BOM ไม่มี "(ที่)" แล้ว จึงเช็ครหัสเมนูใน EXCLUDE_PLATE_MENU_CODES ด้วย
       if (EXCLUDE_PLATE_MENU_INGREDIENTS.has(it.ing) && (/\(\s*ที่\s*\)/.test(name) || EXCLUDE_PLATE_MENU_CODES.has(ic))) continue;

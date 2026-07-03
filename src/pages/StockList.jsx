@@ -647,12 +647,14 @@ export default function StockList() {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
                                   setExpandedMenu(null);
                                   // ปรับยอดแยกเมนู (ประมาณจากสูตร) ให้ผลรวม = ยอดใช้จากระบบ (POS) โดยคงสัดส่วนเมนูเดิม
+                                  // ยกเว้น: ยอดใช้ที่มาจากเมนู (กก) ล้วน = น้ำหนักชั่งกิโลจริงจาก POS อยู่แล้ว ไม่ต้องปรับ
                                   const rawByMenu = usageByMenu[nid] || [];
+                                  const kgOnly = rawByMenu.length > 0 && rawByMenu.every(r => /\(\s*กก/.test(String(r.menu || '')));
                                   const estTotal = rawByMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0);
                                   const posTotal = Number(item.apiUsage.total) || 0;
-                                  const scale = (posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
+                                  const scale = (!kgOnly && posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
                                   const byMenu = rawByMenu.map(r => ({ ...r, qty: Number((Number(r.qty) * scale).toFixed(2)) }));
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal, scaled: scale !== 1 });
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal: kgOnly ? null : posTotal, scaled: scale !== 1, kgOnly });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
@@ -789,6 +791,7 @@ export default function StockList() {
                     <p className="text-[11px] text-gray-400 mb-1">
                       แตะที่ชื่อเมนูเพื่อดูโต๊ะที่ขาย — แต่ละโต๊ะแสดง <span className="font-semibold text-emerald-600">ขาย (จำนวนที่สั่ง)</span> · <span className="font-semibold text-amber-600">ใช้ (กก.)</span>
                       {selectedUsageDetails.scaled && <span className="text-emerald-500"> · ปรับยอดให้รวม = ยอดใช้จากระบบ (POS)</span>}
+                      {selectedUsageDetails.kgOnly && <span className="text-amber-600"> · ยอดชั่งกิโลจริงจาก POS (เมนู กก) ไม่ปรับสเกล</span>}
                     </p>
                     <table className="w-full text-sm text-left border-collapse">
                       <thead className="bg-emerald-50 border-b">
