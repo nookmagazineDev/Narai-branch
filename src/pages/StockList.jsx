@@ -120,13 +120,22 @@ export default function StockList() {
       ]);
 
       // ยอดใช้แยกตามเมนูที่ขายจริง (Method 2) — ถ้าไม่มีข้อมูลจะเป็น {}
-      setUsageByMenu(usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {});
+      const byMenuMap = usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {};
+      setUsageByMenu(byMenuMap);
 
       setItems(prevItems => prevItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
+        let apiUsage = usageRes.status === 'success' ? (usageRes.data[normId] || null) : item.apiUsage;
+        // วัตถุดิบที่ยอดใช้มาจากเมนู (กก) ล้วน: ใช้น้ำหนักชั่งกิโลจริงจาก POS
+        // แทนตัวเลข UsageHistory (สูตรภายใน POS) ให้เลขนอกตาราง = เลขในป๊อปอัป
+        const kgRows = byMenuMap[normId];
+        if (kgRows && kgRows.length && kgRows.every(r => /\(\s*กก/.test(String(r.menu || '')))) {
+          const kgTotal = Number(kgRows.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2));
+          if (kgTotal > 0) apiUsage = { details: {}, ...(apiUsage || {}), total: kgTotal, kgOnly: true };
+        }
         return {
           ...item,
-          apiUsage: usageRes.status === 'success' ? (usageRes.data[normId] || null) : item.apiUsage,
+          apiUsage,
           apiReceived: receivedRes.status === 'success' ? (receivedRes.data[normId] || null) : item.apiReceived,
         };
       }));
@@ -662,6 +671,9 @@ export default function StockList() {
                               </div>
                             ) : (
                               <div className="font-semibold text-emerald-600 text-sm">-</div>
+                            )}
+                            {item.apiUsage?.kgOnly && (
+                              <div className="text-[10px] text-amber-500 mt-0.5">ชั่งกิโลจริง (เมนู กก)</div>
                             )}
                           </td>
                           )}
