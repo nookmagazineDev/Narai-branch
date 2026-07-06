@@ -978,10 +978,17 @@ function doPost(e) {
         reqNumber = prefix + runningStr;
       }
       
+      // รหัสสินค้า: เก็บเป็นตัวเลขถ้าเป็นเลขล้วน (ให้ชนิดข้อมูลตรงกับแถวเดิม — ถ้าเก็บเป็นข้อความปนกัน
+      // gviz จะคืนค่า null ทำให้หน้ามูลค่าสต๊อกจับคู่รหัสไม่ได้) เลข 0 นำหน้าตัดได้ เพราะทุกจุด normalize อยู่แล้ว
+      var pidValue = function(pid) {
+        var s = String(pid == null ? '' : pid).trim();
+        return /^\d+$/.test(s) ? Number(s) : s;
+      };
+
       items.forEach(function(item) {
         // Save remaining stock
         if (item.remaining !== null && item.remaining !== undefined && item.remaining !== '') {
-          countSheet.appendRow([formattedDate, counterName, branch, "'" + item.productId, item.name, item.unit, item.remaining]);
+          countSheet.appendRow([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
           
           // Update balance sheet
           var normId = normalizeId(item.productId);

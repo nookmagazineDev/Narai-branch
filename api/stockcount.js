@@ -51,10 +51,22 @@ export default async function handler(req, res) {
   const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    const [stockJ, priceJ] = await Promise.all([
+    const [stockJ, priceJ, masterJ] = await Promise.all([
       fetchGviz(`${base}&gid=${GID_STOCK}`),
       fetchGviz(`${base}&sheet=${encodeURIComponent(PRICE_SHEET)}`),
+      // ชีทรายการสินค้า (A=รหัส B=ชื่อ) — ใช้เทียบชื่อหารหัส กรณีแถวนับสต๊อกรหัสอ่านไม่ได้
+      // (แถวที่บันทึกผ่านเว็บเก็บรหัสเป็นข้อความ ปนกับแถวเก่าที่เป็นตัวเลข ทำให้ gviz คืน null)
+      fetchGviz(`${base}&sheet=${encodeURIComponent('รายการสินค้า')}`).catch(() => null),
     ]);
+
+    // name (trim) -> code จากชีทรายการสินค้า
+    const codeByName = {};
+    if (masterJ) for (const rw of (masterJ.table.rows || [])) {
+      const c = rw.c || [];
+      const code = normCode(c[0] && c[0].v);
+      const nm = c[1] && c[1].v != null ? String(c[1].v).trim() : '';
+      if (code && nm && !codeByName[nm]) codeByName[nm] = code;
+    }
 
     // ราคากลางจากชีท 8.2: รหัส -> ราคา/หน่วย
     const priceMap = {};
@@ -85,10 +97,12 @@ export default async function handler(req, res) {
       const map = {};
       for (const { ds, rw } of brRows) {
         if (ds !== cd) continue;
-        const code = normCode(rw[3]);
+        // รหัสจากคอลัมน์ D; ถ้าอ่านไม่ได้ (gviz คืน null เพราะชนิดข้อมูลปน) เทียบจากชื่อสินค้าแทน
+        const nm = rw[4] != null ? String(rw[4]).trim() : '';
+        const code = normCode(rw[3]) || codeByName[nm] || '';
         if (!code) continue;
         const qty = Number(rw[6]) || 0;
-        const e = map[code] || (map[code] = { itemCode: code, itemName: rw[4] || '-', unit: rw[5] || '', qty: 0 });
+        const e = map[code] || (map[code] = { itemCode: code, itemName: nm || '-', unit: rw[5] || '', qty: 0 });
         e.qty += qty;
       }
       let total = 0;
