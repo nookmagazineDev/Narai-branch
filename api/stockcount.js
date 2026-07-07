@@ -85,25 +85,23 @@ export default async function handler(req, res) {
       .map((rw) => ({ ds: parseGvizDate(rw[0]), rw }))
       .filter((x) => x.ds);
 
-    // เลือกยอดนับล่าสุดภายในเดือนที่กำหนด แล้วผูกราคา + คิดมูลค่า
+    // รวมทุกวันนับในเดือนนั้น แล้ว "แต่ละสินค้าเอายอดจากวันล่าสุดที่นับ" (ตัดซ้ำ)
+    // กรณีนับ 1 เดือนกระจายหลายวัน (เช่น 3 ก.ค. แล้วนับเพิ่ม/แก้ 4 ก.ค.) จะได้ครบทุกสินค้า ไม่ตกหล่น
     const pick = (monthPrefix, maxDate) => {
-      let cd = '';
-      for (const { ds } of brRows) {
-        if (!ds.startsWith(monthPrefix)) continue;
-        if (maxDate && ds > maxDate) continue;
-        if (ds > cd) cd = ds;
-      }
-      if (!cd) return { countDate: '', total: 0, data: [] };
-      const map = {};
-      for (const { ds, rw } of brRows) {
-        if (ds !== cd) continue;
+      const inMonth = brRows.filter(({ ds }) => ds.startsWith(monthPrefix) && (!maxDate || ds <= maxDate));
+      if (!inMonth.length) return { countDate: '', total: 0, data: [] };
+      const latestDate = inMonth.reduce((m, { ds }) => (ds > m ? ds : m), '');
+      const map = {}; // code -> { date(ล่าสุดที่พบสินค้านี้), qty, name, unit }
+      for (const { ds, rw } of inMonth) {
         // รหัสจากคอลัมน์ D; ถ้าอ่านไม่ได้ (gviz คืน null เพราะชนิดข้อมูลปน) เทียบจากชื่อสินค้าแทน
         const nm = rw[4] != null ? String(rw[4]).trim() : '';
         const code = normCode(rw[3]) || codeByName[nm] || '';
         if (!code) continue;
         const qty = Number(rw[6]) || 0;
-        const e = map[code] || (map[code] = { itemCode: code, itemName: nm || '-', unit: rw[5] || '', qty: 0 });
-        e.qty += qty;
+        const e = map[code];
+        if (!e || ds > e.date) map[code] = { date: ds, itemCode: code, itemName: nm || '-', unit: rw[5] || '', qty };
+        else if (ds === e.date) e.qty += qty; // วันเดียวกันมีหลายแถว = รวม
+        // ds < e.date (นับก่อนหน้า) = ข้าม เพราะมียอดวันล่าสุดของสินค้านี้แล้ว
       }
       let total = 0;
       const data = Object.values(map).map((it) => {
@@ -111,9 +109,9 @@ export default async function handler(req, res) {
         const unitPrice = has ? priceMap[it.itemCode] : 0;
         const value = it.qty * unitPrice;
         total += value;
-        return { ...it, unitPrice, value, priced: has };
+        return { itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qty: it.qty, unitPrice, value, priced: has };
       }).sort((a, b) => b.value - a.value);
-      return { countDate: cd, total, data };
+      return { countDate: latestDate, total, data };
     };
 
     const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end)
