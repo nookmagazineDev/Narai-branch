@@ -99,8 +99,9 @@ export default async function handler(req, res) {
         if (!code) continue;
         const qty = Number(rw[6]) || 0;
         const e = map[code];
-        if (!e || ds > e.date) map[code] = { date: ds, itemCode: code, itemName: nm || '-', unit: rw[5] || '', qty };
-        else if (ds === e.date) e.qty += qty; // วันเดียวกันมีหลายแถว = รวม
+        // วันล่าสุดของสินค้านี้ชนะ; ถ้าวันเดียวกันมีหลายแถว (นับซ้ำ/แก้) เอา "แถวหลังสุด" ในชีท
+        // (brRows เรียงตามลำดับแถวในชีท → แถวที่วนถึงทีหลัง = ล่าสุด)
+        if (!e || ds >= e.date) map[code] = { date: ds, itemCode: code, itemName: nm || '-', unit: rw[5] || '', qty };
         // ds < e.date (นับก่อนหน้า) = ข้าม เพราะมียอดวันล่าสุดของสินค้านี้แล้ว
       }
       let total = 0;
