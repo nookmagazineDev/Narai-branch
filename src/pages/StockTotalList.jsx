@@ -117,10 +117,17 @@ export default function StockTotalList() {
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
 
-      const [usageResults, receivedResults, usageMenuResults] = await Promise.all([
+      // ยอดรับจากรายจ่าย Supplier (สาขากรอกในหน้ากรอกรายจ่าย) — รวมเป็น "ยอดรับ" ด้วย
+      const supRcvPromises = validBranches.map(b =>
+        fetch(`/api/stockcount?branch=${encodeURIComponent(b.name)}&start=${encodeURIComponent(fetchStartDate)}&end=${encodeURIComponent(fetchEndDate)}&supreceived=1`)
+        .then(r => r.json()).catch(() => ({ status: 'error' }))
+      );
+
+      const [usageResults, receivedResults, usageMenuResults, supRcvResults] = await Promise.all([
         Promise.all(usagePromises),
         Promise.all(receivedPromises),
-        Promise.all(usageMenuPromises)
+        Promise.all(usageMenuPromises),
+        Promise.all(supRcvPromises)
       ]);
 
       let baseItems = stockRes.data;
@@ -144,11 +151,22 @@ export default function StockTotalList() {
         }
       });
 
-      // Aggregate Received
+      // Aggregate Received — POS (orderd) + รายจ่าย Supplier รวมกัน
       const branchReceivedMap = {};
       receivedResults.forEach((res, idx) => {
         const bName = String(validBranches[idx].name).toLowerCase();
-        branchReceivedMap[bName] = res.status === 'success' && res.data ? res.data : {};
+        const pos = res.status === 'success' && res.data ? res.data : {};
+        const supR = supRcvResults[idx];
+        const sup = (supR && supR.status === 'success' && supR.data) ? supR.data : {};
+        const merged = { ...pos };
+        Object.entries(sup).forEach(([code, s]) => {
+          const p = merged[code];
+          if (!p) { merged[code] = { ...s }; return; }
+          const details = { ...(p.details || {}) };
+          Object.entries(s.details || {}).forEach(([d, q]) => { details[d] = Number(((details[d] || 0) + q).toFixed(2)); });
+          merged[code] = { total: Number(((p.total || 0) + (s.total || 0)).toFixed(2)), details, unit: p.unit || s.unit };
+        });
+        branchReceivedMap[bName] = merged;
       });
 
       // Merge and Calculate

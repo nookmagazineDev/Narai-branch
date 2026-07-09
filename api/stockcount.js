@@ -86,6 +86,42 @@ export default async function handler(req, res) {
     }
   }
 
+  // โหมด "ยอดรับจากรายจ่าย Supplier" (?supreceived=1&branch=&start=&end=)
+  // คืนรูปแบบเดียวกับ /api/orderd -> { code: {total, details:{date:qty}, unit} } เพื่อ merge เป็น "ยอดรับ" ในหน้านับสต๊อก
+  if (req.query.supreceived) {
+    const brK = String(req.query.branch || '').toLowerCase().trim();
+    const st = String(req.query.start || '0000-01-01');
+    const en = String(req.query.end || '9999-12-31');
+    if (!brK) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
+    try {
+      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SUP_SHEET)}`);
+      const text = await r.text();
+      if (text.startsWith('<')) return res.status(200).json({ status: 'success', data: {} });
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      const j = JSON.parse(text.substring(a, b + 1));
+      const map = {};
+      for (const rw of (j.table.rows || [])) {
+        const c = rw.c || [];
+        if (String((c[1] && c[1].v) || '').toLowerCase().trim() !== brK) continue; // [1]สาขา
+        const ds = cellYmd(c[0]); // [0]วันที่
+        if (!ds || ds < st || ds > en) continue;
+        const code = normCode(c[2] && c[2].v); // [2]รหัส
+        if (!code) continue;
+        const qty = Number(c[5] && c[5].v) || 0; // [5]จำนวน
+        const e = map[code] || (map[code] = { total: 0, details: {}, unit: (c[4] && c[4].v) || '' });
+        e.total += qty;
+        e.details[ds] = (e.details[ds] || 0) + qty;
+      }
+      for (const k of Object.keys(map)) {
+        map[k].total = Number(map[k].total.toFixed(2));
+        for (const d of Object.keys(map[k].details)) map[k].details[d] = Number(map[k].details[d].toFixed(2));
+      }
+      return res.status(200).json({ status: 'success', data: map });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
   const branchKey = String(req.query.branch || '').toLowerCase().trim();
   const endStr = String(req.query.end || '9999-12-31');
   const startStr = String(req.query.start || ''); // ช่วงเริ่มของรายจ่าย Supplier (P&L); ว่าง = ไม่จำกัดล่าง

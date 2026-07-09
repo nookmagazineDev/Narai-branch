@@ -113,11 +113,24 @@ export default function StockList() {
     setIsFetchingApi(true);
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
-      const [usageRes, receivedRes, usageMenuRes] = await Promise.all([
+      const supQs = `branch=${encodeURIComponent(effectiveBranch)}&start=${encodeURIComponent(apiStartDate)}&end=${encodeURIComponent(apiEndDate)}&supreceived=1`;
+      const [usageRes, receivedRes, usageMenuRes, supRcvRes] = await Promise.all([
         fetch(`/api/usage?${qs}`).then(r => r.json()),
         fetch(`/api/orderd?${qs}`).then(r => r.json()),
         fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
+        fetch(`/api/stockcount?${supQs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
+
+      // ยอดรับจากรายจ่าย Supplier (ที่สาขากรอกในหน้ากรอกรายจ่าย) — merge เข้ากับยอดรับจาก POS
+      const supRcv = supRcvRes.status === 'success' ? (supRcvRes.data || {}) : {};
+      const mergeReceived = (a, b) => {
+        if (!a && !b) return null;
+        if (!a) return { ...b, fromSup: true };
+        if (!b) return a;
+        const details = { ...(a.details || {}) };
+        for (const [d, q] of Object.entries(b.details || {})) details[d] = Number(((details[d] || 0) + q).toFixed(2));
+        return { total: Number(((a.total || 0) + (b.total || 0)).toFixed(2)), details, unit: a.unit || b.unit, fromSup: true };
+      };
 
       // ยอดใช้แยกตามเมนูที่ขายจริง (สูตร BOM × ยอดขาย จาก office-server) — ถ้าไม่มีข้อมูลจะเป็น {}
       const byMenuMap = usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {};
@@ -138,10 +151,12 @@ export default function StockList() {
             apiUsage = { total: bomTotal, details: byMenuDaily[normId] || {}, source: 'bom', kgOnly };
           }
         }
+        const posReceived = receivedRes.status === 'success' ? (receivedRes.data[normId] || null) : null;
+        const merged = mergeReceived(posReceived, supRcv[normId] || null);
         return {
           ...item,
           apiUsage,
-          apiReceived: receivedRes.status === 'success' ? (receivedRes.data[normId] || null) : item.apiReceived,
+          apiReceived: merged !== null ? merged : item.apiReceived,
         };
       }));
 
