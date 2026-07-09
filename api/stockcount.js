@@ -42,6 +42,30 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
+  // โหมดราคาอย่างเดียว (?prices=1) — ใช้ในหน้ากรอกรายจ่าย: คืน code -> {name, price} จากชีท 8.2
+  // (รวมไว้ใน endpoint นี้เพราะ Vercel Hobby จำกัด serverless functions ที่ 12 ตัว)
+  if (req.query.prices) {
+    try {
+      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(PRICE_SHEET)}`);
+      const text = await r.text();
+      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีท 8.2 ไม่ได้' });
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      const j = JSON.parse(text.substring(a, b + 1));
+      const data = {};
+      for (const rw of (j.table.rows || [])) {
+        const c = rw.c || [];
+        const code = normCode(c[0] && c[0].v);
+        if (!code) continue;
+        const price = Number(c[2] && c[2].v);
+        const name = c[1] && c[1].v != null ? String(c[1].v).trim() : '';
+        if (!Number.isNaN(price)) data[code] = { name, price };
+      }
+      return res.status(200).json({ status: 'success', data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
   const branchKey = String(req.query.branch || '').toLowerCase().trim();
   const endStr = String(req.query.end || '9999-12-31');
   if (!branchKey) return res.status(400).json({ status: 'error', message: 'ระบุสาขาไม่ครบถ้วน' });

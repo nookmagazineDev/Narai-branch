@@ -50,7 +50,7 @@ export default function ExpenseEntry() {
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/supprices')
+    fetch('/api/stockcount?prices=1')
       .then((r) => r.json())
       .then((res) => {
         if (!alive) return;
