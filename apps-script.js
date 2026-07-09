@@ -898,6 +898,54 @@ function doPost(e) {
       }
       response.status = 'success';
       response.data = items;
+    } else if (action === 'saveSupCost') {
+      // กรอกรายจ่าย (ต้นทุนจาก Supplier): บันทึกลงชีท "ต้นทุนจากsup"
+      // ราคา/หน่วยอ่านสดจากชีท 8.2 (ไฟล์สต๊อก) ฝั่ง server — client ส่งมาแค่ code/qty
+      var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
+      var supSheet = supSs.getSheetByName('ต้นทุนจากsup');
+      if (!supSheet) {
+        supSheet = supSs.insertSheet('ต้นทุนจากsup');
+        supSheet.appendRow(['วันที่', 'สาขา', 'รหัส', 'ชื่อรายการ', 'หน่วย', 'จำนวน', 'ราคา/หน่วย', 'มูลค่ารวม', 'ผู้บันทึก', 'เวลาบันทึก']);
+        supSheet.getRange('A1:J1').setFontWeight('bold');
+      }
+
+      var supNorm = function(id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      // ราคาจากชีท 8.2: [0]=รหัส [2]=ราคา
+      var priceMap82 = {};
+      var priceSheet = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ').getSheetByName('8.2');
+      if (priceSheet) {
+        var pv = priceSheet.getDataRange().getValues();
+        for (var pi = 1; pi < pv.length; pi++) {
+          var pCode = supNorm(pv[pi][0]);
+          var pPrice = parseFloat(pv[pi][2]);
+          if (pCode && !isNaN(pPrice)) priceMap82[pCode] = pPrice;
+        }
+      }
+
+      var supItems = data.items || [];
+      var supBranch = (data.branch || '').toLowerCase();
+      var supDate = data.date || '';
+      var supRecorder = data.recorder || 'Unknown';
+      if (!supBranch) throw new Error('ไม่ระบุสาขา');
+      if (!supDate) throw new Error('ไม่ระบุวันที่');
+      if (!supItems.length) throw new Error('ไม่มีรายการที่กรอกจำนวน');
+
+      var supNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+      var supTotal = 0, supCount = 0;
+      supItems.forEach(function(it) {
+        var q = parseFloat(it.qty);
+        if (isNaN(q) || q <= 0) return;
+        var codeN = supNorm(it.code);
+        var unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : (parseFloat(it.price) || 0);
+        var amount = Math.round(q * unitPrice * 100) / 100;
+        supSheet.appendRow([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow]);
+        supTotal += amount; supCount++;
+      });
+
+      response.status = 'success';
+      response.message = 'บันทึกรายจ่ายแล้ว ' + supCount + ' รายการ รวม ฿' + supTotal.toFixed(2);
+      response.data = { count: supCount, total: Math.round(supTotal * 100) / 100 };
+
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
       

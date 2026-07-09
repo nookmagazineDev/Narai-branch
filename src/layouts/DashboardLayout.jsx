@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch } from 'lucide-react';
+import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet } from 'lucide-react';
 import { useState } from 'react';
 
 export default function DashboardLayout() {
@@ -37,11 +37,12 @@ export default function DashboardLayout() {
       icon: PackageSearch,
       subItems: [
         { name: 'นับสต๊อกและขอเบิก', path: '/stock/list' },
-        ...(String(user?.branch).toLowerCase() === 'all' 
-          ? [{ name: 'ดูยอดรวมทุกสาขา', path: '/stock/total' }] 
+        ...(String(user?.branch).toLowerCase() === 'all'
+          ? [{ name: 'ดูยอดรวมทุกสาขา', path: '/stock/total' }]
           : [])
       ]
-    }
+    },
+    { name: 'กรอกรายจ่าย', path: '/expense', icon: Wallet }
   ];
 
   return (
