@@ -22,6 +22,7 @@ const SUP_ITEMS = [
   { code: '11100052', unit: 'ลิตร' },
   { code: '11100091', unit: 'กป.' },
   { code: '11100092', unit: 'กป.' },
+  { code: '11100100', unit: 'ถุง', name: 'น้ำแข็ง', manualPrice: true }, // กรอกราคา/หน่วยเอง (ไม่มีในชีท 8.2)
   { code: '11100101', unit: 'กล่อง' },
   { code: '11100102', unit: 'กล่อง' },
   { code: '11100103', unit: 'กล่อง' },
@@ -40,6 +41,7 @@ export default function ExpenseEntry() {
   const [prices, setPrices] = useState(null); // { code: {name, price} }
   const [loadingPrices, setLoadingPrices] = useState(true);
   const [qty, setQty] = useState({});        // code -> จำนวน (string)
+  const [manualPrice, setManualPrice] = useState({}); // code -> ราคา/หน่วย (string) สำหรับรายการที่กรอกราคาเอง
   const [date, setDate] = useState(todayStr());
   const [saving, setSaving] = useState(false);
 
@@ -79,11 +81,16 @@ export default function ExpenseEntry() {
 
   const norm = (c) => String(c).replace(/^0+/, '');
   const rows = useMemo(() => SUP_ITEMS.map((it) => {
-    const p = prices?.[norm(it.code)] || null;
     const q = parseFloat(qty[it.code]) || 0;
+    if (it.manualPrice) {
+      // รายการกรอกราคาเอง (ไม่ดึงจากชีท 8.2) — ราคา/หน่วยพิมพ์เอง
+      const price = parseFloat(manualPrice[it.code]) || 0;
+      return { ...it, name: it.name, price, hasPrice: price > 0, qty: q, amount: q * price };
+    }
+    const p = prices?.[norm(it.code)] || null;
     const price = p ? p.price : 0;
     return { ...it, name: p ? p.name : '(ไม่พบใน 8.2)', price, hasPrice: !!p, qty: q, amount: q * price };
-  }), [prices, qty]);
+  }), [prices, qty, manualPrice]);
 
   const total = rows.reduce((s, r) => s + r.amount, 0);
   const filledCount = rows.filter((r) => r.qty > 0).length;
@@ -91,6 +98,8 @@ export default function ExpenseEntry() {
   const save = async () => {
     const items = rows.filter((r) => r.qty > 0);
     if (!items.length) { toast.error('กรุณากรอกจำนวนอย่างน้อย 1 รายการ'); return; }
+    const missingPrice = items.find((r) => r.manualPrice && !(r.price > 0));
+    if (missingPrice) { toast.error(`กรุณากรอกราคา/หน่วยของ "${missingPrice.name}"`); return; }
     if (!branch) { toast.error('กรุณาเลือกสาขา'); return; }
     if (!date) { toast.error('กรุณาเลือกวันที่'); return; }
     setSaving(true);
@@ -99,10 +108,11 @@ export default function ExpenseEntry() {
         branch,
         date,
         recorder: user?.username || '',
-        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty })),
+        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, price: r.price })),
       });
       toast.success(res.message || `บันทึกแล้ว ${items.length} รายการ`, { duration: 5000 });
       setQty({});
+      setManualPrice({});
     } catch (e) {
       toast.error(e.message || 'บันทึกไม่สำเร็จ');
     } finally {
@@ -170,7 +180,19 @@ export default function ExpenseEntry() {
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{r.code}</td>
                     <td className={`px-4 py-2.5 font-medium ${r.hasPrice ? 'text-gray-800' : 'text-amber-600'}`}>{r.name}</td>
                     <td className="px-3 py-2.5 text-center text-gray-500">{r.unit}</td>
-                    <td className="px-3 py-2.5 text-right font-mono text-gray-500">{r.hasPrice ? baht(r.price) : '-'}</td>
+                    {r.manualPrice ? (
+                      <td className="px-2 py-2">
+                        <input
+                          type="number" min="0" step="any" inputMode="decimal"
+                          value={manualPrice[r.code] ?? ''}
+                          onChange={(e) => setManualPrice((p) => ({ ...p, [r.code]: e.target.value }))}
+                          className="w-full min-w-[96px] px-2 py-2 border border-emerald-200 bg-emerald-50/40 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-right font-mono text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          placeholder="ราคา/หน่วย"
+                        />
+                      </td>
+                    ) : (
+                      <td className="px-3 py-2.5 text-right font-mono text-gray-500">{r.hasPrice ? baht(r.price) : '-'}</td>
+                    )}
                     <td className="px-2 py-2">
                       <input
                         type="number" min="0" step="any" inputMode="decimal"
