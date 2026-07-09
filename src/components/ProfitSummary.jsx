@@ -212,6 +212,65 @@ function StockModal({ open, onClose, title, rows, countDate, total }) {
   );
 }
 
+// ───────── Modal: รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ─────────
+function SupCostModal({ open, onClose, items, total }) {
+  if (!open) return null;
+  const rows = items || [];
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[86vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-base font-bold flex items-center gap-2"><Wallet className="w-4 h-4 text-rose-300" /> รายจ่ายจาก Supplier</h3>
+            <p className="text-xs text-gray-400 mt-0.5">ชีท "ต้นทุนจากsup" • {rows.length} รายการ • รวม {baht(total)}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          {rows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">ไม่มีรายจ่ายจาก Supplier ในช่วงนี้</div>
+          ) : (
+            <div className="overflow-auto max-h-[64vh] border border-gray-100 rounded-xl">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="text-gray-600">
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อรายการ</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">จำนวน</th>
+                    <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">หน่วย</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ราคา/หน่วย</th>
+                    <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">มูลค่า</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-gray-700">
+                  {rows.map((r, i) => (
+                    <tr key={i} className="hover:bg-gray-50/50">
+                      <td className="px-3 py-2 whitespace-nowrap text-gray-500">{r.date}</td>
+                      <td className="px-3 py-2 font-mono text-gray-400">{r.code}</td>
+                      <td className="px-3 py-2 font-medium text-gray-800">{r.name}</td>
+                      <td className="px-3 py-2 text-right font-mono">{intf(r.qty)}</td>
+                      <td className="px-3 py-2 text-gray-500">{r.unit || '-'}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-500">{baht(r.unitPrice)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold text-rose-600">{baht(r.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
+                    <td className="px-3 py-2.5" colSpan={6}>รวมรายจ่ายจาก Supplier</td>
+                    <td className="px-3 py-2.5 text-right font-mono text-rose-700">{baht(total)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // แถวในตาราง P&L
 function Row({ label, value, percent, bold, accent, indent, onClick, input }) {
   return (
@@ -241,6 +300,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [openCat, setOpenCat] = useState(null);
   const [stock, setStock] = useState(null);       // { current:{countDate,items}, previous:{countDate,items} }
   const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, total } | null
+  const [supCost, setSupCost] = useState(null);   // { total, count, items:[...] } — รายจ่ายจากชีท "ต้นทุนจากsup"
+  const [supModal, setSupModal] = useState(false);
 
   const rangeKey = `${startDate}~${endDate}`;
   const stale = lines !== null && loadedRange !== rangeKey;
@@ -253,7 +314,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
     try {
       const [wRes, sRes] = await Promise.all([
         fetchWithdrawals({ branch, outletId, startDate, endDate, signal: controller.signal }),
-        fetchStockCount({ branch, endDate, signal: controller.signal }).catch(() => null), // ไม่มีข้อมูลสต๊อกก็ไม่เป็นไร
+        fetchStockCount({ branch, startDate, endDate, signal: controller.signal }).catch(() => null), // ไม่มีข้อมูลสต๊อก/รายจ่ายก็ไม่เป็นไร
       ]);
       const flat = [];
       for (const doc of wRes.data || []) {
@@ -276,6 +337,11 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
         current: { countDate: sRes.current?.countDate || '', data: sRes.current?.data || [] },
         previous: { countDate: sRes.previous?.countDate || '', data: sRes.previous?.data || [] },
       } : { current: { countDate: '', data: [] }, previous: { countDate: '', data: [] } });
+      setSupCost(sRes?.supCost ? {
+        total: Number(sRes.supCost.total) || 0,
+        count: Number(sRes.supCost.count) || 0,
+        items: sRes.supCost.items || [],
+      } : { total: 0, count: 0, items: [] });
       setLoadedRange(rangeKey);
     } catch (e) {
       if (e.name !== 'AbortError') setError(e.message || 'เกิดข้อผิดพลาด');
@@ -312,7 +378,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
     });
   }, [lines]);
 
-  const totalFoodCost = cats.reduce((s, c) => s + c.total, 0);
+  // ต้นทุนจากใบเบิก (รวมทุกหมวด) — เป็นส่วนหนึ่งของสูตร Total Food Cost
+  const withdrawCost = cats.reduce((s, c) => s + c.total, 0);
 
   // มูลค่าสต๊อก (ราคาจากชีท 8.2 คิดมาจาก API แล้ว) — เดือนนี้ / เดือนที่แล้ว
   const curStock = useMemo(() => (stock?.current?.data || []).slice().sort((a, b) => b.value - a.value), [stock]);
@@ -320,6 +387,12 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const curStockValue = useMemo(() => curStock.reduce((s, r) => s + (r.value || 0), 0), [curStock]);
   const prevStockValue = useMemo(() => prevStock.reduce((s, r) => s + (r.value || 0), 0), [prevStock]);
   const curUnpriced = useMemo(() => curStock.filter((r) => r.qty > 0 && !r.priced).length, [curStock]);
+
+  // รายจ่ายจากชีท "ต้นทุนจากsup" (Supplier) ในช่วงวันที่เดียวกัน
+  const supCostValue = Number(supCost?.total || 0);
+
+  // Total Food Cost (COGS) = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + สต๊อกต้นเดือน − สต๊อกปลายเดือน
+  const totalFoodCost = withdrawCost + supCostValue + prevStockValue - curStockValue;
 
   // รายรับ
   const grossSales = Number(dash?.gross ?? ((dash?.sales || 0) + (dash?.tax || 0)));
@@ -348,7 +421,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><PieChart className="w-5 h-5" /></div>
           <div>
             <h2 className="text-lg font-bold text-gray-800">สรุปกำไร / ขาดทุน</h2>
-            <p className="text-xs text-gray-400">รายรับจากการขาย • ต้นทุนจากใบเบิก • ค่าใช้จ่าย (กรอกเอง)</p>
+            <p className="text-xs text-gray-400">รายรับจากการขาย • Total Food Cost = ใบเบิก + Supplier + สต๊อกต้นเดือน − ปลายเดือน • ค่าใช้จ่าย (กรอกเอง)</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -403,7 +476,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
               />
               <p className="px-3 py-2 text-[11px] text-gray-400">
-                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — แสดงอ้างอิง ไม่เข้าสูตรกำไร
+                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — เข้าสูตร Total Food Cost (ต้นเดือน + / ปลายเดือน −)
                 {curUnpriced ? ` • เดือนนี้ ${curUnpriced} รายการไม่มีราคาในชีท 8.2` : ''}
               </p>
             </>
@@ -426,7 +499,27 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                   accent="text-rose-600" onClick={c.items.length ? () => setOpenCat(c) : undefined}
                 />
               ))}
+              <Row label="รวมต้นทุนจากใบเบิก" value={withdrawCost} percent={pct(withdrawCost, netSale)} indent accent="text-rose-500" />
+              <Row
+                label={`+ รายจ่ายจาก Supplier${supCost?.count ? ` (${supCost.count} รายการ)` : ''}`}
+                value={supCostValue} percent={pct(supCostValue, netSale)} indent accent="text-rose-500"
+                onClick={supCost?.items?.length ? () => setSupModal(true) : undefined}
+              />
+              <Row
+                label={`+ สต๊อกต้นเดือน${stock?.previous?.countDate ? ` (นับ ${stock.previous.countDate})` : ''}`}
+                value={prevStockValue} percent={pct(prevStockValue, netSale)} indent accent="text-rose-500"
+                onClick={prevStock.length ? () => setStockModal({ title: 'สต๊อกต้นเดือน (เดือนที่แล้ว)', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
+              />
+              <Row
+                label={`− สต๊อกปลายเดือน${stock?.current?.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
+                value={-curStockValue} percent={pct(curStockValue, netSale)} indent accent="text-emerald-600"
+                onClick={curStock.length ? () => setStockModal({ title: 'สต๊อกปลายเดือน (เดือนนี้)', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
+              />
               <Row label="Total Food Cost" value={totalFoodCost} percent={pct(totalFoodCost, netSale)} bold accent="text-rose-700" />
+              <p className="px-3 py-1.5 text-[11px] text-gray-400">
+                * Total Food Cost = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + สต๊อกต้นเดือน − สต๊อกปลายเดือน
+                {stock && !stock.current.countDate ? ' • เดือนนี้ยังไม่นับสต๊อก (สต๊อกปลายเดือน = 0)' : ''}
+              </p>
               {EXPENSES.map((e) => (
                 <Row
                   key={e.key} label={e.label} indent
@@ -455,6 +548,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
         open={!!stockModal} onClose={() => setStockModal(null)}
         title={stockModal?.title} rows={stockModal?.rows || []} countDate={stockModal?.countDate} total={stockModal?.total || 0}
       />
+      <SupCostModal open={supModal} onClose={() => setSupModal(false)} items={supCost?.items || []} total={supCostValue} />
     </div>
   );
 }

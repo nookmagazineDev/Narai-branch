@@ -83,16 +83,18 @@ export async function fetchWithdrawals({ branch, outletId, startDate, endDate, s
 }
 
 // ดึงยอดคงเหลือสต๊อกล่าสุด (จากชีท "ข้อมูลนับสตอค") — เลือกวันนับล่าสุดที่ <= endDate ของสาขานั้น
-export async function fetchStockCount({ branch, endDate, signal }) {
+// พร้อมรายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ในช่วง [startDate, endDate]
+export async function fetchStockCount({ branch, startDate, endDate, signal }) {
   const params = new URLSearchParams();
   if (branch) params.set('branch', String(branch).toLowerCase());
+  if (startDate) params.set('start', startDate);
   if (endDate) params.set('end', endDate);
   const res = await fetch(`/api/stockcount?${params.toString()}`, { signal });
   const json = await res.json().catch(() => null);
   if (!res.ok || !json || json.status !== 'success') {
     throw new Error((json && json.message) || `ดึงข้อมูลสต๊อกไม่สำเร็จ (${res.status})`);
   }
-  return json; // { status, branch, current:{countDate,data:[...]}, previous:{countDate,data:[...]} }
+  return json; // { status, branch, current:{...}, previous:{...}, supCost:{total,count,items} }
 }
 
 // ดึงรายละเอียดรายการในบิลเดียว (line items)

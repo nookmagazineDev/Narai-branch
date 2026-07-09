@@ -9,6 +9,9 @@
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
 const GID_STOCK = '923363118'; // ชีท "ข้อมูลนับสตอค"
 const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา
+// ชีทรายจ่ายจาก Supplier (คนละสเปรดชีต) — [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
+const SUP_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
+const SUP_SHEET = 'ต้นทุนจากsup';
 
 // normalize รหัส: ตัด .0 ท้าย + เลข 0 นำหน้า ให้ตรงกันทุกชีท
 const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
@@ -18,6 +21,23 @@ function parseGvizDate(v) {
   const m = String(v == null ? '' : v).match(/Date\((\d+),(\d+),(\d+)/);
   if (!m) return '';
   return `${m[1]}-${String(+m[2] + 1).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+}
+// normalize เซลล์วันที่ให้เป็น "YYYY-MM-DD" — รองรับทั้ง Date(...), "YYYY-MM-DD", "DD/MM/YYYY"
+function cellYmd(c) {
+  if (!c) return '';
+  const v = c.v;
+  const s = String(v == null ? '' : v).trim();
+  let m = s.match(/Date\((\d+),(\d+),(\d+)/);
+  if (m) return `${m[1]}-${String(+m[2] + 1).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  // เผื่อกรณี gviz คืน type date แต่ v ว่าง ใช้ค่า formatted (f) เช่น "09/07/2026"
+  const f = String(c.f == null ? '' : c.f).trim();
+  m = f.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return s.slice(0, 10);
 }
 // "2026-06" -> "2026-05"
 function prevMonth(ym) {
@@ -68,19 +88,23 @@ export default async function handler(req, res) {
 
   const branchKey = String(req.query.branch || '').toLowerCase().trim();
   const endStr = String(req.query.end || '9999-12-31');
+  const startStr = String(req.query.start || ''); // ช่วงเริ่มของรายจ่าย Supplier (P&L); ว่าง = ไม่จำกัดล่าง
   if (!branchKey) return res.status(400).json({ status: 'error', message: 'ระบุสาขาไม่ครบถ้วน' });
 
   const curMonth = endStr.slice(0, 7);
   const preMonth = prevMonth(curMonth);
   const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
+  const supBase = `https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    const [stockJ, priceJ, masterJ] = await Promise.all([
+    const [stockJ, priceJ, masterJ, supJ] = await Promise.all([
       fetchGviz(`${base}&gid=${GID_STOCK}`),
       fetchGviz(`${base}&sheet=${encodeURIComponent(PRICE_SHEET)}`),
       // ชีทรายการสินค้า (A=รหัส B=ชื่อ) — ใช้เทียบชื่อหารหัส กรณีแถวนับสต๊อกรหัสอ่านไม่ได้
       // (แถวที่บันทึกผ่านเว็บเก็บรหัสเป็นข้อความ ปนกับแถวเก่าที่เป็นตัวเลข ทำให้ gviz คืน null)
       fetchGviz(`${base}&sheet=${encodeURIComponent('รายการสินค้า')}`).catch(() => null),
+      // ชีทรายจ่ายจาก Supplier "ต้นทุนจากsup" (คนละไฟล์) — ไม่มี/อ่านไม่ได้ก็คิดเป็น 0
+      fetchGviz(`${supBase}&sheet=${encodeURIComponent(SUP_SHEET)}`).catch(() => null),
     ]);
 
     // name (trim) -> code จากชีทรายการสินค้า
@@ -141,7 +165,32 @@ export default async function handler(req, res) {
 
     const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end)
     const previous = pick(preMonth, null);      // เดือนที่แล้ว (ทั้งเดือน)
-    return res.status(200).json({ status: 'success', branch: branchKey, current, previous });
+
+    // รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ของสาขานี้ ในช่วง [start, end]
+    // คอลัมน์: [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
+    const supItems = [];
+    let supTotal = 0;
+    for (const rw of (supJ?.table?.rows || [])) {
+      const c = rw.c || [];
+      if (String(c[1]?.v ?? '').toLowerCase().trim() !== branchKey) continue;
+      const ds = cellYmd(c[0]);
+      if (startStr && ds && ds < startStr) continue;
+      if (endStr && ds && ds > endStr) continue;
+      const amount = Number(c[7]?.v) || 0;
+      supTotal += amount;
+      supItems.push({
+        date: ds,
+        code: c[2]?.v != null ? String(c[2].v) : '',
+        name: c[3]?.v != null ? String(c[3].v) : '',
+        unit: c[4]?.v != null ? String(c[4].v) : '',
+        qty: Number(c[5]?.v) || 0,
+        unitPrice: Number(c[6]?.v) || 0,
+        amount,
+      });
+    }
+    const supCost = { total: Math.round(supTotal * 100) / 100, count: supItems.length, items: supItems };
+
+    return res.status(200).json({ status: 'success', branch: branchKey, current, previous, supCost });
   } catch (error) {
     console.error('stockcount error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
