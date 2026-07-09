@@ -1,5 +1,5 @@
 // NOTE: Replace this with your actual Google Apps Script Web App URL
-export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxEDSFqxZlZ6jdE37l9FNaPhlWVG5AWhikR0r-xOW4SU5H_xM4lOuJgtjZjYeCImCxO/exec";
+export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz3scE1W_YVAOd1vhhnx0HlShQn_2wh6ryIY1hJR_HdKe0xHP8-rin_aEqEZ0JJcqVJ/exec";
 
 export const apiCall = async (action, payload) => {
   if (SCRIPT_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL" || SCRIPT_URL === "") {
