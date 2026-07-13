@@ -711,22 +711,36 @@ function doPost(e) {
         }
       }
 
-      var sheet = stockSs.getSheetByName('รายการสินค้า');
-      if (!sheet) throw new Error('Sheet "รายการสินค้า" not found');
+      // รายการสินค้า: อ่านจากชีท "item" ในไฟล์ BOM แทน แล้วกรองเฉพาะสาขานี้ (คอลัมน์ J = สาขาที่ใช้)
+      //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH")
+      var itemSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
+      var sheet = itemSs.getSheetByName('item');
+      if (!sheet) throw new Error('Sheet "item" not found');
       var values = sheet.getDataRange().getValues();
+      // สาขาในชีทเป็นตัวใหญ่ (SJP,CRM..) เว็บใช้ zjp = SJP ในชีท
+      var itemBranchAlias = { 'zjp': 'sjp', 'zip': 'sjp' };
+      var reqBranchU = (itemBranchAlias[reqBranch] || reqBranch).toUpperCase();
       var items = [];
       for (var i = 1; i < values.length; i++) {
         var row = values[i];
         if (!row[0] && !row[1]) continue;
+        // กรองสาขา: คอลัมน์ J (index 9) ต้องมีรหัสสาขานี้
+        var brStr = String(row[9] == null ? '' : row[9]).toUpperCase();
+        var brArr = brStr.split(/[,\s]+/);
+        if (brArr.indexOf(reqBranchU) === -1) continue;
+        // ข้ามสินค้าที่ปิดการใช้งาน (คอลัมน์ E)
+        if (String(row[4] || '').trim() === 'ปิดการใช้งาน') continue;
         var pId = row[0] || '';
         var normId = normalizeId(pId);
         items.push({
           productId: pId,
           name: row[1] || '',
-          unit: row[2] || '',
-          storeCat: row[3] || '',
-          storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : (row[4] || ''),
-          rdCat: row[5] || '',
+          unit: row[3] || '',            // D = หน่วย
+          price: row[2] || '',           // C = ราคา
+          status: row[4] || '',          // E = สถานะ
+          storeCat: '',
+          storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : '',
+          rdCat: '',
           previousBalance: previousStockMap[normId] ? previousStockMap[normId].remaining : (balanceMap[normId] ? balanceMap[normId].balance : ''),
           previousBalanceDate: previousStockMap[normId] ? previousStockMap[normId].date : (balanceMap[normId] ? balanceMap[normId].date : ''),
           lastStock: lastStockMap[normId] ? lastStockMap[normId].remaining : '',
