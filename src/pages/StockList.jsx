@@ -3,6 +3,26 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check } from 'lucide-react';
 
+// ยอดยกมาเดือนที่แล้ว = ยอดนับล่าสุดของ "เดือนก่อน" จาก stockHistory (date รูปแบบ dd/MM/yyyy)
+// คำนวณฝั่ง client จากประวัติที่ getStockItems ส่งมาแล้ว (ไม่ต้องยิง API เพิ่ม)
+function prevMonthFromHistory(history) {
+  const now = new Date();
+  let pMonth = now.getMonth(); // 0-based = เดือนก่อนหน้าแบบ 1-based
+  let pYear = now.getFullYear();
+  if (pMonth === 0) { pMonth = 12; pYear -= 1; }
+  const mm = String(pMonth).padStart(2, '0');
+  const yyyy = String(pYear);
+  let best = null;
+  for (const h of history || []) {
+    const m = String(h.date || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) continue;
+    if (m[2].padStart(2, '0') !== mm || m[3] !== yyyy) continue;
+    const key = `${yyyy}-${mm}-${m[1].padStart(2, '0')}`;
+    if (!best || key >= best.key) best = { key, qty: h.remaining, date: key }; // วันล่าสุด (ซ้ำวันเดียวกันเอาแถวหลัง)
+  }
+  return best;
+}
+
 // ── เครื่องคิดเลขสะสม: ใส่จำนวนทีละจุด เก็บเป็นรายการ แล้วรวมยอดลงช่องคงเหลือ ──
 function CalcModal({ open, name, parts, onChangeParts, onApply, onClose }) {
   const [entry, setEntry] = useState('');
@@ -142,24 +162,16 @@ export default function StockList() {
     setLoading(true);
     setItems([]);
     try {
-      const now = new Date();
-      const todayYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const [itemsRes, empRes, prevRes] = await Promise.all([
+      const [itemsRes, empRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
         apiCall('getScheduleEmployees', { branch }),
-        // ยอดยกมาเดือนที่แล้ว = ยอดนับสิ้นเดือนก่อน (stockcount.previous)
-        fetch(`/api/stockcount?branch=${encodeURIComponent(branch)}&end=${todayYMD}`).then(r => r.json()).catch(() => null),
       ]);
 
-      // map ยอดยกมาเดือนที่แล้ว: รหัส -> จำนวน
-      const prevMonth = (prevRes && prevRes.status === 'success' && prevRes.previous) ? prevRes.previous : { countDate: '', data: [] };
-      const prevMap = {};
-      (prevMonth.data || []).forEach(d => { prevMap[String(d.itemCode).replace(/^0+/, '').toLowerCase()] = d.qty; });
-
       if (itemsRes.status === 'success') {
+        // ยอดยกมาเดือนที่แล้ว คำนวณจาก stockHistory ที่ได้มาแล้ว (ไม่ยิง API เพิ่ม)
         setItems(itemsRes.data.map(item => {
-          const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
-          return { ...item, remaining: '', requested: '', prevMonthQty: prevMap[nid], prevMonthDate: prevMonth.countDate || '' };
+          const pm = prevMonthFromHistory(item.stockHistory);
+          return { ...item, remaining: '', requested: '', prevMonthQty: pm ? pm.qty : undefined, prevMonthDate: pm ? pm.date : '' };
         }));
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
