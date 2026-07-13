@@ -936,7 +936,14 @@ function doPost(e) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
         var codeN = supNorm(it.code);
-        var unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : (parseFloat(it.price) || 0);
+        // รายการที่กรอกราคาเอง (manualPrice เช่น น้ำแข็ง 11100100) ใช้ราคาที่ user กรอกเสมอ
+        // รายการปกติใช้ราคาจากชีท 8.2 (ถ้าไม่มีจึงใช้ราคาที่ส่งมา)
+        var unitPrice;
+        if (it.manualPrice) {
+          unitPrice = parseFloat(it.price) || 0;
+        } else {
+          unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : (parseFloat(it.price) || 0);
+        }
         var amount = Math.round(q * unitPrice * 100) / 100;
         supSheet.appendRow([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow]);
         supTotal += amount; supCount++;

@@ -108,7 +108,7 @@ export default function ExpenseEntry() {
         branch,
         date,
         recorder: user?.username || '',
-        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, price: r.price })),
+        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, price: r.price, manualPrice: !!r.manualPrice })),
       });
       toast.success(res.message || `บันทึกแล้ว ${items.length} รายการ`, { duration: 5000 });
       setQty({});
