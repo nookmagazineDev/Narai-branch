@@ -142,13 +142,25 @@ export default function StockList() {
     setLoading(true);
     setItems([]);
     try {
-      const [itemsRes, empRes] = await Promise.all([
+      const now = new Date();
+      const todayYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const [itemsRes, empRes, prevRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
-        apiCall('getScheduleEmployees', { branch })
+        apiCall('getScheduleEmployees', { branch }),
+        // ยอดยกมาเดือนที่แล้ว = ยอดนับสิ้นเดือนก่อน (stockcount.previous)
+        fetch(`/api/stockcount?branch=${encodeURIComponent(branch)}&end=${todayYMD}`).then(r => r.json()).catch(() => null),
       ]);
 
+      // map ยอดยกมาเดือนที่แล้ว: รหัส -> จำนวน
+      const prevMonth = (prevRes && prevRes.status === 'success' && prevRes.previous) ? prevRes.previous : { countDate: '', data: [] };
+      const prevMap = {};
+      (prevMonth.data || []).forEach(d => { prevMap[String(d.itemCode).replace(/^0+/, '').toLowerCase()] = d.qty; });
+
       if (itemsRes.status === 'success') {
-        setItems(itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })));
+        setItems(itemsRes.data.map(item => {
+          const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+          return { ...item, remaining: '', requested: '', prevMonthQty: prevMap[nid], prevMonthDate: prevMonth.countDate || '' };
+        }));
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
       }
@@ -650,7 +662,8 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-teal-600 uppercase w-32 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดนับก่อนหน้า</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
@@ -663,7 +676,7 @@ export default function StockList() {
                   <tbody className="bg-white divide-y divide-gray-100">
                     {sortedAndFilteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={12} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -689,7 +702,17 @@ export default function StockList() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ยอดยกมา */}
+                          {/* ยอดยกมาเดือนที่แล้ว (นับสิ้นเดือนก่อน จาก stockcount.previous) */}
+                          <td className="px-4 py-3 text-center bg-teal-50/30">
+                            <div className="font-semibold text-teal-700 text-sm">
+                              {item.prevMonthQty !== undefined && item.prevMonthQty !== null ? item.prevMonthQty : '-'}
+                            </div>
+                            {item.prevMonthDate && item.prevMonthQty !== undefined && (
+                              <div className="text-[10px] text-gray-400 mt-0.5">{item.prevMonthDate}</div>
+                            )}
+                          </td>
+
+                          {/* ยอดนับก่อนหน้า */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
                             <div
                               className={`font-semibold text-purple-700 text-sm ${item.stockHistory && item.stockHistory.length > 1 ? 'cursor-pointer hover:underline hover:text-purple-900' : ''}`}
