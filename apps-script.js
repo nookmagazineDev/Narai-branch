@@ -944,8 +944,33 @@ function doPost(e) {
       if (!supDate) throw new Error('ไม่ระบุวันที่');
       if (!supItems.length) throw new Error('ไม่มีรายการที่กรอกจำนวน');
 
+      // header คอลัมน์ K = เวลาแก้ไข (เติมให้ถ้ายังไม่มี)
+      if (String(supSheet.getRange(1, 11).getValue() || '') === '') {
+        supSheet.getRange(1, 11).setValue('เวลาแก้ไข').setFontWeight('bold');
+      }
+
+      // แปลงวันที่ในชีทเป็น YYYY-MM-DD (รองรับทั้ง Date object และข้อความ)
+      var supToYmd = function(v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+
+      // หาแถวเดิมของ (วันที่+สาขา+รหัส) — ถ้ามีจะแก้ทับ cell เดิมแทนการเพิ่มแถวใหม่ (ซ้ำหลายแถวเอาแถวหลังสุด)
+      var existRow = {}; // codeN -> row number (1-based)
+      var supVals = supSheet.getDataRange().getValues();
+      for (var sv = 1; sv < supVals.length; sv++) {
+        if (String(supVals[sv][1] || '').toLowerCase().trim() !== supBranch) continue;
+        if (supToYmd(supVals[sv][0]) !== supDate) continue;
+        existRow[supNorm(supVals[sv][2])] = sv + 1;
+      }
+
       var supNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
-      var supTotal = 0, supCount = 0;
+      var supTotal = 0, supNew = 0, supUpd = 0;
       supItems.forEach(function(it) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
@@ -959,13 +984,52 @@ function doPost(e) {
           unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : (parseFloat(it.price) || 0);
         }
         var amount = Math.round(q * unitPrice * 100) / 100;
-        supSheet.appendRow([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow]);
-        supTotal += amount; supCount++;
+        if (existRow[codeN]) {
+          // แก้ทับแถวเดิม: จำนวน/ราคา/มูลค่า (คอลัมน์ F,G,H) + เวลาแก้ไข (คอลัมน์ K)
+          var rowN = existRow[codeN];
+          supSheet.getRange(rowN, 6, 1, 3).setValues([[q, unitPrice, amount]]);
+          supSheet.getRange(rowN, 11).setValue(supNow);
+          supUpd++;
+        } else {
+          supSheet.appendRow([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow, '']);
+          supNew++;
+        }
+        supTotal += amount;
       });
 
       response.status = 'success';
-      response.message = 'บันทึกรายจ่ายแล้ว ' + supCount + ' รายการ รวม ฿' + supTotal.toFixed(2);
-      response.data = { count: supCount, total: Math.round(supTotal * 100) / 100 };
+      response.message = 'บันทึกแล้ว ' + (supNew + supUpd) + ' รายการ (ใหม่ ' + supNew + ' / แก้ไข ' + supUpd + ') รวม ฿' + supTotal.toFixed(2);
+      response.data = { count: supNew + supUpd, updated: supUpd, total: Math.round(supTotal * 100) / 100 };
+
+    } else if (action === 'getSupCost') {
+      // ดึงรายจ่ายที่บันทึกไว้ของ (สาขา+วันที่) มาแก้ไขในหน้ากรอกรายจ่าย
+      var gscSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
+      var gscSheet = gscSs.getSheetByName('ต้นทุนจากsup');
+      var gscBranch = (data.branch || '').toLowerCase().trim();
+      var gscDate = String(data.date || '').trim();
+      var gscNorm = function(id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var gscToYmd = function(v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+      var gscOut = {};
+      if (gscSheet && gscSheet.getLastRow() > 1 && gscBranch && gscDate) {
+        var gscVals = gscSheet.getDataRange().getValues();
+        for (var gi = 1; gi < gscVals.length; gi++) {
+          var gr = gscVals[gi];
+          if (String(gr[1] || '').toLowerCase().trim() !== gscBranch) continue;
+          if (gscToYmd(gr[0]) !== gscDate) continue;
+          // ซ้ำหลายแถว (วัน+สาขา+รหัสเดียวกัน) เอาแถวหลังสุด
+          gscOut[gscNorm(gr[2])] = { qty: gr[5], price: gr[6], amount: gr[7] };
+        }
+      }
+      response.status = 'success';
+      response.data = gscOut;
 
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');

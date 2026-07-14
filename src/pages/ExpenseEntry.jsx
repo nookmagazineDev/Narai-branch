@@ -64,6 +64,36 @@ export default function ExpenseEntry() {
     return () => { alive = false; };
   }, []);
 
+  // ดึงข้อมูลที่บันทึกไว้ของ (สาขา+วันที่) มาแสดงเพื่อแก้ไข — บันทึกซ้ำจะทับแถวเดิม
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [existingCount, setExistingCount] = useState(0);
+  useEffect(() => {
+    if (!branch || !date) return;
+    let alive = true;
+    setLoadingExisting(true);
+    apiCall('getSupCost', { branch, date })
+      .then((res) => {
+        if (!alive || res?.status !== 'success') return;
+        const saved = res.data || {};
+        const q = {}, mp = {};
+        SUP_ITEMS.forEach((it) => {
+          const key = String(it.code).replace(/^0+/, '');
+          if (saved[key] !== undefined) {
+            q[it.code] = String(saved[key].qty ?? '');
+            if (it.manualPrice) mp[it.code] = String(saved[key].price ?? '');
+          }
+        });
+        setQty(q);
+        setManualPrice(mp);
+        const n = Object.keys(q).length;
+        setExistingCount(n);
+        if (n > 0) toast(`โหลดข้อมูลที่บันทึกไว้ ${n} รายการ — แก้ไขแล้วกดบันทึกจะอัปเดตรายการเดิม`, { icon: '📝', duration: 4000 });
+      })
+      .catch(() => {})
+      .finally(() => alive && setLoadingExisting(false));
+    return () => { alive = false; };
+  }, [branch, date]);
+
   useEffect(() => {
     if (!isAdmin) return;
     apiCall('getBranches')
@@ -111,8 +141,8 @@ export default function ExpenseEntry() {
         items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, price: r.price, manualPrice: !!r.manualPrice })),
       });
       toast.success(res.message || `บันทึกแล้ว ${items.length} รายการ`, { duration: 5000 });
-      setQty({});
-      setManualPrice({});
+      // คงค่าที่กรอกไว้ (โหมดดู/แก้ไขของวันนั้น) — แก้ต่อแล้วบันทึกซ้ำจะอัปเดตแถวเดิม
+      setExistingCount(items.length);
     } catch (e) {
       toast.error(e.message || 'บันทึกไม่สำเร็จ');
     } finally {
@@ -127,7 +157,13 @@ export default function ExpenseEntry() {
         <div className="flex items-center gap-3">
           <div className="p-2 bg-emerald-100 text-emerald-600 rounded-xl"><Wallet className="w-6 h-6" /></div>
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">กรอกรายจ่าย</h1>
+            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+              กรอกรายจ่าย
+              {loadingExisting && <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />}
+              {!loadingExisting && existingCount > 0 && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">แก้ไขข้อมูลเดิม ({existingCount} รายการ)</span>
+              )}
+            </h1>
             <p className="text-sm text-gray-500">ต้นทุนจาก Supplier • ราคา/หน่วยจากชีท 8.2 • บันทึกลงชีท "ต้นทุนจากsup"</p>
           </div>
         </div>
