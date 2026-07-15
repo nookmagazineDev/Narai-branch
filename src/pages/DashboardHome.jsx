@@ -473,6 +473,7 @@ function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId })
                   <tr className="text-gray-600">
                     <th className="px-4 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
                     {isBill && <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">จำนวนบิล</th>}
+                    {isBill && <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-purple-600">บิลสมาชิก</th>}
                     <th className={`px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 ${metric.accent}`}>{metric.colLabel}</th>
                     <th className="px-4 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200"></th>
                   </tr>
@@ -482,6 +483,7 @@ function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId })
                     <tr key={r.date} className="hover:bg-indigo-50/40 cursor-pointer" onClick={() => setDay(r.date)}>
                       <td className="px-4 py-2.5 font-medium text-gray-800">{r.date}</td>
                       {isBill && <td className="px-4 py-2.5 text-right font-mono text-gray-500">{intf(r.bills)}</td>}
+                      {isBill && <td className="px-4 py-2.5 text-right font-mono text-purple-600">{intf(r.memberBills)}</td>}
                       <td className={`px-4 py-2.5 text-right font-mono font-semibold ${metric.accent}`}>{fmt(r[metric.key])}</td>
                       <td className="px-4 py-2.5 text-right">
                         <span className="inline-flex items-center gap-1 px-2 py-1 border border-indigo-200 text-indigo-600 rounded-lg text-[10px] font-semibold"><Eye className="w-3 h-3" /> ดู</span>
@@ -492,7 +494,8 @@ function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId })
                 <tfoot>
                   <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
                     <td className="px-4 py-2.5">รวมทั้งหมด</td>
-                    {isBill && <td />}
+                    {isBill && <td className="px-4 py-2.5 text-right font-mono text-gray-600">{intf(rows.reduce((s, r) => s + (Number(r.bills) || 0), 0))}</td>}
+                    {isBill && <td className="px-4 py-2.5 text-right font-mono text-purple-700">{intf(rows.reduce((s, r) => s + (Number(r.memberBills) || 0), 0))}</td>}
                     <td className={`px-4 py-2.5 text-right font-mono ${metric.accent}`}>{fmt(total)}</td>
                     <td />
                   </tr>
@@ -756,7 +759,8 @@ export default function DashboardHome() {
             : { text: 'text-rose-600', bg: 'bg-rose-50', icon: 'text-rose-600' }}
         />
         <StatCard
-          title="จำนวนบิลทั้งหมด" value={intf(d.bills)} sub="ใบเสร็จรับเงิน • ดูรายการบิล"
+          title="จำนวนบิลทั้งหมด" value={intf(d.bills)}
+          sub={`มีสมาชิก ${intf(d.memberBills)} บิล • ดูรายการบิล`}
           icon={FileText} accent={{ text: 'text-amber-600', bg: 'bg-amber-50', icon: 'text-amber-600' }}
           onClick={data ? () => setDrill(METRICS.bills) : undefined}
         />

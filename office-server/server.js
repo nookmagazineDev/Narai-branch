@@ -173,18 +173,21 @@ async function fetchDay(date) {
   }
 
   // ---- บิลที่จ่ายแล้ว (ยอดขาย/จำนวนบิล): ตัดโต๊ะ 600 ----
-  const dashBill = new Map();   // oid -> { sumBill, sumVat, count }
+  const dashBill = new Map();   // oid -> { sumBill, sumVat, count, members }
   const billRows = new Map();   // ตารางรายการขาย: oid -> [ {checkID, ...ฟิลด์บิล, billCost, waiterName} ]
   for (const r of paidRows) {
     if (dashExclTable(r.tableID)) continue;
     const oid = Number(r.outletID);
-    let b = dashBill.get(oid); if (!b) { b = { sumBill: 0, sumVat: 0, count: 0 }; dashBill.set(oid, b); }
+    let b = dashBill.get(oid); if (!b) { b = { sumBill: 0, sumVat: 0, count: 0, members: 0 }; dashBill.set(oid, b); }
     const billTotal = parseFloat(r.billTotal) || 0;
     const vat = parseFloat(r.vat) || 0;
     const amount = parseFloat(r.amount ?? r.Amount ?? billTotal) || 0;
     b.sumBill += billTotal;
     b.sumVat += vat;
     b.count += 1;
+    // บิลที่มีสมาชิก = มีเบอร์สมาชิกผูกกับบิล (ตัดค่าว่าง/0 ออก)
+    const mtel = String(r.memberTel == null ? '' : r.memberTel).trim();
+    if (mtel && mtel !== '0') b.members += 1;
 
     // ---- แถวตารางรายการขาย (ผนวกต้นทุน+พนักงานรับออเดอร์ ที่เชื่อมด้วย checkID) ----
     const be = billAgg.get(oid)?.[r.checkID];
@@ -378,7 +381,7 @@ app.get('/usagebytable', async (req, res) => {
 //   กำไร = ยอดขาย(ก่อน VAT) − ต้นทุนรวม | ลูกค้า = Σ qty ไอเทมบุฟเฟ่ | เฉลี่ย/บิล = Σ billTotal / จำนวนบิล
 async function computeDashboard(outletNum, start, end) {
   const days = dateRange(start, end);
-  let sumBill = 0, sumVat = 0, bills = 0;
+  let sumBill = 0, sumVat = 0, bills = 0, memberBills = 0;
   const daily = [];
   const itemsAgg = {};   // ic -> {name, qty}  (ไม่ใช่โต๊ะ 600)
   const exclTblAgg = {}; // ic -> {name, qty}  (โต๊ะ 600)
@@ -394,8 +397,10 @@ async function computeDashboard(outletNum, start, end) {
       const dayBill = b ? b.sumBill : 0;
       const dayVat = b ? b.sumVat : 0;
       const dayBills = b ? b.count : 0;
+      const dayMembers = b ? (b.members || 0) : 0;
       sumBill += dayBill; sumVat += dayVat;
       bills += dayBills;
+      memberBills += dayMembers;
 
       // รวมรายการ (detail) ของสาขานี้ + คิดต้นทุน/นับคนแยกรายวัน (สำหรับ drill-down รายวัน)
       let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0;
@@ -424,6 +429,7 @@ async function computeDashboard(outletNum, start, end) {
         excludedCost: r2(dExcl),
         excludedQty: r2(dExclQty),
         bills: dayBills,
+        memberBills: dayMembers,
         covers: r2(dCovers),
       });
     }
@@ -476,6 +482,7 @@ async function computeDashboard(outletNum, start, end) {
     excludedCost: r2(excludedCost),
     excludedQty: r2(excludedQty),
     bills,
+    memberBills,
     covers: r2(covers),
     coversBreakdown: coverGroups.map((g) => ({ ...g, qty: r2(g.qty) })),
     avgPerBill: r2(avgPerBill),
