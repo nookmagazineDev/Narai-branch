@@ -23,7 +23,9 @@ export default async function handler(req, res) {
     const params = new URLSearchParams({ start: startDate, end: endDate });
     if (branchKey) params.set('branch', branchKey);
     if (outletId) params.set('outletid', String(outletId));
-    const r = await fetch(`${USAGE_API_BASE}/dashboard?${params.toString()}`);
+    // โหมดค้นหารายการขาย (?itemsales=1) — ยอดขายรายเมนู รวม+รายวัน (รวมใน endpoint นี้เพราะลิมิต 12 functions)
+    const path = req.query.itemsales ? 'itemsales' : 'dashboard';
+    const r = await fetch(`${USAGE_API_BASE}/${path}?${params.toString()}`);
     const payload = await r.json().catch(() => null);
     if (!r.ok || !payload || payload.status !== 'success') {
       return res.status(502).json({ status: 'error', message: (payload && payload.message) || `Office API Error: ${r.status}` });

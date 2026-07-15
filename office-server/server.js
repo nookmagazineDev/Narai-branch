@@ -146,11 +146,12 @@ async function fetchDay(date) {
     const qty = Number(x.quantity) || 0;
     const name = x.nameThai || x.nameEng || '-';
 
-    // ---- แดชบอร์ด: เก็บ {ชื่อ, qty} ต่อ itemCode แยกโต๊ะ 600 (ไว้หมวด "ไม่นับคำนวณ") ----
+    // ---- แดชบอร์ด: เก็บ {ชื่อ, qty, amt} ต่อ itemCode แยกโต๊ะ 600 (ไว้หมวด "ไม่นับคำนวณ") ----
     const target = dashExclTable(x.tableID) ? dashExclTbl : dashItems;
     let di = target.get(oid); if (!di) { di = {}; target.set(oid, di); }
-    let de = di[ic]; if (!de) { de = { name, qty: 0 }; di[ic] = de; }
+    let de = di[ic]; if (!de) { de = { name, qty: 0, amt: 0 }; di[ic] = de; }
     de.qty += qty;
+    de.amt += Number(x.grossPrice) || 0; // ยอดขายของรายการ (ก่อน VAT)
 
     // ---- ต้นทุน+พนักงานรับออเดอร์ ต่อบิล (ตารางรายการขาย) — เชื่อมด้วย chkCheckID ----
     // ต้นทุนต่อบิล = Σ ทุกรายการในบิล (ไม่ตัดไอเทม) เพื่อให้ตรงกับยอดในหน้ารายละเอียดบิล
@@ -492,6 +493,51 @@ async function computeDashboard(outletNum, start, end) {
     excludedBreakdown,
   };
 }
+
+// ค้นหารายการขาย: ยอดขายรายเมนู (จำนวน+ยอดเงิน) รวมทั้งช่วง + แยกรายวัน (ไม่นับ void/โต๊ะ 600)
+async function computeItemSales(outletNum, start, end) {
+  const days = dateRange(start, end);
+  const agg = {}; // ic -> { name, qty, amt, daily: {date: {qty, amt}} }
+  const CONC = 6;
+  for (let i = 0; i < days.length; i += CONC) {
+    const slice = days.slice(i, i + CONC);
+    const chunk = await Promise.all(slice.map(getDay));
+    for (let j = 0; j < slice.length; j++) {
+      const date = slice[j];
+      const di = chunk[j].dashItems.get(outletNum); if (!di) continue;
+      for (const [ic, v] of Object.entries(di)) {
+        const e = agg[ic] || (agg[ic] = { itemCode: ic, name: v.name, qty: 0, amt: 0, daily: {} });
+        e.qty += v.qty;
+        e.amt += v.amt || 0;
+        const d = e.daily[date] || (e.daily[date] = { qty: 0, amt: 0 });
+        d.qty += v.qty;
+        d.amt += v.amt || 0;
+      }
+    }
+  }
+  return Object.values(agg)
+    .map((e) => {
+      const daily = {};
+      for (const [dt, d] of Object.entries(e.daily)) daily[dt] = { qty: r2(d.qty), amt: r2(d.amt) };
+      return { itemCode: e.itemCode, name: e.name, qty: r2(e.qty), amt: r2(e.amt), daily };
+    })
+    .sort((a, b) => b.qty - a.qty);
+}
+
+app.get('/itemsales', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toLowerCase().trim();
+    const start = String(req.query.start || ''); const end = String(req.query.end || '');
+    if (!start || !end) return res.status(400).json({ status: 'error', message: 'missing start/end' });
+    const outletNum = branchMap[branch] || Number(req.query.outletid) || 0;
+    if (!outletNum) return res.status(400).json({ status: 'error', message: 'unknown branch/outlet' });
+    const data = await computeItemSales(outletNum, start, end);
+    res.json({ status: 'success', branch, outletId: outletNum, start, end, count: data.length, data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 // ตารางรายการขาย: รายการบิลทั้งหมดของสาขาในช่วงเวลา (ระดับบิล + ต้นทุน/พนักงานรับออเดอร์)
 async function computeBills(outletNum, start, end) {

@@ -12,6 +12,7 @@ import ScheduleHistory from './pages/ScheduleHistory';
 import StockList from './pages/StockList';
 import StockTotalList from './pages/StockTotalList';
 import ExpenseEntry from './pages/ExpenseEntry';
+import SalesSearch from './pages/SalesSearch';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -71,6 +72,7 @@ function App() {
             <Route path="stock/list" element={<StockList />} />
             <Route path="stock/total" element={<StockTotalList />} />
             <Route path="expense" element={<ExpenseEntry />} />
+            <Route path="sales-search" element={<SalesSearch />} />
           </Route>
           
           <Route path="*" element={<Navigate to="/" replace />} />
