@@ -9,6 +9,8 @@ export default function DashboardLayout() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [openMenus, setOpenMenus] = useState({ 'พนักงาน': true });
+  // สถิติ % ต่อหัว จากหน้าแดชบอร์ด (น้ำซุป/ขนมหวาน) — หน้าอื่นไม่ตั้งค่า = ไม่แสดง
+  const [topStats, setTopStats] = useState(null);
 
   const toggleMenu = (name) => {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
@@ -177,6 +179,19 @@ export default function DashboardLayout() {
           </div>
           
           <div className="hidden lg:flex items-center gap-4 text-gray-800 ml-auto">
+             {topStats && (
+               <div className="flex items-center gap-2 mr-2">
+                 <span className="px-2.5 py-1 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold rounded-full">
+                   น้ำซุป+อื่นๆ {topStats.soupPct}%
+                 </span>
+                 <span className="px-2.5 py-1 bg-pink-50 border border-pink-200 text-pink-700 text-xs font-semibold rounded-full">
+                   ขนมหวาน {topStats.dessertPct}%
+                 </span>
+                 <span className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-full">
+                   รวม {topStats.totalPct}%
+                 </span>
+               </div>
+             )}
              <span className="text-sm text-gray-500">ผู้ใช้งาน:</span>
              <span className="font-semibold">{user?.username}</span>
              <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full">สาขา: {user?.branch}</span>
@@ -192,7 +207,7 @@ export default function DashboardLayout() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-auto p-4 md:p-8">
-          <Outlet />
+          <Outlet context={{ setTopStats }} />
         </div>
       </main>
     </div>

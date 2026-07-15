@@ -1,4 +1,5 @@
 import { useAuth } from '../contexts/AuthContext';
+import { useOutletContext } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   DollarSign, Layers, TrendingUp, FileText, Users, BarChart3,
@@ -595,6 +596,20 @@ export default function DashboardHome() {
 
   const d = data || {};
   const profitPositive = (d.profit ?? 0) >= 0;
+
+  // ส่ง % ต่อหัว (น้ำซุป/ขนมหวาน) ขึ้นแถบหัวเว็บ (ข้างหน้า "ผู้ใช้งาน")
+  const { setTopStats } = useOutletContext() || {};
+  useEffect(() => {
+    if (!setTopStats) return;
+    if (!data) { setTopStats(null); return; }
+    const covers = Number(data.covers) || 0;
+    const p = (q) => (covers > 0 ? Number(((Number(q) || 0) / covers * 100).toFixed(1)) : 0);
+    const soupPct = p(data.soupQty);
+    const dessertPct = p(data.dessertQty);
+    setTopStats({ soupPct, dessertPct, totalPct: Number((soupPct + dessertPct).toFixed(1)) });
+  }, [data, setTopStats]);
+  // ออกจากหน้าแดชบอร์ด → ซ่อน chips
+  useEffect(() => () => { if (setTopStats) setTopStats(null); }, [setTopStats]);
 
   // หน่วยแสดงผลการ์ด: บาท หรือ % ของยอดขาย (ยอดขาย = ฐาน 100%)
   const [unit, setUnit] = useState('baht'); // 'baht' | 'pct'
