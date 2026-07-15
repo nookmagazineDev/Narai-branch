@@ -182,13 +182,13 @@ export default function DashboardLayout() {
              {topStats && (
                <div className="flex items-center gap-2 mr-2">
                  <span className="px-2.5 py-1 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold rounded-full">
-                   น้ำซุป+อื่นๆ {topStats.soupPct}%
+                   น้ำซุป+อื่นๆ {Number(topStats.soupQty || 0).toLocaleString('th-TH')}
                  </span>
                  <span className="px-2.5 py-1 bg-pink-50 border border-pink-200 text-pink-700 text-xs font-semibold rounded-full">
-                   ขนมหวาน {topStats.dessertPct}%
+                   ขนมหวาน {Number(topStats.dessertQty || 0).toLocaleString('th-TH')}
                  </span>
                  <span className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold rounded-full">
-                   รวม {topStats.totalPct}%
+                   รวม {Number(topStats.totalQty || 0).toLocaleString('th-TH')}
                  </span>
                </div>
              )}
