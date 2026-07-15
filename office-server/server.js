@@ -44,8 +44,7 @@ const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode �
 // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน" = Buffet259(101107,101001) + Premium359(101002) + Kid159(101004,101104) + Kid109(101108) เท่านั้น
 const DASH_COVER_ITEMS = [101001, 101002, 101004, 101104, 101107, 101108];
 // กลุ่มไอเทมคิด % ต่อจำนวนหัว (แสดงบนแถบหัวเว็บ): น้ำซุป+อื่นๆ และ ขนมหวาน
-// (ใส่ 10114 ตามที่แจ้ง และเผื่อ 101014 กรณีพิมพ์ย่อ — รหัสที่ไม่มีจริงจะนับเป็น 0 ไม่กระทบ)
-const DASH_SOUP_ITEMS = [101008, 101009, 10114, 101014];
+const DASH_SOUP_ITEMS = [101008, 101009, 101114];
 const DASH_DESSERT_ITEMS = [106001, 106002, 106003, 106004, 106020];
 const dashSoupItem = (c) => DASH_SOUP_ITEMS.indexOf(parseInt(c)) >= 0;
 const dashDessertItem = (c) => DASH_DESSERT_ITEMS.indexOf(parseInt(c)) >= 0;
@@ -494,7 +493,7 @@ async function computeDashboard(outletNum, start, end) {
     bills,
     memberBills,
     covers: r2(covers),
-    soupQty: r2(soupQty),       // น้ำซุป+อื่นๆ (101008,101009,101014)
+    soupQty: r2(soupQty),       // น้ำซุป+อื่นๆ (101008,101009,101114)
     dessertQty: r2(dessertQty), // ขนมหวาน (106001-106004,106020)
     coversBreakdown: coverGroups.map((g) => ({ ...g, qty: r2(g.qty) })),
     avgPerBill: r2(avgPerBill),
