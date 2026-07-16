@@ -43,10 +43,12 @@ const DASH_EXCLUDE_ITEMS = [206001];               // itemCode เดี่ย�
 const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode ที่ตัดออก
 // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน" = Buffet259(101107,101001) + Premium359(101002) + Kid159(101004,101104) + Kid109(101108) เท่านั้น
 const DASH_COVER_ITEMS = [101001, 101002, 101004, 101104, 101107, 101108];
-// กลุ่มไอเทมคิด % ต่อจำนวนหัว (แสดงบนแถบหัวเว็บ): น้ำซุป+อื่นๆ และ ขนมหวาน
-const DASH_SOUP_ITEMS = [101008, 101009, 101114];
+// กลุ่มไอเทมนับจำนวน (แสดงบนแถบหัวเว็บ): น้ำซุป+อื่นๆ / เพิ่มกุ้งแก้ว 29+ (แยกต่างหาก) / ขนมหวาน
+const DASH_SOUP_ITEMS = [101008, 101009];
+const DASH_SHRIMP_ITEMS = [101114]; // เพิ่มกุ้งแก้ว 29+ — แยกออกจากน้ำซุป+อื่นๆ
 const DASH_DESSERT_ITEMS = [106001, 106002, 106003, 106004, 106020];
 const dashSoupItem = (c) => DASH_SOUP_ITEMS.indexOf(parseInt(c)) >= 0;
+const dashShrimpItem = (c) => DASH_SHRIMP_ITEMS.indexOf(parseInt(c)) >= 0;
 const dashDessertItem = (c) => DASH_DESSERT_ITEMS.indexOf(parseInt(c)) >= 0;
 // แยกประเภทลูกค้า (โลจิกเดียวกับ naraipizzeria หัวข้อยอดรายวัน) — เด็กฟรี/ผู้สูงอายุฟรี ไม่นับรวมใน covers
 const DASH_COVER_GROUPS = [
@@ -443,12 +445,13 @@ async function computeDashboard(outletNum, start, end) {
 
   // แยกหมวดต้นทุน + สร้าง breakdown รายไอเทม (สำหรับ modal "คลิกดูรายละเอียด")
   let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
-  let soupQty = 0, dessertQty = 0;
+  let soupQty = 0, shrimpQty = 0, dessertQty = 0;
   const costBreakdown = [], prepBreakdown = [], excludedBreakdown = [];
   const coverGroups = DASH_COVER_GROUPS.map((g) => ({ key: g.key, label: g.label, qty: 0 }));
   for (const [ic, v] of Object.entries(itemsAgg)) {
     if (dashCoverItem(ic)) covers += v.qty;
     if (dashSoupItem(ic)) soupQty += v.qty;
+    if (dashShrimpItem(ic)) shrimpQty += v.qty;
     if (dashDessertItem(ic)) dessertQty += v.qty;
     const icn = parseInt(ic);
     const gi = DASH_COVER_GROUPS.findIndex((g) => g.codes.indexOf(icn) >= 0);
@@ -493,7 +496,8 @@ async function computeDashboard(outletNum, start, end) {
     bills,
     memberBills,
     covers: r2(covers),
-    soupQty: r2(soupQty),       // น้ำซุป+อื่นๆ (101008,101009,101114)
+    soupQty: r2(soupQty),       // น้ำซุป+อื่นๆ (101008,101009)
+    shrimpQty: r2(shrimpQty),   // เพิ่มกุ้งแก้ว 29+ (101114)
     dessertQty: r2(dessertQty), // ขนมหวาน (106001-106004,106020)
     coversBreakdown: coverGroups.map((g) => ({ ...g, qty: r2(g.qty) })),
     avgPerBill: r2(avgPerBill),

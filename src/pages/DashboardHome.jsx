@@ -597,14 +597,16 @@ export default function DashboardHome() {
   const d = data || {};
   const profitPositive = (d.profit ?? 0) >= 0;
 
-  // ส่งจำนวน (น้ำซุป/ขนมหวาน) ขึ้นแถบหัวเว็บ (ข้างหน้า "ผู้ใช้งาน")
+  // ส่งจำนวน (น้ำซุป/กุ้งแก้ว/ขนมหวาน/จำนวนหัว) ขึ้นแถบหัวเว็บ (ข้างหน้า "ผู้ใช้งาน")
   const { setTopStats } = useOutletContext() || {};
   useEffect(() => {
     if (!setTopStats) return;
     if (!data) { setTopStats(null); return; }
     const soupQty = Number(data.soupQty) || 0;
+    const shrimpQty = Number(data.shrimpQty) || 0;
     const dessertQty = Number(data.dessertQty) || 0;
-    setTopStats({ soupQty, dessertQty, totalQty: soupQty + dessertQty });
+    const covers = Number(data.covers) || 0;
+    setTopStats({ soupQty, shrimpQty, dessertQty, totalQty: soupQty + shrimpQty + dessertQty, covers });
   }, [data, setTopStats]);
   // ออกจากหน้าแดชบอร์ด → ซ่อน chips
   useEffect(() => () => { if (setTopStats) setTopStats(null); }, [setTopStats]);

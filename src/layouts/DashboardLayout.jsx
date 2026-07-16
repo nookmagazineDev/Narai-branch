@@ -181,8 +181,14 @@ export default function DashboardLayout() {
           <div className="hidden lg:flex items-center gap-4 text-gray-800 ml-auto">
              {topStats && (
                <div className="flex items-center gap-2 mr-2">
+                 <span className="px-2.5 py-1 bg-sky-50 border border-sky-200 text-sky-700 text-xs font-semibold rounded-full inline-flex items-center gap-1">
+                   <Users className="w-3 h-3" /> จำนวนลูกค้า {Number(topStats.covers || 0).toLocaleString('th-TH')}
+                 </span>
                  <span className="px-2.5 py-1 bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold rounded-full">
                    น้ำซุป+อื่นๆ {Number(topStats.soupQty || 0).toLocaleString('th-TH')}
+                 </span>
+                 <span className="px-2.5 py-1 bg-cyan-50 border border-cyan-200 text-cyan-700 text-xs font-semibold rounded-full">
+                   เพิ่มกุ้งแก้ว 29+ {Number(topStats.shrimpQty || 0).toLocaleString('th-TH')}
                  </span>
                  <span className="px-2.5 py-1 bg-pink-50 border border-pink-200 text-pink-700 text-xs font-semibold rounded-full">
                    ขนมหวาน {Number(topStats.dessertQty || 0).toLocaleString('th-TH')}
