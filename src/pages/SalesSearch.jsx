@@ -37,7 +37,8 @@ export default function SalesSearch() {
           const list = res.data.map((b) => String(b.name || '').toLowerCase().trim())
             .filter((n) => n && n !== 'all' && n !== 'ชื่อสาขา');
           setBranchList(list);
-          setSelBranch((prev) => prev || list[0] || '');
+          // เริ่มต้นที่สาขาใหญ่ที่มีข้อมูลขายแน่ๆ (บางสาขาเช่น clk ไม่มีข้อมูลจาก POS)
+          setSelBranch((prev) => prev || (list.includes('crm') ? 'crm' : list[0]) || '');
         }
       })
       .catch(() => {});
@@ -141,8 +142,13 @@ export default function SalesSearch() {
               </div>
             </div>
             <div className="flex-1 overflow-y-auto max-h-[55vh] divide-y divide-gray-50">
-              {filtered.length === 0 ? (
-                <div className="py-12 text-center text-gray-400 text-sm">ไม่พบรายการ</div>
+              {(items || []).length === 0 ? (
+                <div className="py-12 px-6 text-center text-sm space-y-1">
+                  <p className="text-amber-600 font-medium">สาขานี้ไม่มีข้อมูลขายในช่วงวันที่ที่เลือก</p>
+                  <p className="text-gray-400 text-xs">ลองเปลี่ยนสาขาที่มุมขวาบน หรือเปลี่ยนช่วงวันที่แล้วกด "ดึงข้อมูล" ใหม่<br />(บางสาขา เช่น clk, hps, smp, npt, zk3 ยังไม่มีข้อมูลจากระบบขาย POS)</p>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="py-12 text-center text-gray-400 text-sm">ไม่พบรายการที่ค้นหา</div>
               ) : filtered.map((it) => {
                 const on = !!selected[it.itemCode];
                 return (
