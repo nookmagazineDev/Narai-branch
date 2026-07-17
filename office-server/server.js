@@ -72,15 +72,14 @@ function parseGviz(t) { const a = t.indexOf('{'), b = t.lastIndexOf('}'); return
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 function r2(n) { return Number((Number(n) || 0).toFixed(2)); }
 
-// ---------- สูตร (BOM เป็นหลัก + CostMenu/RcpDtls เป็น fallback) + ราคาทุนต่อหน่วย ----------
-// BOM: ชีทสูตรใหม่ ผูก "เลขPOS" (รหัสขาย) ตรงๆ — [0]เลขPOS [1]ชื่อเมนู [3/8]รหัสวัตถุดิบ [5]ปริมาณ [6]ตัวคูณ [7]ขนาดบรรจุ
-//   สัดส่วนใช้ต่อ 1 เสิร์ฟ = [5]×[6]÷[7] (เทียบกับสูตรเดิมตรงกัน ~99.5%)
-// เมนูที่ไม่มีใน BOM (เช่น เครื่องดื่ม Refill, เกี๊ยวซ่า) ยังใช้สูตรเดิมผ่าน bridge+RcpDtls
+// ---------- สูตร (ชีท BOM เป็นแหล่งเดียวสำหรับคำนวณยอดใช้) + ราคาทุนต่อหน่วย ----------
+// BOM: ผูก "เลขPOS" (รหัสขาย) ตรงๆ — [0]เลขPOS [1]ชื่อเมนู [3/8]รหัสวัตถุดิบ [5]ปริมาณ [6]ตัวคูณ [7]ขนาดบรรจุ
+//   สัดส่วนใช้ต่อ 1 เสิร์ฟ = [5]×[6]÷[7]
+// เมนูที่ไม่มีสูตรใน BOM จะไม่มียอดใช้ (ตัด fallback สูตรเดิม CostMenu+RcpDtls ออกแล้ว — มีเมนูเก่าที่ปิดขายไปแล้วปนอยู่)
 const BOM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
 const BOM_GID = '419926693'; // ชีท BOM
-let bridge = {};   // sales itemCode (BOT) -> Kios (รหัสเมนูในสูตร)
-let recipe = {};   // เมนูcode -> { name, items:[{ing, per}] }
-let usageRecipe = {}; // sales itemCode -> { name, items:[{ing, per}], src:'bom'|'old' } — ใช้คิดยอดใช้
+let recipe = {};   // เมนูcode -> { name, items:[{ing, per}] } — จาก RcpDtls (ใช้เป็นตัวเช็คว่าโหลดสูตรแล้วหรือยัง)
+let usageRecipe = {}; // sales itemCode -> { name, items:[{ing, per}], src:'bom' } — ใช้คิดยอดใช้ (มาจาก BOM เท่านั้น)
 let menuCost = {}; // รหัสขาย (BOT_ItemCode) -> ต้นทุนต่อหน่วย (บาท) — จาก CostMenu คอลัมน์ H (= cost sheet gid 1742903365 คอลัมน์สุดท้าย)
 const COST_MENU_COL = Number(process.env.COST_MENU_COL || 7); // คอลัมน์ต้นทุนต่อหน่วยใน CostMenu (0-based, H=7)
 
@@ -89,16 +88,16 @@ async function loadSheets() {
   const getBom = async () => parseGviz(await (await fetch(`https://docs.google.com/spreadsheets/d/${BOM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${BOM_GID}`)).text());
   const [cm, rc, bm] = await Promise.all([
     get('CostMenu'), get('RcpDtls'),
-    getBom().catch((e) => { console.log('โหลด BOM ล้มเหลว (จะใช้สูตรเดิมทั้งหมด): ' + e.message); return null; }),
+    getBom().catch((e) => { console.log('โหลด BOM ล้มเหลว (จะไม่มียอดใช้จนกว่าจะโหลดสำเร็จ): ' + e.message); return null; }),
   ]);
-  const b = {}, r = {}, mc2 = {};
+  const mc2 = {};
   for (const row of (cm.table.rows || [])) {
     const c = row.c || [];
-    const a = nstr(c[0] && c[0].v), k = nstr(c[2] && c[2].v);
-    if (a && k) b[a] = k;
+    const a = nstr(c[0] && c[0].v);
     const cost = Number(c[COST_MENU_COL] && c[COST_MENU_COL].v);
     if (a && !isNaN(cost)) mc2[a] = cost;
   }
+  const r = {};
   for (const row of (rc.table.rows || [])) {
     const c = row.c || []; const mc = nstr(c[0] && c[0].v); if (!mc || isNaN(Number(mc))) continue;
     const ing = normItem(c[4] && c[4].v); if (!ing) continue;
@@ -108,7 +107,7 @@ async function loadSheets() {
     if (!r[mc]) r[mc] = { name, items: [] };
     r[mc].items.push({ ing, per });
   }
-  // สูตรสำหรับคิดยอดใช้: BOM ก่อน แล้วเติมเมนูที่ BOM ไม่มีด้วยสูตรเดิม
+  // สูตรสำหรับคิดยอดใช้: มาจาก BOM เท่านั้น
   const ur = {};
   if (bm) for (const row of (bm.table.rows || [])) {
     const c = row.c || [];
@@ -120,15 +119,8 @@ async function loadSheets() {
     if (!ur[pos]) ur[pos] = { name, items: [], src: 'bom' };
     ur[pos].items.push({ ing, per: (qty * mult) / packSize });
   }
-  let fallbackCount = 0;
-  for (const [sc, kc] of Object.entries(b)) {
-    if (ur[sc] || !r[kc]) continue;
-    ur[sc] = { name: r[kc].name, items: r[kc].items, src: 'old' };
-    fallbackCount++;
-  }
-  bridge = b; recipe = r; menuCost = mc2; usageRecipe = ur;
-  const bomCount = Object.values(ur).filter((x) => x.src === 'bom').length;
-  console.log(`โหลดสูตรแล้ว: BOM ${bomCount} เมนู + fallback เดิม ${fallbackCount} เมนู, bridge ${Object.keys(b).length}, menuCost ${Object.keys(mc2).length}`);
+  recipe = r; menuCost = mc2; usageRecipe = ur;
+  console.log(`โหลดสูตรแล้ว: BOM ${Object.keys(ur).length} เมนู (แหล่งเดียว), menuCost ${Object.keys(mc2).length}`);
 }
 
 // ---------- cache ยอดขายรายวัน ----------
