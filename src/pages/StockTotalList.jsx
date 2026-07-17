@@ -100,18 +100,13 @@ export default function StockTotalList() {
       }
 
       const validBranches = branches.filter(b => b.outletId);
-      
-      const usagePromises = validBranches.map(b => 
-        fetch(`/api/usage?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
-      );
-      
+
       const receivedPromises = validBranches.map(b =>
         fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
 
-      // ยอดใช้จากสูตร BOM × ยอดขายจริง (office-server) — ใช้เป็นหลักแทนชีท UsageHistory
+      // ยอดใช้จากสูตร BOM × ยอดขายจริง (office-server) — แหล่งเดียว ไม่ใช้ชีท UsageHistory แล้ว
       const usageMenuPromises = validBranches.map(b =>
         fetch(`/api/usagemenu?branch=${encodeURIComponent(b.name)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
@@ -123,8 +118,7 @@ export default function StockTotalList() {
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
 
-      const [usageResults, receivedResults, usageMenuResults, supRcvResults] = await Promise.all([
-        Promise.all(usagePromises),
+      const [receivedResults, usageMenuResults, supRcvResults] = await Promise.all([
         Promise.all(receivedPromises),
         Promise.all(usageMenuPromises),
         Promise.all(supRcvPromises)
@@ -132,23 +126,19 @@ export default function StockTotalList() {
 
       let baseItems = stockRes.data;
 
-      // Aggregate Usage — สูตร BOM × ยอดขายจริง เป็นหลัก, วัตถุดิบนอกสูตร/office-server ล่ม ใช้ชีท UsageHistory
+      // Aggregate Usage — สูตร BOM × ยอดขายจริงเท่านั้น (วัตถุดิบที่ไม่มีสูตรใน BOM จะไม่มียอดใช้)
       const branchUsageMap = {};
-      usageResults.forEach((res, idx) => {
+      usageMenuResults.forEach((menuRes, idx) => {
         const bName = String(validBranches[idx].name).toLowerCase();
-        const sheetData = res.status === 'success' && res.data ? res.data : {};
-        const menuRes = usageMenuResults[idx];
         const daily = (menuRes && menuRes.status === 'success' && menuRes.daily) ? menuRes.daily : null;
-        if (daily && Object.keys(daily).length) {
-          const bom = {};
+        const bom = {};
+        if (daily) {
           Object.entries(daily).forEach(([ing, dm]) => {
             const total = Number(Object.values(dm).reduce((s, q) => s + (Number(q) || 0), 0).toFixed(2));
             if (total > 0) bom[ing] = { total, details: dm };
           });
-          branchUsageMap[bName] = { ...sheetData, ...bom };
-        } else {
-          branchUsageMap[bName] = sheetData;
         }
+        branchUsageMap[bName] = bom;
       });
 
       // Aggregate Received — POS (orderd) + รายจ่าย Supplier รวมกัน

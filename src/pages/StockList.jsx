@@ -201,8 +201,7 @@ export default function StockList() {
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
       const supQs = `branch=${encodeURIComponent(effectiveBranch)}&start=${encodeURIComponent(apiStartDate)}&end=${encodeURIComponent(apiEndDate)}&supreceived=1`;
-      const [usageRes, receivedRes, usageMenuRes, supRcvRes] = await Promise.all([
-        fetch(`/api/usage?${qs}`).then(r => r.json()),
+      const [receivedRes, usageMenuRes, supRcvRes] = await Promise.all([
         fetch(`/api/orderd?${qs}`).then(r => r.json()),
         fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
         fetch(`/api/stockcount?${supQs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
@@ -226,10 +225,9 @@ export default function StockList() {
 
       setItems(prevItems => prevItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
-        // ยอดใช้: คำนวณจากสูตร BOM × ยอดขายจริง เป็นหลัก
-        // ถ้า office-server ล่ม/วัตถุดิบไม่อยู่ในสูตรไหนเลย → fallback ตัวเลขชีท UsageHistory
-        let apiUsage = usageRes.status === 'success' ? (usageRes.data[normId] || null) : item.apiUsage;
-        if (apiUsage) apiUsage = { ...apiUsage, source: 'sheet' };
+        // ยอดใช้: คำนวณจากสูตร BOM × ยอดขายจริงเท่านั้น (ไม่ใช้ชีท UsageHistory แล้ว)
+        // วัตถุดิบที่ไม่มีสูตรใน BOM เลย จะไม่มียอดใช้แสดง (เดิม fallback ไปชีท UsageHistory)
+        let apiUsage = null;
         const bomRows = byMenuMap[normId];
         if (bomRows && bomRows.length) {
           const bomTotal = Number(bomRows.reduce((s, r) => s + (Number(r.qty) || 0), 0).toFixed(2));
@@ -248,8 +246,8 @@ export default function StockList() {
       }));
 
       const msgs = [];
-      if (usageRes.status === 'success') msgs.push('ยอดใช้');
-      else toast.error('ยอดใช้: ' + (usageRes.message || 'เกิดข้อผิดพลาด'));
+      if (usageMenuRes.status === 'success') msgs.push('ยอดใช้ (BOM)');
+      else toast.error('ยอดใช้: ' + (usageMenuRes.message || 'เกิดข้อผิดพลาด'));
       if (receivedRes.status === 'success') msgs.push('ยอดรับเข้า');
       else toast.error('ยอดรับ: ' + (receivedRes.message || 'เกิดข้อผิดพลาด'));
       if (msgs.length > 0) toast.success(`ดึงข้อมูล ${msgs.join(' และ ')} สำเร็จ`);
