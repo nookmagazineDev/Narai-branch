@@ -173,9 +173,9 @@ function doPost(e) {
       if (!sheet2) {
         sheet2 = ss.insertSheet('พนักงานเข้า');
         var headers = [
-          "Timestamp", "ผู้บันทึก", "รหัส HR", "ชื่อ - สกุล", "สังกัด", 
+          "Timestamp", "ผู้บันทึก", "รหัส HR", "ชื่อ - สกุล", "สังกัด",
           "ประเภท", "ตำแหน่ง", "เลขประจำตัวประชาชน", "ที่อยู่", "วันเกิด",
-          "เบอร์โทร", "ID LINE", "LOGA", "สัญชาติ", "เอกสารที่มี", 
+          "เบอร์โทร", "ID LINE", "LOGA", "สัญชาติ", "เอกสารที่มี",
           "ลิงก์ไฟล์แนบ", "วันที่เริ่มงาน"
         ];
         sheet2.appendRow(headers);
@@ -222,7 +222,7 @@ function doPost(e) {
       row[70] = data.nationality || "";
       var docList = [];
       if (data.documents) {
-        data.documents.forEach(function(doc) {
+        data.documents.forEach(function (doc) {
           var exp = (data.documentExpiry && data.documentExpiry[doc]) ? data.documentExpiry[doc] : "";
           if (exp) {
             if (doc === 'สมุดบัญชีธนาคาร') {
@@ -236,7 +236,7 @@ function doPost(e) {
         });
       }
       row[71] = docList.join(", ");
-      
+
       var fileUrls = [];
       if (data.files && data.files.length > 0) {
         try {
@@ -309,11 +309,11 @@ function doPost(e) {
       for (var i = 1; i < values.length; i++) {
         var row = values[i];
         if (!row[0] && !row[2]) continue; // Skip completely empty rows
-        
+
         var empBranch = row[4] ? row[4].toString().toLowerCase() : ''; // คอลัมน์ E (สาขา)
         var reqBranch = requestBranch.toLowerCase();
         var isMatch = false;
-        
+
         if (reqBranch === 'all') {
           isMatch = true;
         } else {
@@ -488,8 +488,8 @@ function doPost(e) {
         }
       }
       // Simple sort by position
-      const posPriority = { 'ผู้จัดการ':1, 'ผช.ผู้จัดการ':2, 'ซุปเปอร์ไวเซอร์':3, 'แคชเชียร์':4, 'บริการ':5, 'กุ๊ก':6, 'ล้างจาน':7 };
-      employees.sort((a,b) => (posPriority[a.position]||99) - (posPriority[b.position]||99));
+      const posPriority = { 'ผู้จัดการ': 1, 'ผช.ผู้จัดการ': 2, 'ซุปเปอร์ไวเซอร์': 3, 'แคชเชียร์': 4, 'บริการ': 5, 'กุ๊ก': 6, 'ล้างจาน': 7 };
+      employees.sort((a, b) => (posPriority[a.position] || 99) - (posPriority[b.position] || 99));
       response.status = 'success';
       response.data = employees;
     } else if (action === 'saveTimesheet') {
@@ -498,15 +498,15 @@ function doPost(e) {
       if (!sheet) {
         sheet = destSs.insertSheet('ลงตารางงาน');
         sheet.appendRow([
-          'Timestamp', 'วันที่ลงงาน', 'สาขา', 'รหัส HR', 'ชื่อ-สกุล', 'ตำแหน่ง', 
-          'เวลาเข้า', 'เวลาออก', 'เวลาเบรค', 'OT (ชม.)', 'ค่าแรง (บาท)', 'สถานะ', 
+          'Timestamp', 'วันที่ลงงาน', 'สาขา', 'รหัส HR', 'ชื่อ-สกุล', 'ตำแหน่ง',
+          'เวลาเข้า', 'เวลาออก', 'เวลาเบรค', 'OT (ชม.)', 'ค่าแรง (บาท)', 'สถานะ',
           'ลา/หมายเหตุ (รับค่าแรง)', 'ประเภท', 'หยุดไม่รับค่าแรง', 'ชั่วโมงสะสม',
           'ลารายชั่วโมง (ชม.)', 'หมายเหตุเพิ่มเติม', 'ช่วงเวลาเบรค', 'จุดปฏิบัติงาน', 'ผู้อนุมัติ OT', 'ใช้ชั่วโมงสะสม'
         ]);
       }
       var logs = data.logs || [];
       var timestamp = new Date();
-      logs.forEach(function(item) {
+      logs.forEach(function (item) {
         sheet.appendRow([
           timestamp, item.workDate, item.branch, item.hrCode, item.name, item.position,
           item.checkIn || '', item.checkOut || '', item.breakTime || '', item.ot || '', item.wage || '',
@@ -521,8 +521,8 @@ function doPost(e) {
       var destSs = SpreadsheetApp.openById('1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U');
       var sheet = destSs.getSheetByName('ลงตารางงาน');
       if (!sheet) {
-        response.status = 'success'; 
-        response.data = []; 
+        response.status = 'success';
+        response.data = [];
       } else {
         var values = sheet.getDataRange().getValues();
         var reqBranch = (data.branch || '').toLowerCase();
@@ -532,21 +532,21 @@ function doPost(e) {
           var row = values[i];
           var empBranch = row[2] ? row[2].toString().toLowerCase() : ''; // สาขา (Col C)
           var isMatchBranch = reqBranch === 'all' || empBranch.indexOf(reqBranch) !== -1 || reqBranch.indexOf(empBranch) !== -1;
-          
+
           var rowDate = '';
           if (row[1] instanceof Date) { rowDate = Utilities.formatDate(row[1], Session.getScriptTimeZone(), 'yyyy-MM-dd'); } else { rowDate = String(row[1]); }
-          
+
           var isMatchDate = true;
           if (data.startDate && data.endDate) {
             isMatchDate = (rowDate >= data.startDate && rowDate <= data.endDate);
           } else {
             isMatchDate = !reqDate || rowDate.indexOf(reqDate) !== -1;
           }
-          
+
           if (isMatchBranch && isMatchDate) {
             var checkInVal = row[6];
             if (checkInVal instanceof Date) { checkInVal = Utilities.formatDate(checkInVal, "Asia/Bangkok", "HH:mm"); } else { checkInVal = String(checkInVal || ''); }
-            
+
             var checkOutVal = row[7];
             if (checkOutVal instanceof Date) { checkOutVal = Utilities.formatDate(checkOutVal, "Asia/Bangkok", "HH:mm"); } else { checkOutVal = String(checkOutVal || ''); }
 
@@ -578,8 +578,8 @@ function doPost(e) {
         }
         // ล่าสุดอยู่ล่างสุด ดังนั้นเวลาเรียงควรจะเอาอันล่าสุดก่อนไหม? แต่เดิม script ให้ sort by position.
         // Simple sort by position
-        const posPriority = { 'ผู้จัดการ':1, 'ผช.ผู้จัดการ':2, 'ซุปเปอร์ไวเซอร์':3, 'แคชเชียร์':4, 'บริการ':5, 'กุ๊ก':6, 'ล้างจาน':7 };
-        history.sort((a,b) => (posPriority[a.position]||99) - (posPriority[b.position]||99));
+        const posPriority = { 'ผู้จัดการ': 1, 'ผช.ผู้จัดการ': 2, 'ซุปเปอร์ไวเซอร์': 3, 'แคชเชียร์': 4, 'บริการ': 5, 'กุ๊ก': 6, 'ล้างจาน': 7 };
+        history.sort((a, b) => (posPriority[a.position] || 99) - (posPriority[b.position] || 99));
         response.status = 'success';
         response.data = history;
       }
@@ -601,18 +601,18 @@ function doPost(e) {
       }
       response.status = 'success';
       // Sort by name
-      response.data = branches.sort(function(a, b) {
+      response.data = branches.sort(function (a, b) {
         return a.name.localeCompare(b.name);
       });
     } else if (action === 'getStockItems') {
       var reqBranch = (data.branch || '').toLowerCase();
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
-      
+
       var balanceMap = {};
       var balanceSheet = stockSs.getSheetByName('ยอดยกมา');
-      
+
       // Helper function to normalize ID (remove leading zeros for safe matching)
-      var normalizeId = function(id) {
+      var normalizeId = function (id) {
         if (id === null || id === undefined) return '';
         return String(id).replace(/^0+/, '').toLowerCase();
       };
@@ -667,7 +667,7 @@ function doPost(e) {
           }
         }
       }
-      
+
       // Build lastRequest map from ข้อมูลเบิก sheet (latest request per product per branch)
       var lastRequestMap = {};
       var reqSheetR = stockSs.getSheetByName('ข้อมูมูลเบิก');
@@ -695,7 +695,7 @@ function doPost(e) {
           }
         }
       }
-      
+
       var categoryMap = {};
       var categorySheet = stockSs.getSheetByName('หมวดจัดเก็บสาขา');
       if (categorySheet) {
@@ -755,16 +755,16 @@ function doPost(e) {
       response.status = 'success';
       response.data = items;
     } else if (action === 'getStockTotal') {
-      var endDateStr = data.endDate || ''; 
+      var endDateStr = data.endDate || '';
       var endDateObj = null;
       if (endDateStr) {
         var parts = endDateStr.split('-');
         endDateObj = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59);
       }
-      
+
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
-      
-      var normalizeId = function(id) {
+
+      var normalizeId = function (id) {
         if (id === null || id === undefined) return '';
         return String(id).replace(/^0+/, '').toLowerCase();
       };
@@ -802,7 +802,7 @@ function doPost(e) {
           var csBranch = csRow[2] ? csRow[2].toString().toLowerCase() : '';
           var csPid = normalizeId(csRow[3]);
           var csRemaining = parseFloat(csRow[6]);
-          
+
           if (csPid && csBranch && !isNaN(csRemaining)) {
             var rowDateObj = csDate instanceof Date ? csDate : new Date(csDate);
             // Check if within endDate
@@ -820,7 +820,7 @@ function doPost(e) {
           }
         }
       }
-      
+
       var categoryMap = {};
       var categorySheet = stockSs.getSheetByName('หมวดจัดเก็บสาขา');
       if (categorySheet) {
@@ -843,13 +843,13 @@ function doPost(e) {
       if (!sheet) throw new Error('Sheet "รายการสินค้า" not found');
       var values = sheet.getDataRange().getValues();
       var items = [];
-      
+
       for (var i = 1; i < values.length; i++) {
         var row = values[i];
         if (!row[0] && !row[1]) continue;
         var pId = row[0] || '';
         var normId = normalizeId(pId);
-        
+
         // Calculate Total Remaining
         var totalRemaining = 0;
         var branchesAccounted = {};
@@ -874,7 +874,7 @@ function doPost(e) {
             });
           }
         }
-        
+
         // Add from balances if no count exists for that branch
         if (balancesMap[normId]) {
           for (var br in balancesMap[normId]) {
@@ -923,7 +923,7 @@ function doPost(e) {
         supSheet.getRange('A1:J1').setFontWeight('bold');
       }
 
-      var supNorm = function(id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var supNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
       // ราคาจากชีท 8.2: [0]=รหัส [2]=ราคา
       var priceMap82 = {};
       var priceSheet = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ').getSheetByName('8.2');
@@ -950,7 +950,7 @@ function doPost(e) {
       }
 
       // แปลงวันที่ในชีทเป็น YYYY-MM-DD (รองรับทั้ง Date object และข้อความ)
-      var supToYmd = function(v) {
+      var supToYmd = function (v) {
         if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
         var s = String(v == null ? '' : v).trim();
         var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -971,7 +971,7 @@ function doPost(e) {
 
       var supNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
       var supTotal = 0, supNew = 0, supUpd = 0;
-      supItems.forEach(function(it) {
+      supItems.forEach(function (it) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
         var codeN = supNorm(it.code);
@@ -1007,8 +1007,8 @@ function doPost(e) {
       var gscSheet = gscSs.getSheetByName('ต้นทุนจากsup');
       var gscBranch = (data.branch || '').toLowerCase().trim();
       var gscDate = String(data.date || '').trim();
-      var gscNorm = function(id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
-      var gscToYmd = function(v) {
+      var gscNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var gscToYmd = function (v) {
         if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
         var s = String(v == null ? '' : v).trim();
         var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -1033,28 +1033,28 @@ function doPost(e) {
 
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
-      
+
       var countSheet = stockSs.getSheetByName('ข้อมูลนับสตอค');
       if (!countSheet) {
         countSheet = stockSs.insertSheet('ข้อมูลนับสตอค');
         countSheet.appendRow(['วันที่ลงข้อมูล', 'ชื่อพนักงานนับสต๊อก', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนคงเหลือ']);
         countSheet.getRange("A1:G1").setFontWeight("bold");
       }
-      
+
       var requestSheet = stockSs.getSheetByName('ข้อมูลเบิก');
       if (!requestSheet) {
         requestSheet = stockSs.insertSheet('ข้อมูลเบิก');
         requestSheet.appendRow(['เลขที่ใบเบิก', 'วันที่เวลาบันทึก', 'รหัส', 'ชื่อ', 'หน่วย', 'จำนวน', 'วันที่เบิก', 'ชื่อผู้เบิก', 'สาขา']);
         requestSheet.getRange("A1:I1").setFontWeight("bold");
       }
-      
+
       var balanceSheet = stockSs.getSheetByName('ยอดยกมา');
       if (!balanceSheet) {
         balanceSheet = stockSs.insertSheet('ยอดยกมา');
         balanceSheet.appendRow(['รหัสสินค้า', 'ชื่อสินค้า', 'สาขา', 'ยอดยกมา', 'วันที่อัปเดต']);
         balanceSheet.getRange("A1:E1").setFontWeight("bold");
       }
-      
+
       var items = data.items || [];
       var branch = data.branch || '';
       var username = data.username || 'Unknown';
@@ -1063,12 +1063,12 @@ function doPost(e) {
       var requesterName = data.requesterName || '';
       var dateNow = new Date();
       var formattedDate = Utilities.formatDate(dateNow, "Asia/Bangkok", "dd/MM/yyyy HH:mm:ss");
-      
-      var normalizeId = function(id) {
+
+      var normalizeId = function (id) {
         if (id === null || id === undefined) return '';
         return String(id).replace(/^0+/, '').toLowerCase();
       };
-      
+
       // Load current balances to update them
       var balValues = balanceSheet.getDataRange().getValues();
       var balRowMap = {};
@@ -1080,17 +1080,17 @@ function doPost(e) {
           balRowMap[bId] = b + 1; // 1-based index
         }
       }
-      
+
       // Filter requested items to check if we need a requisition number
-      var reqItems = items.filter(function(i) { return i.requested > 0; });
+      var reqItems = items.filter(function (i) { return i.requested > 0; });
       var reqNumber = "";
-      
+
       if (reqItems.length > 0) {
         var yy = Utilities.formatDate(dateNow, "Asia/Bangkok", "yy");
         var mm = Utilities.formatDate(dateNow, "Asia/Bangkok", "MM");
         var branchPrefix = branch.toString().substring(0, 3).toUpperCase();
         var prefix = branchPrefix + yy + mm; // e.g. BKK2605
-        
+
         // Find next running number
         var lastNum = 0;
         if (requestSheet.getLastRow() > 1) {
@@ -1110,19 +1110,19 @@ function doPost(e) {
         var runningStr = ("000" + lastNum).slice(-3);
         reqNumber = prefix + runningStr;
       }
-      
+
       // รหัสสินค้า: เก็บเป็นตัวเลขถ้าเป็นเลขล้วน (ให้ชนิดข้อมูลตรงกับแถวเดิม — ถ้าเก็บเป็นข้อความปนกัน
       // gviz จะคืนค่า null ทำให้หน้ามูลค่าสต๊อกจับคู่รหัสไม่ได้) เลข 0 นำหน้าตัดได้ เพราะทุกจุด normalize อยู่แล้ว
-      var pidValue = function(pid) {
+      var pidValue = function (pid) {
         var s = String(pid == null ? '' : pid).trim();
         return /^\d+$/.test(s) ? Number(s) : s;
       };
 
-      items.forEach(function(item) {
+      items.forEach(function (item) {
         // Save remaining stock
         if (item.remaining !== null && item.remaining !== undefined && item.remaining !== '') {
           countSheet.appendRow([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
-          
+
           // Update balance sheet
           var normId = normalizeId(item.productId);
           if (balRowMap[normId]) {
@@ -1139,7 +1139,7 @@ function doPost(e) {
           requestSheet.appendRow([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
         }
       });
-      
+
       response.status = 'success';
       response.message = 'บันทึกข้อมูลเรียบร้อยแล้ว' + (reqNumber ? ' (เลขที่ใบเบิก: ' + reqNumber + ')' : '');
     } else if (action === 'updateStorageCategory') {
@@ -1150,19 +1150,19 @@ function doPost(e) {
         categorySheet.appendRow(['รหัสสินค้า', 'ชื่อสินค้า', 'สาขา', 'หมวดจัดเก็บ']);
         categorySheet.getRange("A1:D1").setFontWeight("bold");
       }
-      
+
       var productId = data.productId;
       var name = data.name || '';
       var branch = data.branch || '';
       var category = data.category || '';
-      
-      var normalizeId = function(id) {
+
+      var normalizeId = function (id) {
         if (id === null || id === undefined) return '';
         return String(id).replace(/^0+/, '').toLowerCase();
       };
       var normIdToUpdate = normalizeId(productId);
       var reqBranch = branch.toLowerCase();
-      
+
       var catValues = categorySheet.getDataRange().getValues();
       var foundIndex = -1;
       for (var c = 1; c < catValues.length; c++) {
@@ -1173,13 +1173,13 @@ function doPost(e) {
           break;
         }
       }
-      
+
       if (foundIndex !== -1) {
         categorySheet.getRange(foundIndex, 4).setValue(category);
       } else {
         categorySheet.appendRow(["'" + productId, name, branch, category]);
       }
-      
+
       response.status = 'success';
       response.message = 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว';
     } else if (action === 'saveBranchPercentage') {
@@ -1190,20 +1190,20 @@ function doPost(e) {
         sheet.appendRow(['วันที่', 'ชื่อสาขา', 'เปอร์เซ็น']);
         sheet.getRange('A1:C1').setFontWeight('bold');
       }
-      
+
       var pDate = data.date; // YYYY-MM-DD
       var pBranch = String(data.branch || '').toLowerCase().trim();
       var pPercent = parseFloat(data.percent) || 0;
-      
+
       if (!pDate || !pBranch) throw new Error('ข้อมูลไม่ครบถ้วน');
-      
+
       var parts = pDate.split('-');
       var dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-      
+
       var values = sheet.getDataRange().getValues();
       var foundRow = -1;
-      
-      var toYmd = function(v) {
+
+      var toYmd = function (v) {
         if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
         var s = String(v == null ? '' : v).trim();
         var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -1212,7 +1212,7 @@ function doPost(e) {
         if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
         return s;
       };
-      
+
       for (var i = 1; i < values.length; i++) {
         var rowDate = toYmd(values[i][0]);
         var rowBranch = String(values[i][1] || '').toLowerCase().trim();
@@ -1221,28 +1221,28 @@ function doPost(e) {
           break;
         }
       }
-      
+
       if (foundRow !== -1) {
         sheet.getRange(foundRow, 3).setValue(pPercent);
       } else {
         sheet.appendRow([dateObj, pBranch, pPercent]);
       }
-      
+
       response.status = 'success';
       response.message = 'บันทึกเปอร์เซ็นเรียบร้อยแล้ว';
-      
+
     } else if (action === 'deleteBranchPercentage') {
       var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
       var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
       if (!sheet) throw new Error('ไม่พบชีท เปอร์เซ็นการเบิกของแต่ละสาขา');
-      
+
       var pDate = data.date; // YYYY-MM-DD
       var pBranch = String(data.branch || '').toLowerCase().trim();
-      
+
       if (!pDate || !pBranch) throw new Error('ข้อมูลไม่ครบถ้วน');
-      
+
       var values = sheet.getDataRange().getValues();
-      var toYmd = function(v) {
+      var toYmd = function (v) {
         if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
         var s = String(v == null ? '' : v).trim();
         var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -1251,7 +1251,7 @@ function doPost(e) {
         if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
         return s;
       };
-      
+
       var deletedCount = 0;
       for (var i = values.length - 1; i >= 1; i--) {
         var rowDate = toYmd(values[i][0]);
@@ -1261,19 +1261,19 @@ function doPost(e) {
           deletedCount++;
         }
       }
-      
+
       response.status = 'success';
       response.message = 'ลบข้อมูลเรียบร้อยแล้ว (' + deletedCount + ' รายการ)';
-      
+
     } else if (action === 'getUsageData') {
       var reqBranch = data.branch || '';
       var startDateStr = data.startDate || '';
       var endDateStr = data.endDate || '';
-      
+
       if (!reqBranch || !startDateStr || !endDateStr) {
         throw new Error('ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน');
       }
-      
+
       var branchMap = {
         'sjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
         'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
@@ -1283,26 +1283,26 @@ function doPost(e) {
       };
       var branchKey = String(reqBranch).toLowerCase().trim();
       var outletId = branchMap[branchKey] || branchKey;
-      
+
       var url = "http://183.89.248.221:14369/api/trn_usg?outletid=" + encodeURIComponent(outletId);
       var fetchOptions = {
-        'method' : 'get',
+        'method': 'get',
         'muteHttpExceptions': true
       };
-      
+
       var fetchResponse = UrlFetchApp.fetch(url, fetchOptions);
       var responseCode = fetchResponse.getResponseCode();
-      
+
       if (responseCode === 200) {
         var apiData = JSON.parse(fetchResponse.getContentText());
         if (Array.isArray(apiData)) {
           var usageMap = {};
           var start = new Date(startDateStr);
-          start.setHours(0,0,0,0);
+          start.setHours(0, 0, 0, 0);
           var end = new Date(endDateStr);
-          end.setHours(23,59,59,999);
-          
-          apiData.forEach(function(item) {
+          end.setHours(23, 59, 59, 999);
+
+          apiData.forEach(function (item) {
             if (item.Usg_Date) {
               var d = new Date(item.Usg_Date);
               if (d >= start && d <= end) {
@@ -1319,8 +1319,8 @@ function doPost(e) {
           response.status = 'success';
           response.data = usageMap;
         } else {
-           response.status = 'error';
-           response.message = apiData.message || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง';
+          response.status = 'error';
+          response.message = apiData.message || 'API ตอบกลับในรูปแบบที่ไม่ถูกต้อง';
         }
       } else {
         response.status = 'error';
@@ -1332,7 +1332,7 @@ function doPost(e) {
       response.message = resOT.message;
     } else if (action === 'getBranchStats') {
       var resStats = getBranchStats(data.branch);
-      if(resStats.success) {
+      if (resStats.success) {
         response.status = 'success';
         response.data = resStats;
       } else {
@@ -1341,7 +1341,7 @@ function doPost(e) {
       }
     } else if (action === 'getDailySales') {
       var resSales = getDailySales(data.searchDateStr, data.searchBranch);
-      if(resSales.success) {
+      if (resSales.success) {
         response.status = 'success';
         response.data = resSales;
       } else {
@@ -1350,7 +1350,7 @@ function doPost(e) {
       }
     } else if (action === 'getOTNotifications') {
       var resNotif = getOTNotifications(data.branch);
-      if(resNotif.success) {
+      if (resNotif.success) {
         response.status = 'success';
         response.data = resNotif.data;
       } else {
@@ -1379,7 +1379,7 @@ function updateOTApprovalBulk(dateStr, branch, updates, approverName) {
 
     var data = sheet.getDataRange().getValues();
     var updateMap = {};
-    updates.forEach(function(u) { updateMap[String(u.name).trim()] = u.isApproved; });
+    updates.forEach(function (u) { updateMap[String(u.name).trim()] = u.isApproved; });
     var searchB = String(branch).trim();
 
     for (var i = 1; i < data.length; i++) {
@@ -1393,7 +1393,7 @@ function updateOTApprovalBulk(dateStr, branch, updates, approverName) {
       }
     }
     return { success: true, message: 'บันทึกการอนุมัติ OT เรียบร้อย' };
-  } catch(e) { return { success: false, message: e.message }; }
+  } catch (e) { return { success: false, message: e.message }; }
 }
 
 // --- 5. ดึงข้อมูลสถิติสาขา ---
@@ -1408,13 +1408,13 @@ function getBranchStats(selectedBranch) {
     for (var i = 1; i < data.length; i++) {
       if (String(data[i][0]).trim() === searchBranch) {
         return {
-          success: true, sales: data[i][1], dailyTarget: data[i][2],  
-          monthlyTarget: data[i][3], maxWage: data[i][5]       
+          success: true, sales: data[i][1], dailyTarget: data[i][2],
+          monthlyTarget: data[i][3], maxWage: data[i][5]
         };
       }
     }
     return { success: false, message: 'ไม่พบข้อมูลสาขานี้' };
-  } catch(e) { return { success: false, message: e.message }; }
+  } catch (e) { return { success: false, message: e.message }; }
 }
 
 // --- 6. ดึงยอดขายรายวัน ---
@@ -1428,11 +1428,11 @@ function getDailySales(searchDateStr, searchBranch) {
 
     for (var i = 1; i < data.length; i++) {
       if (isSameDate(data[i][0], searchDateStr) && String(data[i][2]).trim() === searchB) {
-        return { success: true, sales: data[i][3] }; 
+        return { success: true, sales: data[i][3] };
       }
     }
-    return { success: true, sales: 0 }; 
-  } catch(e) { return { success: false, message: e.message }; }
+    return { success: true, sales: 0 };
+  } catch (e) { return { success: false, message: e.message }; }
 }
 
 // --- ดึงข้อมูลการแจ้งเตือน OT ---
@@ -1445,7 +1445,7 @@ function getOTNotifications(searchBranch) {
     var data = sheet.getDataRange().getValues();
     var pending = [];
     var approved = [];
-    
+
     var branchStr = String(searchBranch).trim();
     var isAdmin = (branchStr === 'All' || branchStr === 'Admin' || branchStr === '');
 
@@ -1453,47 +1453,47 @@ function getOTNotifications(searchBranch) {
     for (var i = data.length - 1; i >= 1; i--) {
       var row = data[i];
       var rowBranch = String(row[2]).trim(); // คอลัมน์ C: สาขา
-      
+
       if (isAdmin || rowBranch === branchStr) {
-         var otVal = parseFloat(row[9]); // คอลัมน์ J: OT (ชม.)
-         if (!isNaN(otVal) && otVal > 0) {
-             var approver = String(row[20] || '').trim(); // คอลัมน์ U: ผู้อนุมัติ OT
-             var workDateStr = '';
-             var workDateFormatted = '';
-             
-             // แก้ไขการแปลงวันที่ให้แม่นยำยิ่งขึ้น
-             var d = new Date(row[1]);
-             if (!isNaN(d.getTime())) {
-                 workDateStr = Utilities.formatDate(d, "Asia/Bangkok", 'yyyy-MM-dd');
-                 workDateFormatted = Utilities.formatDate(d, "Asia/Bangkok", 'dd/MM/yyyy');
-             } else {
-                 workDateStr = String(row[1]);
-                 workDateFormatted = workDateStr;
-             }
+        var otVal = parseFloat(row[9]); // คอลัมน์ J: OT (ชม.)
+        if (!isNaN(otVal) && otVal > 0) {
+          var approver = String(row[20] || '').trim(); // คอลัมน์ U: ผู้อนุมัติ OT
+          var workDateStr = '';
+          var workDateFormatted = '';
 
-             var notifItem = {
-                 date: workDateStr,
-                 dateFormatted: workDateFormatted,
-                 branch: rowBranch,
-                 name: String(row[4] || '').trim(), // คอลัมน์ E: ชื่อพนักงาน
-                 ot: otVal,
-                 approver: approver
-             };
+          // แก้ไขการแปลงวันที่ให้แม่นยำยิ่งขึ้น
+          var d = new Date(row[1]);
+          if (!isNaN(d.getTime())) {
+            workDateStr = Utilities.formatDate(d, "Asia/Bangkok", 'yyyy-MM-dd');
+            workDateFormatted = Utilities.formatDate(d, "Asia/Bangkok", 'dd/MM/yyyy');
+          } else {
+            workDateStr = String(row[1]);
+            workDateFormatted = workDateStr;
+          }
 
-             if (approver === '') {
-                 if (pending.length < 30) pending.push(notifItem); // แสดงรออนุมัติสูงสุด 30 รายการ
-             } else {
-                 if (approved.length < 10) approved.push(notifItem); // แสดงอนุมัติแล้วล่าสุด 10 รายการ
-             }
-         }
+          var notifItem = {
+            date: workDateStr,
+            dateFormatted: workDateFormatted,
+            branch: rowBranch,
+            name: String(row[4] || '').trim(), // คอลัมน์ E: ชื่อพนักงาน
+            ot: otVal,
+            approver: approver
+          };
+
+          if (approver === '') {
+            if (pending.length < 30) pending.push(notifItem); // แสดงรออนุมัติสูงสุด 30 รายการ
+          } else {
+            if (approved.length < 10) approved.push(notifItem); // แสดงอนุมัติแล้วล่าสุด 10 รายการ
+          }
+        }
       }
-      
+
       // หยุดค้นหาเมื่อข้อมูลเต็ม เพื่อความรวดเร็ว
       if (pending.length >= 30 && approved.length >= 10) break;
     }
 
     return { success: true, data: { pending: pending, approved: approved } };
-  } catch(e) {
+  } catch (e) {
     return { success: false, message: e.message };
   }
 }

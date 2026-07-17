@@ -869,62 +869,97 @@ export default function StockList() {
                 </div>
                 
                 {showPctPanel && (
-                  <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4">
-                    <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน (สาขา {effectiveBranch})</h4>
-                    
-                    <div className="flex flex-wrap items-end gap-3 bg-amber-50/50 p-3 rounded-lg border border-amber-100">
-                      <div className="space-y-1">
-                        <label className="block text-[11px] font-medium text-gray-600">วันที่ :</label>
-                        <input type="date" value={newPctDate} onChange={(e) => setNewPctDate(e.target.value)}
-                          className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" />
+                  <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน (สาขา {effectiveBranch})</h4>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={handlePrevMonth} className="p-1 hover:bg-amber-50 text-amber-700 rounded transition-colors">
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span className="text-xs font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-md min-w-[125px] text-center">
+                          {thaiMonths[currentCalMonth]} {currentCalYear + 543}
+                        </span>
+                        <button type="button" onClick={handleNextMonth} className="p-1 hover:bg-amber-50 text-amber-700 rounded transition-colors">
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
-                      <div className="space-y-1">
-                        <label className="block text-[11px] font-medium text-gray-600">เปอร์เซ็นต์ที่เพิ่ม (+%) :</label>
-                        <input type="number" placeholder="เช่น 20" value={newPctVal} onChange={(e) => setNewPctVal(e.target.value)}
-                          className="w-28 px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" />
-                      </div>
-                      <button
-                        onClick={handleAddPct}
-                        disabled={isSavingPct || !newPctDate || !newPctVal}
-                        className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1.5 transition-colors">
-                        {isSavingPct ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
-                      </button>
                     </div>
 
                     {isLoadingPct ? (
-                      <div className="flex justify-center py-4">
-                        <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
-                      </div>
-                    ) : specialPcts.length > 0 ? (
-                      <div className="border border-gray-100 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
-                        <table className="min-w-full divide-y divide-gray-100 text-sm">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">วันที่</th>
-                              <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase">เปอร์เซ็นต์ที่เพิ่ม</th>
-                              <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase w-20">จัดการ</th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-100">
-                            {specialPcts.map((item, idx) => (
-                              <tr key={idx} className="hover:bg-gray-50/50">
-                                <td className="px-4 py-2 font-mono">{formatDateTh(item.date)}</td>
-                                <td className="px-4 py-2 text-right font-medium text-amber-700">+{item.percent}% (ตัวคูณ {1 + (item.percent / 100)})</td>
-                                <td className="px-4 py-2 text-center">
-                                  <button
-                                    onClick={() => handleDeletePct(item.date)}
-                                    disabled={isDeletingPct === item.date}
-                                    className="text-rose-500 hover:text-rose-700 font-medium text-xs disabled:opacity-50">
-                                    {isDeletingPct === item.date ? 'กำลังลบ...' : 'ลบ'}
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-amber-600" />
                       </div>
                     ) : (
-                      <p className="text-center text-gray-400 text-xs py-4">ยังไม่มีเปอร์เซ็นต์พิเศษรายวันของสาขานี้</p>
+                      <div>
+                        {/* Calendar Header */}
+                        <div className="grid grid-cols-7 gap-1 text-center font-semibold text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                          <div className="text-rose-500">อา.</div>
+                          <div>จ.</div>
+                          <div>อ.</div>
+                          <div>พ.</div>
+                          <div>พฤ.</div>
+                          <div className="text-teal-600">ศ.</div>
+                          <div className="text-rose-500">ส.</div>
+                        </div>
+
+                        {/* Calendar Grid */}
+                        <div className="grid grid-cols-7 gap-1">
+                          {getCalendarDays().map((dayObj) => {
+                            const ymdStr = dateToYMD(dayObj.date);
+                            const isToday = dateToYMD(new Date()) === ymdStr;
+                            const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
+                            const isSaving = !!savingPcts[ymdStr];
+
+                            return (
+                              <div
+                                key={dayObj.key}
+                                className={`p-1.5 border rounded-lg flex flex-col justify-between min-h-[64px] transition-colors ${
+                                  dayObj.isCurrentMonth
+                                    ? isToday
+                                      ? 'border-amber-400 bg-amber-50/30'
+                                      : 'border-gray-100 bg-gray-50/20'
+                                    : 'border-gray-50 bg-gray-50/10 opacity-30 pointer-events-none'
+                                }`}
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span className={`text-[10px] font-bold ${
+                                    dayObj.isCurrentMonth
+                                      ? isToday
+                                        ? 'text-amber-700 font-extrabold'
+                                        : 'text-gray-500'
+                                      : 'text-gray-300'
+                                  }`}>
+                                    {dayObj.date.getDate()}
+                                  </span>
+                                  {isSaving && <Loader2 className="w-2.5 h-2.5 animate-spin text-amber-500" />}
+                                </div>
+
+                                <div className="mt-1 flex items-center bg-white border border-gray-200 rounded px-1 py-0.5 focus-within:ring-1 focus-within:ring-amber-500 focus-within:border-amber-500">
+                                  <span className="text-[9px] text-gray-400 font-semibold">%</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="0"
+                                    value={val}
+                                    onChange={(e) => handleTempPctChange(ymdStr, e.target.value)}
+                                    onBlur={() => handleSavePctValue(ymdStr, val)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.target.blur();
+                                      }
+                                    }}
+                                    disabled={isSaving}
+                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-amber-700 p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-2 flex items-center gap-1.5">
+                          <span>💡 กรอกตัวเลขเปอร์เซ็นต์ในช่องของวันที่ต้องการ (ระบบจะบันทึกอัตโนมัติเมื่อกดคลิกออก หรือกด Enter)</span>
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
