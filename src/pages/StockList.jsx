@@ -453,6 +453,7 @@ export default function StockList() {
       // 5) คำนวณและเติมลงช่องขอเบิก
       const newItems = [...items];
       let filled = 0;
+      let totalCalculatedCovers = 0;
       for (const j of jobs) {
         let coversGap = 0;
         const d = new Date(j.prevD); d.setDate(d.getDate() + 1); // นับวันถัดจากวันนับก่อนหน้า ถึงวันนับล่าสุด
@@ -485,11 +486,16 @@ export default function StockList() {
           : (Number(currentItem.lastStock) || 0);
 
         const suggested = Number(Math.max(0, predictedUsage - remVal).toFixed(2));
-        newItems[j.idx] = { ...newItems[j.idx], requested: String(suggested) };
+        newItems[j.idx] = { 
+          ...newItems[j.idx], 
+          requested: String(suggested),
+          calcCovers: coversGap
+        };
         filled++;
+        totalCalculatedCovers = Math.max(totalCalculatedCovers, coversGap);
       }
       setItems(newItems);
-      toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ`, { duration: 6000 });
+      toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ (จำนวนลูกค้าสูงสุดในช่วงสะสม: ${totalCalculatedCovers} คน)`, { duration: 6000 });
     } catch (e) {
       toast.error(e.message || 'คำนวณยอดเบิกไม่สำเร็จ');
     } finally {
@@ -1143,6 +1149,11 @@ export default function StockList() {
                                 onChange={(e) => handleInputChange(originalIndex, 'requested', e.target.value)}
                                 className="w-full min-w-[96px] px-2 py-2 border border-purple-200 bg-purple-50/30 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-center text-base sm:text-sm font-semibold text-purple-700 placeholder:font-normal placeholder:text-gray-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 placeholder="เบิก" />
+                              {item.calcCovers !== undefined && (
+                                <div className="text-[10px] text-amber-600 mt-1 text-center font-medium" title="จำนวนลูกค้าสะสมที่ใช้คำนวณยอดเบิก">
+                                  👥 ลูกค้า {item.calcCovers} คน
+                                </div>
+                              )}
                             </td>
                           )}
                         </tr>
