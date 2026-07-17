@@ -116,7 +116,7 @@ export default function StockList() {
   const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
   const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
   const [pctInputMap, setPctInputMap] = useState({});
-  const [savingPcts, setSavingPcts] = useState({});
+  const [isSavingAllPcts, setIsSavingAllPcts] = useState(false);
   
   const [apiStartDate, setApiStartDate] = useState('');
   const [apiEndDate, setApiEndDate] = useState('');
@@ -210,36 +210,46 @@ export default function StockList() {
     setPctInputMap(prev => ({ ...prev, [ymdStr]: val }));
   };
 
-  const handleSavePctValue = async (ymdStr, val) => {
-    const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
-    const currentVal = val === '' ? 0 : Number(val);
-    const originalValNum = originalVal === undefined ? 0 : Number(originalVal);
+  const handleSaveAllPcts = async () => {
+    if (!effectiveBranch) return;
 
-    if (currentVal === originalValNum) return; // ไม่มีการเปลี่ยนแปลง
+    const updates = [];
+    const allDates = new Set([
+      ...Object.keys(pctInputMap),
+      ...specialPcts.map(p => p.date)
+    ]);
 
-    setSavingPcts(prev => ({ ...prev, [ymdStr]: true }));
-    try {
-      if (currentVal <= 0) {
-        await apiCall('deleteBranchPercentage', {
-          branch: effectiveBranch,
-          date: ymdStr
-        });
-        toast.success(`ลบเปอร์เซ็นต์พิเศษวันที่ ${formatDateTh(ymdStr)} สำเร็จ`);
-      } else {
-        await apiCall('saveBranchPercentage', {
-          branch: effectiveBranch,
-          date: ymdStr,
+    allDates.forEach(date => {
+      const originalVal = specialPcts.find(p => p.date === date)?.percent;
+      const currentValStr = pctInputMap[date];
+      const currentVal = currentValStr === '' || currentValStr === undefined || currentValStr === null ? 0 : Number(currentValStr);
+      const originalValNum = originalVal === undefined || originalVal === null ? 0 : Number(originalVal);
+
+      if (currentVal !== originalValNum) {
+        updates.push({
+          date,
           percent: currentVal
         });
-        toast.success(`บันทึกเปอร์เซ็นต์พิเศษวันที่ ${formatDateTh(ymdStr)} (+${currentVal}%) สำเร็จ`);
       }
+    });
+
+    if (updates.length === 0) {
+      toast('ไม่มีข้อมูลเปอร์เซ็นต์พิเศษที่เปลี่ยนแปลง', { icon: 'ℹ️' });
+      return;
+    }
+
+    setIsSavingAllPcts(true);
+    try {
+      await apiCall('saveBranchPercentagesBulk', {
+        branch: effectiveBranch,
+        updates
+      });
+      toast.success('บันทึกเปอร์เซ็นต์พิเศษทั้งหมดเรียบร้อยแล้ว');
       loadSpecialPcts(effectiveBranch);
     } catch (err) {
       toast.error(err.message || 'บันทึกไม่สำเร็จ');
-      // คืนค่าเดิม
-      setPctInputMap(prev => ({ ...prev, [ymdStr]: originalVal !== undefined ? originalVal : '' }));
     } finally {
-      setSavingPcts(prev => ({ ...prev, [ymdStr]: false }));
+      setIsSavingAllPcts(false);
     }
   };
 
@@ -984,16 +994,22 @@ export default function StockList() {
                             const ymdStr = dateToYMD(dayObj.date);
                             const isToday = dateToYMD(new Date()) === ymdStr;
                             const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
-                            const isSaving = !!savingPcts[ymdStr];
+                            
+                            const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
+                            const currentValNum = val === '' ? 0 : Number(val);
+                            const originalValNum = originalVal === undefined ? 0 : Number(originalVal);
+                            const isModified = dayObj.isCurrentMonth && (currentValNum !== originalValNum);
 
                             return (
                               <div
                                 key={dayObj.key}
                                 className={`p-1.5 border rounded-lg flex flex-col justify-between min-h-[64px] transition-colors ${
                                   dayObj.isCurrentMonth
-                                    ? isToday
-                                      ? 'border-amber-400 bg-amber-50/30'
-                                      : 'border-gray-100 bg-gray-50/20'
+                                    ? isModified
+                                      ? 'border-amber-400 bg-amber-50/50 shadow-sm'
+                                      : isToday
+                                        ? 'border-purple-400 bg-purple-50/30'
+                                        : 'border-gray-100 bg-gray-50/20'
                                     : 'border-gray-50 bg-gray-50/10 opacity-30 pointer-events-none'
                                 }`}
                               >
@@ -1001,16 +1017,22 @@ export default function StockList() {
                                   <span className={`text-[10px] font-bold ${
                                     dayObj.isCurrentMonth
                                       ? isToday
-                                        ? 'text-amber-700 font-extrabold'
+                                        ? 'text-purple-700 font-extrabold'
                                         : 'text-gray-500'
                                       : 'text-gray-300'
                                   }`}>
                                     {dayObj.date.getDate()}
                                   </span>
-                                  {isSaving && <Loader2 className="w-2.5 h-2.5 animate-spin text-amber-500" />}
+                                  {isModified && (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" title="ยังไม่ได้บันทึก" />
+                                  )}
                                 </div>
 
-                                <div className="mt-1 flex items-center bg-white border border-gray-200 rounded px-1 py-0.5 focus-within:ring-1 focus-within:ring-amber-500 focus-within:border-amber-500">
+                                <div className={`mt-1 flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
+                                  isModified 
+                                    ? 'border-amber-300 focus-within:ring-amber-500 focus-within:border-amber-500' 
+                                    : 'border-gray-200 focus-within:ring-purple-500 focus-within:border-purple-500'
+                                }`}>
                                   <span className="text-[9px] text-gray-400 font-semibold">%</span>
                                   <input
                                     type="number"
@@ -1018,22 +1040,33 @@ export default function StockList() {
                                     placeholder="0"
                                     value={val}
                                     onChange={(e) => handleTempPctChange(ymdStr, e.target.value)}
-                                    onBlur={() => handleSavePctValue(ymdStr, val)}
                                     onKeyDown={(e) => {
                                       if (e.key === 'Enter') {
                                         e.target.blur();
                                       }
                                     }}
-                                    disabled={isSaving}
-                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-amber-700 p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    disabled={isSavingAllPcts}
+                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                   />
                                 </div>
                               </div>
                             );
                           })}
                         </div>
-                        <div className="text-[10px] text-gray-400 mt-2 flex items-center gap-1.5">
-                          <span>💡 กรอกตัวเลขเปอร์เซ็นต์ในช่องของวันที่ต้องการ (ระบบจะบันทึกอัตโนมัติเมื่อกดคลิกออก หรือกด Enter)</span>
+                        
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100">
+                          <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
+                            <span>💡 กรอกตัวเลขเปอร์เซ็นต์ที่ต้องการลงในตาราง (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกข้อมูลด้านขวาเพื่อบันทึกการเปลี่ยนแปลงทั้งหมด</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleSaveAllPcts}
+                            disabled={isSavingAllPcts}
+                            className="w-full sm:w-auto px-5 py-2.5 bg-amber-500 text-white text-xs font-semibold rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm shadow-amber-200 shrink-0 cursor-pointer"
+                          >
+                            {isSavingAllPcts ? <Loader2 className="w-3 h-3 animate-spin" /> : '💾'}
+                            <span>{isSavingAllPcts ? 'กำลังบันทึก...' : 'บันทึกเปอร์เซ็นต์พิเศษ'}</span>
+                          </button>
                         </div>
                       </div>
                     )}

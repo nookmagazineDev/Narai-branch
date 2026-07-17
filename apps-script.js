@@ -1182,6 +1182,83 @@ function doPost(e) {
 
       response.status = 'success';
       response.message = 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว';
+    } else if (action === 'saveBranchPercentagesBulk') {
+      var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
+      var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
+      if (!sheet) {
+        sheet = supSs.insertSheet('เปอร์เซ็นการเบิกของแต่ละสาขา');
+        sheet.appendRow(['วันที่', 'ชื่อสาขา', 'เปอร์เซ็น']);
+        sheet.getRange('A1:C1').setFontWeight('bold');
+      }
+
+      var pBranch = String(data.branch || '').toLowerCase().trim();
+      var updates = data.updates || []; // array of { date: 'YYYY-MM-DD', percent: number }
+
+      if (!pBranch) throw new Error('ไม่ระบุสาขา');
+
+      var values = sheet.getDataRange().getValues();
+      var toYmd = function (v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+
+      // Create a map of existing dates to row numbers (1-based)
+      var dateRowMap = {};
+      for (var i = 1; i < values.length; i++) {
+        var rowDate = toYmd(values[i][0]);
+        var rowBranch = String(values[i][1] || '').toLowerCase().trim();
+        if (rowBranch === pBranch) {
+          dateRowMap[rowDate] = i + 1;
+        }
+      }
+
+      var rowsToDelete = [];
+      var rowsToUpdate = []; // Array of { row: number, percent: number }
+      var rowsToAppend = []; // Array of { date: Date, percent: number }
+
+      updates.forEach(function (upd) {
+        var pDate = upd.date;
+        var pPercent = parseFloat(upd.percent) || 0;
+        if (!pDate) return;
+
+        if (pPercent <= 0) {
+          if (dateRowMap[pDate]) {
+            rowsToDelete.push(dateRowMap[pDate]);
+          }
+        } else {
+          if (dateRowMap[pDate]) {
+            rowsToUpdate.push({ row: dateRowMap[pDate], percent: pPercent });
+          } else {
+            var parts = pDate.split('-');
+            var dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            rowsToAppend.push({ date: dateObj, percent: pPercent });
+          }
+        }
+      });
+
+      // 1. Update existing rows
+      rowsToUpdate.forEach(function (upd) {
+        sheet.getRange(upd.row, 3).setValue(upd.percent);
+      });
+
+      // 2. Append new rows
+      rowsToAppend.forEach(function (app) {
+        sheet.appendRow([app.date, pBranch, app.percent]);
+      });
+
+      // 3. Delete rows in descending order
+      rowsToDelete.sort(function (a, b) { return b - a; });
+      rowsToDelete.forEach(function (rowIndex) {
+        sheet.deleteRow(rowIndex);
+      });
+
+      response.status = 'success';
+      response.message = 'บันทึกเปอร์เซ็นต์พิเศษสำเร็จ';
     } else if (action === 'saveBranchPercentage') {
       var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
       var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
