@@ -608,8 +608,7 @@ export default function DashboardHome() {
     const covers = Number(data.covers) || 0;
     setTopStats({ soupQty, shrimpQty, dessertQty, totalQty: soupQty + shrimpQty + dessertQty, covers });
   }, [data, setTopStats]);
-  // ออกจากหน้าแดชบอร์ด → ซ่อน chips
-  useEffect(() => () => { if (setTopStats) setTopStats(null); }, [setTopStats]);
+  // ออกจากหน้าแดชบอร์ด → คงค่าสถิติตามที่ผู้ใช้งานต้องการ (ไม่เคลียร์เป็น null)
 
   // หน่วยแสดงผลการ์ด: บาท หรือ % ของยอดขาย (ยอดขาย = ฐาน 100%)
   const [unit, setUnit] = useState('baht'); // 'baht' | 'pct'

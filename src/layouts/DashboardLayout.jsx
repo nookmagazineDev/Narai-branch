@@ -9,8 +9,26 @@ export default function DashboardLayout() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [openMenus, setOpenMenus] = useState({ 'พนักงาน': true });
-  // สถิติ % ต่อหัว จากหน้าแดชบอร์ด (น้ำซุป/ขนมหวาน) — หน้าอื่นไม่ตั้งค่า = ไม่แสดง
-  const [topStats, setTopStats] = useState(null);
+  // สถิติ % ต่อหัว จากหน้าแดชบอร์ด (น้ำซุป/ขนมหวาน) — เก็บใน sessionStorage เพื่อให้คงอยู่ข้ามหน้าและข้ามการรีเฟรช
+  const [topStats, setTopStatsState] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('dashboard_top_stats');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  const setTopStats = (stats) => {
+    setTopStatsState(stats);
+    try {
+      if (stats) {
+        sessionStorage.setItem('dashboard_top_stats', JSON.stringify(stats));
+      } else {
+        sessionStorage.removeItem('dashboard_top_stats');
+      }
+    } catch (e) {}
+  };
 
   const toggleMenu = (name) => {
     setOpenMenus(prev => ({ ...prev, [name]: !prev[name] }));
