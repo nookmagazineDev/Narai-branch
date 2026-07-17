@@ -107,11 +107,11 @@ export default function StockList() {
   
   const [specialPcts, setSpecialPcts] = useState([]);
   const [showPctPanel, setShowPctPanel] = useState(false);
-  const [newPctDate, setNewPctDate] = useState('');
-  const [newPctVal, setNewPctVal] = useState('');
-  const [isSavingPct, setIsSavingPct] = useState(false);
-  const [isDeletingPct, setIsDeletingPct] = useState('');
   const [isLoadingPct, setIsLoadingPct] = useState(false);
+  const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
+  const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
+  const [pctInputMap, setPctInputMap] = useState({});
+  const [savingPcts, setSavingPcts] = useState({});
   
   const [apiStartDate, setApiStartDate] = useState('');
   const [apiEndDate, setApiEndDate] = useState('');
@@ -175,44 +175,115 @@ export default function StockList() {
     }
   }, [effectiveBranch]);
 
-  const handleAddPct = async () => {
-    if (!effectiveBranch || !newPctDate || !newPctVal) {
-      toast.error('กรุณากรอกข้อมูลให้ครบถ้วน');
-      return;
-    }
-    setIsSavingPct(true);
-    try {
-      const res = await apiCall('saveBranchPercentage', {
-        branch: effectiveBranch,
-        date: newPctDate,
-        percent: Number(newPctVal)
-      });
-      toast.success(res.message || 'บันทึกสำเร็จ');
-      setNewPctDate('');
-      setNewPctVal('');
-      loadSpecialPcts(effectiveBranch);
-    } catch (err) {
-      toast.error(err.message || 'เกิดข้อผิดพลาดในการบันทึก');
-    } finally {
-      setIsSavingPct(false);
+  useEffect(() => {
+    const newMap = {};
+    specialPcts.forEach(item => {
+      newMap[item.date] = item.percent;
+    });
+    setPctInputMap(newMap);
+  }, [specialPcts]);
+
+  const handlePrevMonth = () => {
+    if (currentCalMonth === 0) {
+      setCurrentCalMonth(11);
+      setCurrentCalYear(prev => prev - 1);
+    } else {
+      setCurrentCalMonth(prev => prev - 1);
     }
   };
 
-  const handleDeletePct = async (date) => {
-    if (!window.confirm(`ต้องการลบเปอร์เซ็นต์พิเศษของวันที่ ${formatDateTh(date)} หรือไม่?`)) return;
-    setIsDeletingPct(date);
+  const handleNextMonth = () => {
+    if (currentCalMonth === 11) {
+      setCurrentCalMonth(0);
+      setCurrentCalYear(prev => prev + 1);
+    } else {
+      setCurrentCalMonth(prev => prev + 1);
+    }
+  };
+
+  const handleTempPctChange = (ymdStr, val) => {
+    setPctInputMap(prev => ({ ...prev, [ymdStr]: val }));
+  };
+
+  const handleSavePctValue = async (ymdStr, val) => {
+    const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
+    const currentVal = val === '' ? 0 : Number(val);
+    const originalValNum = originalVal === undefined ? 0 : Number(originalVal);
+
+    if (currentVal === originalValNum) return; // ไม่มีการเปลี่ยนแปลง
+
+    setSavingPcts(prev => ({ ...prev, [ymdStr]: true }));
     try {
-      const res = await apiCall('deleteBranchPercentage', {
-        branch: effectiveBranch,
-        date: date
-      });
-      toast.success(res.message || 'ลบสำเร็จ');
+      if (currentVal <= 0) {
+        await apiCall('deleteBranchPercentage', {
+          branch: effectiveBranch,
+          date: ymdStr
+        });
+        toast.success(`ลบเปอร์เซ็นต์พิเศษวันที่ ${formatDateTh(ymdStr)} สำเร็จ`);
+      } else {
+        await apiCall('saveBranchPercentage', {
+          branch: effectiveBranch,
+          date: ymdStr,
+          percent: currentVal
+        });
+        toast.success(`บันทึกเปอร์เซ็นต์พิเศษวันที่ ${formatDateTh(ymdStr)} (+${currentVal}%) สำเร็จ`);
+      }
       loadSpecialPcts(effectiveBranch);
     } catch (err) {
-      toast.error(err.message || 'เกิดข้อผิดพลาดในการลบ');
+      toast.error(err.message || 'บันทึกไม่สำเร็จ');
+      // คืนค่าเดิม
+      setPctInputMap(prev => ({ ...prev, [ymdStr]: originalVal !== undefined ? originalVal : '' }));
     } finally {
-      setIsDeletingPct('');
+      setSavingPcts(prev => ({ ...prev, [ymdStr]: false }));
     }
+  };
+
+  const getCalendarDays = () => {
+    const firstDayOfMonth = new Date(currentCalYear, currentCalMonth, 1);
+    const startDayOfWeek = firstDayOfMonth.getDay(); // 0 = Sun, 1 = Mon...
+    const daysInMonth = new Date(currentCalYear, currentCalMonth + 1, 0).getDate();
+    
+    const days = [];
+    const prevMonthDays = new Date(currentCalYear, currentCalMonth, 0).getDate();
+    
+    // Padding days from previous month
+    for (let i = startDayOfWeek - 1; i >= 0; i--) {
+      days.push({
+        date: new Date(currentCalYear, currentCalMonth - 1, prevMonthDays - i),
+        isCurrentMonth: false,
+        key: `prev-${prevMonthDays - i}`
+      });
+    }
+    
+    // Current month days
+    for (let i = 1; i <= daysInMonth; i++) {
+      days.push({
+        date: new Date(currentCalYear, currentCalMonth, i),
+        isCurrentMonth: true,
+        key: `curr-${i}`
+      });
+    }
+    
+    // Padding days for next month
+    const totalCells = Math.ceil(days.length / 7) * 7;
+    const nextMonthDaysNeeded = totalCells - days.length;
+    for (let i = 1; i <= nextMonthDaysNeeded; i++) {
+      days.push({
+        date: new Date(currentCalYear, currentCalMonth + 1, i),
+        isCurrentMonth: false,
+        key: `next-${i}`
+      });
+    }
+    
+    return days;
+  };
+
+  const dateToYMD = (d) => {
+    if (!d) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   const formatDateTh = (ymd) => {
