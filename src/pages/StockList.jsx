@@ -306,6 +306,91 @@ export default function StockList() {
   const [calcFor, setCalcFor] = useState(null);   // { index, productId, name }
   const [calcParts, setCalcParts] = useState({});  // productId -> number[]
 
+  // ── คำนวณยอดเบิกอัตโนมัติ ──
+  // สูตร: ยอดเบิก = ค่าเฉลี่ยต่อหัว (ชีทค่าเฉลี่ยยอดใช้ต่อหัว) × (จำนวนหัวลูกค้าช่วงนับก่อนหน้า→นับล่าสุด ÷ จำนวนวันห่าง) × ตัวคูณวัน
+  // ตัวคูณวันที่ใช้ของ: จ-พฤ ×1 | ศ ×1.1 | ส-อา/นักขัตฤกษ์ ×1.2
+  const tomorrowYMD = () => {
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const [useDate, setUseDate] = useState(tomorrowYMD());
+  const [isHolidayUse, setIsHolidayUse] = useState(false);
+  const [isCalcReq, setIsCalcReq] = useState(false);
+
+  const parseDMY = (s) => {
+    const m = String(s || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    return m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+  };
+  const toYMD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  const calcRequested = async () => {
+    if (!effectiveBranch) { toast.error('กรุณาเลือกสาขา'); return; }
+    if (!useDate) { toast.error('กรุณาเลือกวันที่ใช้ของ'); return; }
+    setIsCalcReq(true);
+    try {
+      // 1) ค่าเฉลี่ยต่อหัวของสาขานี้
+      const avgRes = await fetch(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json());
+      if (avgRes.status !== 'success') throw new Error(avgRes.message || 'ดึงค่าเฉลี่ยต่อหัวไม่สำเร็จ');
+      const avgMap = avgRes.data || {};
+      if (!Object.keys(avgMap).length) throw new Error('ไม่พบค่าเฉลี่ยต่อหัวของสาขานี้ในชีท');
+
+      // 2) หา ช่วงวัน (นับก่อนหน้า → นับล่าสุด) ต่อรายการ + ช่วงรวมสำหรับดึงจำนวนหัวลูกค้า
+      let minPrev = null, maxLast = null;
+      const jobs = [];
+      items.forEach((item, idx) => {
+        const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+        const avg = Number(avgMap[nid]) || 0;
+        if (avg <= 0) return;
+        const prevD = parseDMY(item.previousBalanceDate);
+        const lastD = parseDMY(item.lastStockDate);
+        if (!prevD || !lastD) return;
+        const gapDays = Math.round((lastD - prevD) / 86400000);
+        if (gapDays < 1) return;
+        jobs.push({ idx, avg, prevD, lastD, gapDays });
+        if (!minPrev || prevD < minPrev) minPrev = prevD;
+        if (!maxLast || lastD > maxLast) maxLast = lastD;
+      });
+      if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดนับก่อนหน้า + คงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
+
+      // จำกัดช่วงย้อนหลังไม่เกิน 92 วัน (กันดึงข้อมูลหนักเกิน)
+      const minAllowed = new Date(); minAllowed.setDate(minAllowed.getDate() - 92);
+      if (minPrev < minAllowed) minPrev = minAllowed;
+
+      // 3) จำนวนหัวลูกค้ารายวันของสาขา (covers จากแดชบอร์ด)
+      const dashRes = await fetch(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(minPrev)}&endDate=${toYMD(maxLast)}`).then(r => r.json());
+      if (dashRes.status !== 'success') throw new Error(dashRes.message || 'ดึงจำนวนหัวลูกค้าไม่สำเร็จ');
+      const coversByDate = {};
+      (dashRes.data?.daily || []).forEach(d => { coversByDate[d.date] = Number(d.covers) || 0; });
+
+      // 4) ตัวคูณตามวันที่ใช้ของ
+      const dow = new Date(useDate + 'T00:00:00').getDay();
+      let mult = 1, multLabel = 'จ-พฤ (ปกติ)';
+      if (dow === 5) { mult = 1.1; multLabel = 'วันศุกร์ +10%'; }
+      if (dow === 0 || dow === 6) { mult = 1.2; multLabel = 'เสาร์-อาทิตย์ +20%'; }
+      if (isHolidayUse && mult < 1.2) { mult = 1.2; multLabel = 'นักขัตฤกษ์ +20%'; }
+
+      // 5) คำนวณและเติมลงช่องขอเบิก
+      const newItems = [...items];
+      let filled = 0;
+      for (const j of jobs) {
+        let coversGap = 0;
+        const d = new Date(j.prevD); d.setDate(d.getDate() + 1); // นับวันถัดจากวันนับก่อนหน้า ถึงวันนับล่าสุด
+        while (d <= j.lastD) { coversGap += coversByDate[toYMD(d)] || 0; d.setDate(d.getDate() + 1); }
+        if (coversGap <= 0) continue;
+        const suggested = Number((j.avg * (coversGap / j.gapDays) * mult).toFixed(2));
+        if (suggested <= 0) continue;
+        newItems[j.idx] = { ...newItems[j.idx], requested: String(suggested) };
+        filled++;
+      }
+      setItems(newItems);
+      toast.success(`คำนวณยอดเบิกแล้ว ${filled} รายการ • ${multLabel}`, { duration: 6000 });
+    } catch (e) {
+      toast.error(e.message || 'คำนวณยอดเบิกไม่สำเร็จ');
+    } finally {
+      setIsCalcReq(false);
+    }
+  };
+
   // --- Generate order number: YY + MM + running (0001) ---
   const generateOrderNo = async (outletId) => {
     const now = new Date();
@@ -645,6 +730,24 @@ export default function StockList() {
 
           <div className="bg-white rounded-2xl shadow-sm border border-purple-100 overflow-hidden">
             {/* Counter name row — hidden for 'all' */}
+            {!isAll && (
+              <div className="p-4 border-b border-amber-100 bg-amber-50/40 flex flex-wrap items-center gap-3">
+                <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ — วันที่ใช้ของ:</label>
+                <input type="date" value={useDate} onChange={(e) => setUseDate(e.target.value)}
+                  className="px-2 py-1.5 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                <label className="flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap cursor-pointer">
+                  <input type="checkbox" checked={isHolidayUse} onChange={(e) => setIsHolidayUse(e.target.checked)} className="w-4 h-4 accent-amber-600" />
+                  วันนักขัตฤกษ์ (+20%)
+                </label>
+                <button
+                  onClick={calcRequested}
+                  disabled={isCalcReq || !effectiveBranch || !useDate}
+                  className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap">
+                  {isCalcReq ? <Loader2 className="w-4 h-4 animate-spin" /> : 'คำนวณยอดเบิก'}
+                </button>
+                <span className="text-[11px] text-gray-400">= ค่าเฉลี่ยต่อหัว × (หัวลูกค้าช่วงนับก่อนหน้า→ล่าสุด ÷ วันห่าง) • ศ +10% / ส-อา,นักขัต +20%</span>
+              </div>
+            )}
             {!isAll && (
               <div className="p-4 border-b border-purple-100 bg-purple-50/30 flex items-center gap-3 max-w-sm">
                 <label className="text-purple-900 font-medium whitespace-nowrap text-sm">👤 พนักงานนับสต๊อก <span className="text-red-500">*</span> :</label>

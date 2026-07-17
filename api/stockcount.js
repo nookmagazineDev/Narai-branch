@@ -86,6 +86,36 @@ export default async function handler(req, res) {
     }
   }
 
+  // โหมด "ค่าเฉลี่ยยอดใช้ต่อหัว" (?avgperhead=1&branch=xxx) — จากชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' ในไฟล์ BOM
+  // ใช้คำนวณยอดเบิกอัตโนมัติในหน้านับสต๊อก: คืน { code: avgPerHead } ของสาขานั้น
+  if (req.query.avgperhead) {
+    const brA = String(req.query.branch || '').toLowerCase().trim();
+    if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
+    try {
+      const r = await fetch('https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/gviz/tq?tqx=out:json&gid=1722427042');
+      const text = await r.text();
+      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทค่าเฉลี่ยยอดใช้ต่อหัวไม่ได้ (ต้องแชร์ลิงก์)' });
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      const j = JSON.parse(text.substring(a, b + 1));
+      // [0]=สาขา [1]=รหัส [3]=ค่าเฉลี่ยต่อหัว — เว็บใช้ zjp แทน sjp ในบางชีท เผื่อ alias ทั้งสองทาง
+      const aliases = new Set([brA]);
+      if (brA === 'zjp') aliases.add('sjp');
+      if (brA === 'sjp') aliases.add('zjp');
+      const data = {};
+      for (const rw of (j.table.rows || [])) {
+        const c = rw.c || [];
+        if (!aliases.has(String((c[0] && c[0].v) || '').toLowerCase().trim())) continue;
+        const code = normCode(c[1] && c[1].v);
+        if (!code) continue;
+        const avg = Number(c[3] && c[3].v);
+        if (!Number.isNaN(avg) && avg > 0) data[code] = avg;
+      }
+      return res.status(200).json({ status: 'success', branch: brA, count: Object.keys(data).length, data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
   // โหมด "ยอดรับจากรายจ่าย Supplier" (?supreceived=1&branch=&start=&end=)
   // คืนรูปแบบเดียวกับ /api/orderd -> { code: {total, details:{date:qty}, unit} } เพื่อ merge เป็น "ยอดรับ" ในหน้านับสต๊อก
   if (req.query.supreceived) {
