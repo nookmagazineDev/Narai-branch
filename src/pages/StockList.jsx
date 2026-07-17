@@ -105,6 +105,14 @@ export default function StockList() {
   const [requesterName, setRequesterName] = useState('');
   const [counterName, setCounterName] = useState('');
   
+  const [specialPcts, setSpecialPcts] = useState([]);
+  const [showPctPanel, setShowPctPanel] = useState(false);
+  const [newPctDate, setNewPctDate] = useState('');
+  const [newPctVal, setNewPctVal] = useState('');
+  const [isSavingPct, setIsSavingPct] = useState(false);
+  const [isDeletingPct, setIsDeletingPct] = useState('');
+  const [isLoadingPct, setIsLoadingPct] = useState(false);
+  
   const [apiStartDate, setApiStartDate] = useState('');
   const [apiEndDate, setApiEndDate] = useState('');
   const [isFetchingApi, setIsFetchingApi] = useState(false);
@@ -140,6 +148,79 @@ export default function StockList() {
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
+
+  const loadSpecialPcts = async (branch) => {
+    if (!branch) {
+      setSpecialPcts([]);
+      return;
+    }
+    setIsLoadingPct(true);
+    try {
+      const res = await fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(branch)}`).then(r => r.json());
+      if (res.status === 'success') {
+        setSpecialPcts(res.data || []);
+      }
+    } catch (err) {
+      console.error('Failed to load daily percentages:', err);
+    } finally {
+      setIsLoadingPct(false);
+    }
+  };
+
+  useEffect(() => {
+    if (effectiveBranch) {
+      loadSpecialPcts(effectiveBranch);
+    } else {
+      setSpecialPcts([]);
+    }
+  }, [effectiveBranch]);
+
+  const handleAddPct = async () => {
+    if (!effectiveBranch || !newPctDate || !newPctVal) {
+      toast.error('กรุณากรอกข้อมูลให้ครบถ้วน');
+      return;
+    }
+    setIsSavingPct(true);
+    try {
+      const res = await apiCall('saveBranchPercentage', {
+        branch: effectiveBranch,
+        date: newPctDate,
+        percent: Number(newPctVal)
+      });
+      toast.success(res.message || 'บันทึกสำเร็จ');
+      setNewPctDate('');
+      setNewPctVal('');
+      loadSpecialPcts(effectiveBranch);
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการบันทึก');
+    } finally {
+      setIsSavingPct(false);
+    }
+  };
+
+  const handleDeletePct = async (date) => {
+    if (!window.confirm(`ต้องการลบเปอร์เซ็นต์พิเศษของวันที่ ${formatDateTh(date)} หรือไม่?`)) return;
+    setIsDeletingPct(date);
+    try {
+      const res = await apiCall('deleteBranchPercentage', {
+        branch: effectiveBranch,
+        date: date
+      });
+      toast.success(res.message || 'ลบสำเร็จ');
+      loadSpecialPcts(effectiveBranch);
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการลบ');
+    } finally {
+      setIsDeletingPct('');
+    }
+  };
+
+  const formatDateTh = (ymd) => {
+    if (!ymd) return '';
+    const parts = ymd.split('-');
+    if (parts.length !== 3) return ymd;
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  };
 
   useEffect(() => {
     if (isAll) {
@@ -314,7 +395,6 @@ export default function StockList() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
   const [useDate, setUseDate] = useState(tomorrowYMD());
-  const [isHolidayUse, setIsHolidayUse] = useState(false);
   const [isCalcReq, setIsCalcReq] = useState(false);
 
   const parseDMY = (s) => {
@@ -334,7 +414,15 @@ export default function StockList() {
       const avgMap = avgRes.data || {};
       if (!Object.keys(avgMap).length) throw new Error('ไม่พบค่าเฉลี่ยต่อหัวของสาขานี้ในชีท');
 
-      // 2) หา ช่วงวัน (นับก่อนหน้า → นับล่าสุด) ต่อรายการ + ช่วงรวมสำหรับดึงจำนวนหัวลูกค้า
+      // 2) ดึงเปอร์เซ็นต์พิเศษรายวัน
+      const pctRes = await fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json());
+      const pctList = pctRes.status === 'success' ? (pctRes.data || []) : [];
+      const pctMap = {};
+      pctList.forEach(item => {
+        pctMap[item.date] = 1 + (Number(item.percent) / 100);
+      });
+
+      // 3) หา ช่วงวัน (นับก่อนหน้า → นับล่าสุด) ต่อรายการ + ช่วงรวมสำหรับดึงจำนวนหัวลูกค้า
       let minPrev = null, maxLast = null;
       const jobs = [];
       items.forEach((item, idx) => {
@@ -356,18 +444,11 @@ export default function StockList() {
       const minAllowed = new Date(); minAllowed.setDate(minAllowed.getDate() - 92);
       if (minPrev < minAllowed) minPrev = minAllowed;
 
-      // 3) จำนวนหัวลูกค้ารายวันของสาขา (covers จากแดชบอร์ด)
+      // 4) จำนวนหัวลูกค้ารายวันของสาขา (covers จากแดชบอร์ด)
       const dashRes = await fetch(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(minPrev)}&endDate=${toYMD(maxLast)}`).then(r => r.json());
       if (dashRes.status !== 'success') throw new Error(dashRes.message || 'ดึงจำนวนหัวลูกค้าไม่สำเร็จ');
       const coversByDate = {};
       (dashRes.data?.daily || []).forEach(d => { coversByDate[d.date] = Number(d.covers) || 0; });
-
-      // 4) ตัวคูณตามวันที่ใช้ของ
-      const dow = new Date(useDate + 'T00:00:00').getDay();
-      let mult = 1, multLabel = 'จ-พฤ (ปกติ)';
-      if (dow === 5) { mult = 1.1; multLabel = 'วันศุกร์ +10%'; }
-      if (dow === 0 || dow === 6) { mult = 1.2; multLabel = 'เสาร์-อาทิตย์ +20%'; }
-      if (isHolidayUse && mult < 1.2) { mult = 1.2; multLabel = 'นักขัตฤกษ์ +20%'; }
 
       // 5) คำนวณและเติมลงช่องขอเบิก
       const newItems = [...items];
@@ -377,13 +458,38 @@ export default function StockList() {
         const d = new Date(j.prevD); d.setDate(d.getDate() + 1); // นับวันถัดจากวันนับก่อนหน้า ถึงวันนับล่าสุด
         while (d <= j.lastD) { coversGap += coversByDate[toYMD(d)] || 0; d.setDate(d.getDate() + 1); }
         if (coversGap <= 0) continue;
-        const suggested = Number((j.avg * (coversGap / j.gapDays) * mult).toFixed(2));
-        if (suggested <= 0) continue;
+
+        // คำนวณระยะวันช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
+        const startForecast = new Date(j.lastD);
+        startForecast.setDate(startForecast.getDate() + 1);
+        const targetForecast = new Date(useDate + 'T00:00:00');
+        
+        let totalMult = 0;
+        const tempD = new Date(startForecast);
+        while (tempD <= targetForecast) {
+          const ymdStr = toYMD(tempD);
+          const dayMult = pctMap[ymdStr] !== undefined ? pctMap[ymdStr] : 1.0;
+          totalMult += dayMult;
+          tempD.setDate(tempD.getDate() + 1);
+        }
+
+        if (totalMult <= 0) continue;
+
+        // สูตรยอดใช้คาดการณ์รวม: (avg per head * เฉลี่ยจำนวนลูกค้าต่อวันในช่วงก่อนหน้า) * ตัวคูณสะสมรวม
+        const predictedUsage = j.avg * (coversGap / j.gapDays) * totalMult;
+
+        // หักลบด้วยยอดคงเหลือปัจจุบัน: ช่อง "กรอกคงเหลือ" (remaining) ถ้าไม่มีใช้ "คงเหลือล่าสุด" (lastStock)
+        const currentItem = newItems[j.idx];
+        const remVal = (currentItem.remaining !== '' && currentItem.remaining !== null && currentItem.remaining !== undefined)
+          ? Number(currentItem.remaining)
+          : (Number(currentItem.lastStock) || 0);
+
+        const suggested = Number(Math.max(0, predictedUsage - remVal).toFixed(2));
         newItems[j.idx] = { ...newItems[j.idx], requested: String(suggested) };
         filled++;
       }
       setItems(newItems);
-      toast.success(`คำนวณยอดเบิกแล้ว ${filled} รายการ • ${multLabel}`, { duration: 6000 });
+      toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ`, { duration: 6000 });
     } catch (e) {
       toast.error(e.message || 'คำนวณยอดเบิกไม่สำเร็จ');
     } finally {
@@ -731,21 +837,91 @@ export default function StockList() {
           <div className="bg-white rounded-2xl shadow-sm border border-purple-100 overflow-hidden">
             {/* Counter name row — hidden for 'all' */}
             {!isAll && (
-              <div className="p-4 border-b border-amber-100 bg-amber-50/40 flex flex-wrap items-center gap-3">
-                <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ — วันที่ใช้ของ:</label>
-                <input type="date" value={useDate} onChange={(e) => setUseDate(e.target.value)}
-                  className="px-2 py-1.5 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                <label className="flex items-center gap-1.5 text-sm text-gray-700 whitespace-nowrap cursor-pointer">
-                  <input type="checkbox" checked={isHolidayUse} onChange={(e) => setIsHolidayUse(e.target.checked)} className="w-4 h-4 accent-amber-600" />
-                  วันนักขัตฤกษ์ (+20%)
-                </label>
-                <button
-                  onClick={calcRequested}
-                  disabled={isCalcReq || !effectiveBranch || !useDate}
-                  className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap">
-                  {isCalcReq ? <Loader2 className="w-4 h-4 animate-spin" /> : 'คำนวณยอดเบิก'}
-                </button>
-                <span className="text-[11px] text-gray-400">= ค่าเฉลี่ยต่อหัว × (หัวลูกค้าช่วงนับก่อนหน้า→ล่าสุด ÷ วันห่าง) • ศ +10% / ส-อา,นักขัต +20%</span>
+              <div className="p-4 border-b border-amber-100 bg-amber-50/40 flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ — วันที่ใช้ของ:</label>
+                  <input type="date" value={useDate} onChange={(e) => setUseDate(e.target.value)}
+                    className="px-2 py-1.5 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                  
+                  <button
+                    onClick={calcRequested}
+                    disabled={isCalcReq || !effectiveBranch || !useDate}
+                    className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap">
+                    {isCalcReq ? <Loader2 className="w-4 h-4 animate-spin" /> : 'คำนวณยอดเบิก'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowPctPanel(!showPctPanel)}
+                    className="px-3 py-1.5 border border-amber-300 text-amber-800 text-xs rounded-lg hover:bg-amber-100/50 flex items-center gap-1.5 transition-colors whitespace-nowrap">
+                    ⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน ({specialPcts.length})
+                  </button>
+                </div>
+                
+                <div className="text-[11px] text-gray-500 leading-relaxed">
+                  สูตร: (ยอดใช้เฉลี่ยรายวัน × วันห่างนับล่าสุดถึงวันใช้ของ × %ตัวคูณตามชีท) - สต๊อกคงเหลือล่าสุด
+                </div>
+                
+                {showPctPanel && (
+                  <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4">
+                    <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน (สาขา {effectiveBranch})</h4>
+                    
+                    <div className="flex flex-wrap items-end gap-3 bg-amber-50/50 p-3 rounded-lg border border-amber-100">
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-medium text-gray-600">วันที่ :</label>
+                        <input type="date" value={newPctDate} onChange={(e) => setNewPctDate(e.target.value)}
+                          className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-medium text-gray-600">เปอร์เซ็นต์ที่เพิ่ม (+%) :</label>
+                        <input type="number" placeholder="เช่น 20" value={newPctVal} onChange={(e) => setNewPctVal(e.target.value)}
+                          className="w-28 px-2.5 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" />
+                      </div>
+                      <button
+                        onClick={handleAddPct}
+                        disabled={isSavingPct || !newPctDate || !newPctVal}
+                        className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-1.5 transition-colors">
+                        {isSavingPct ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'บันทึก'}
+                      </button>
+                    </div>
+
+                    {isLoadingPct ? (
+                      <div className="flex justify-center py-4">
+                        <Loader2 className="w-5 h-5 animate-spin text-amber-600" />
+                      </div>
+                    ) : specialPcts.length > 0 ? (
+                      <div className="border border-gray-100 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                        <table className="min-w-full divide-y divide-gray-100 text-sm">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">วันที่</th>
+                              <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase">เปอร์เซ็นต์ที่เพิ่ม</th>
+                              <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase w-20">จัดการ</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-100">
+                            {specialPcts.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50/50">
+                                <td className="px-4 py-2 font-mono">{formatDateTh(item.date)}</td>
+                                <td className="px-4 py-2 text-right font-medium text-amber-700">+{item.percent}% (ตัวคูณ {1 + (item.percent / 100)})</td>
+                                <td className="px-4 py-2 text-center">
+                                  <button
+                                    onClick={() => handleDeletePct(item.date)}
+                                    disabled={isDeletingPct === item.date}
+                                    className="text-rose-500 hover:text-rose-700 font-medium text-xs disabled:opacity-50">
+                                    {isDeletingPct === item.date ? 'กำลังลบ...' : 'ลบ'}
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="text-center text-gray-400 text-xs py-4">ยังไม่มีเปอร์เซ็นต์พิเศษรายวันของสาขานี้</p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {!isAll && (

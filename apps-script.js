@@ -1182,6 +1182,89 @@ function doPost(e) {
       
       response.status = 'success';
       response.message = 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว';
+    } else if (action === 'saveBranchPercentage') {
+      var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
+      var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
+      if (!sheet) {
+        sheet = supSs.insertSheet('เปอร์เซ็นการเบิกของแต่ละสาขา');
+        sheet.appendRow(['วันที่', 'ชื่อสาขา', 'เปอร์เซ็น']);
+        sheet.getRange('A1:C1').setFontWeight('bold');
+      }
+      
+      var pDate = data.date; // YYYY-MM-DD
+      var pBranch = String(data.branch || '').toLowerCase().trim();
+      var pPercent = parseFloat(data.percent) || 0;
+      
+      if (!pDate || !pBranch) throw new Error('ข้อมูลไม่ครบถ้วน');
+      
+      var parts = pDate.split('-');
+      var dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      
+      var values = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      
+      var toYmd = function(v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+      
+      for (var i = 1; i < values.length; i++) {
+        var rowDate = toYmd(values[i][0]);
+        var rowBranch = String(values[i][1] || '').toLowerCase().trim();
+        if (rowDate === pDate && rowBranch === pBranch) {
+          foundRow = i + 1;
+          break;
+        }
+      }
+      
+      if (foundRow !== -1) {
+        sheet.getRange(foundRow, 3).setValue(pPercent);
+      } else {
+        sheet.appendRow([dateObj, pBranch, pPercent]);
+      }
+      
+      response.status = 'success';
+      response.message = 'บันทึกเปอร์เซ็นเรียบร้อยแล้ว';
+      
+    } else if (action === 'deleteBranchPercentage') {
+      var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
+      var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
+      if (!sheet) throw new Error('ไม่พบชีท เปอร์เซ็นการเบิกของแต่ละสาขา');
+      
+      var pDate = data.date; // YYYY-MM-DD
+      var pBranch = String(data.branch || '').toLowerCase().trim();
+      
+      if (!pDate || !pBranch) throw new Error('ข้อมูลไม่ครบถ้วน');
+      
+      var values = sheet.getDataRange().getValues();
+      var toYmd = function(v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+      
+      var deletedCount = 0;
+      for (var i = values.length - 1; i >= 1; i--) {
+        var rowDate = toYmd(values[i][0]);
+        var rowBranch = String(values[i][1] || '').toLowerCase().trim();
+        if (rowDate === pDate && rowBranch === pBranch) {
+          sheet.deleteRow(i + 1);
+          deletedCount++;
+        }
+      }
+      
+      response.status = 'success';
+      response.message = 'ลบข้อมูลเรียบร้อยแล้ว (' + deletedCount + ' รายการ)';
+      
     } else if (action === 'getUsageData') {
       var reqBranch = data.branch || '';
       var startDateStr = data.startDate || '';

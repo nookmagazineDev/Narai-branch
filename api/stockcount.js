@@ -116,6 +116,37 @@ export default async function handler(req, res) {
     }
   }
 
+  // โหมด "เปอร์เซ็นต์การเบิกของแต่ละสาขา" (?getpercentages=1&branch=xxx) — ดึงจากชีท เปอร์เซ็นการเบิกของแต่ละสาขา ในไฟล์ sup
+  if (req.query.getpercentages) {
+    const brA = String(req.query.branch || '').toLowerCase().trim();
+    if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
+    try {
+      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('เปอร์เซ็นการเบิกของแต่ละสาขา')}`);
+      const text = await r.text();
+      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทเปอร์เซ็นการเบิกของแต่ละสาขาไม่ได้ (ต้องแชร์ลิงก์)' });
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      const j = JSON.parse(text.substring(a, b + 1));
+      
+      const aliases = new Set([brA]);
+      if (brA === 'zjp') aliases.add('sjp');
+      if (brA === 'sjp') aliases.add('zjp');
+      
+      const data = [];
+      for (const rw of (j.table.rows || [])) {
+        const c = rw.c || [];
+        const dateVal = cellYmd(c[0]);
+        if (!dateVal) continue;
+        const branchName = String((c[1] && c[1].v) || '').toLowerCase().trim();
+        if (!aliases.has(branchName)) continue;
+        const percent = parseFloat(c[2] && c[2].v) || 0;
+        data.push({ date: dateVal, percent });
+      }
+      return res.status(200).json({ status: 'success', branch: brA, data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
   // โหมด "ยอดรับจากรายจ่าย Supplier" (?supreceived=1&branch=&start=&end=)
   // คืนรูปแบบเดียวกับ /api/orderd -> { code: {total, details:{date:qty}, unit} } เพื่อ merge เป็น "ยอดรับ" ในหน้านับสต๊อก
   if (req.query.supreceived) {
