@@ -508,7 +508,8 @@ async function computeDashboard(outletNum, start, end) {
   };
 }
 
-// ค้นหารายการขาย: ยอดขายรายเมนู (จำนวน+ยอดเงิน) รวมทั้งช่วง + แยกรายวัน (ไม่นับ void/โต๊ะ 600)
+// ค้นหารายการขาย: ยอดขายรายเมนู (จำนวน+ยอดเงิน) รวมทั้งช่วง + แยกรายวัน
+// นับทุกโต๊ะ รวมโต๊ะ 600 ด้วย (ตัดเฉพาะรายการ void — กรองไว้ตั้งแต่ fetchDay แล้ว)
 async function computeItemSales(outletNum, start, end) {
   const days = dateRange(start, end);
   const agg = {}; // ic -> { name, qty, amt, daily: {date: {qty, amt}} }
@@ -518,14 +519,18 @@ async function computeItemSales(outletNum, start, end) {
     const chunk = await Promise.all(slice.map(getDay));
     for (let j = 0; j < slice.length; j++) {
       const date = slice[j];
-      const di = chunk[j].dashItems.get(outletNum); if (!di) continue;
-      for (const [ic, v] of Object.entries(di)) {
-        const e = agg[ic] || (agg[ic] = { itemCode: ic, name: v.name, qty: 0, amt: 0, daily: {} });
-        e.qty += v.qty;
-        e.amt += v.amt || 0;
-        const d = e.daily[date] || (e.daily[date] = { qty: 0, amt: 0 });
-        d.qty += v.qty;
-        d.amt += v.amt || 0;
+      const di = chunk[j].dashItems.get(outletNum);
+      const de = chunk[j].dashExclTbl.get(outletNum); // โต๊ะ 600
+      for (const src of [di, de]) {
+        if (!src) continue;
+        for (const [ic, v] of Object.entries(src)) {
+          const e = agg[ic] || (agg[ic] = { itemCode: ic, name: v.name, qty: 0, amt: 0, daily: {} });
+          e.qty += v.qty;
+          e.amt += v.amt || 0;
+          const d = e.daily[date] || (e.daily[date] = { qty: 0, amt: 0 });
+          d.qty += v.qty;
+          d.amt += v.amt || 0;
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 // ค้นหารายการขาย — เลือกช่วงวันที่ + เลือกเมนูขายได้หลายรายการ ดูจำนวน/ยอดเงิน รวมและรายวัน
-// ข้อมูลจาก office-server /itemsales (ผ่าน /api/dashboard?itemsales=1) — ไม่นับ void/โต๊ะ 600
+// ข้อมูลจาก office-server /itemsales (ผ่าน /api/dashboard?itemsales=1) — รวมทุกโต๊ะ (รวมโต๊ะ 600) ไม่นับเฉพาะรายการที่ยกเลิก (void)
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Search, RefreshCw, Store, X, CheckSquare, Square } from 'lucide-react';
@@ -92,7 +92,7 @@ export default function SalesSearch() {
           <div className="p-2 bg-sky-100 text-sky-600 rounded-xl"><Search className="w-6 h-6" /></div>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">ค้นหารายการขาย</h1>
-            <p className="text-sm text-gray-500">เลือกหลายเมนู + ช่วงวันที่ • จำนวนที่ขายและยอดเงิน (ไม่นับยกเลิก/โต๊ะ 600)</p>
+            <p className="text-sm text-gray-500">เลือกหลายเมนู + ช่วงวันที่ • จำนวนที่ขายและยอดเงิน (รวมทุกโต๊ะ ไม่นับรายการที่ยกเลิก)</p>
           </div>
         </div>
         {isAdmin ? (
