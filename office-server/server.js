@@ -23,7 +23,11 @@ const branchMap = {
 };
 
 // รหัสไอเทม (ฝั่งขาย) ที่ตั้งว่า "ไม่ต้องคิด" — ใส่ใน .env: EXCLUDE_ITEMCODES=102006,202028,...
-const EXCLUDE_ITEMCODES = new Set(String(process.env.EXCLUDE_ITEMCODES || '').split(',').map(s => s.trim()).filter(Boolean));
+// ค่า default = 500018 (S18 เตรียมแป้งพิซซ่า M (ถาด)) — เป็นรายการเตรียม/โอนวัตถุดิบภายใน ไม่ใช่เมนูขายจริง
+// ถ้านับรวมจะไปบวกยอดใช้แป้ง 1000046 ซ้ำกับเมนูพิซซ่า M ที่ขายจริงทุกหน้า
+const EXCLUDE_ITEMCODES = new Set(
+  String(process.env.EXCLUDE_ITEMCODES || '500018').split(',').map(s => s.trim()).filter(Boolean)
+);
 
 // วัตถุดิบ (ฝั่งสต๊อก) ที่ "ห้ามนับเมนูหน่วย (ที่)" — นับเฉพาะเมนูหน่วย (กก)
 // เช่น สันคอ 11010081: เมนูบุฟเฟ่ต์ (กก) นับ, เมนูสไลด์ (ที่) ไม่นับ (กันนับซ้ำเนื้อตัวเดียวกัน)
