@@ -1,41 +1,196 @@
+import mysql from 'mysql2/promise';
+
+// สั่งของ/ขอเบิกจากสาขา — เขียนตรงลง MySQL: inventory.dyndns.tv
+//   หัวใจคือตาราง myfbdata.orderd (ใบสั่งของกลาง, Ord_ReqType='TRF')
+//   เลขที่ใบสั่ง (Ord_No) เดินจาก myfbdata<สาขา>.config.Cfg_LstOrdID + 1 แล้วอัปเดตกลับ
+//   ทำใน transaction + ล็อกแถว config (FOR UPDATE) กันเลขชนกับ POS ที่สาขา
+//
+// POST body: { outletId, branch, deldate:'YYYY-MM-DD', items:[{itemId,itemCode,itemName,qty,unit,price}], dryRun }
+// GET  ?peek=<Ord_No>&outletId=<id>  → ดูใบที่บันทึกไปแล้ว (ใช้ตรวจสอบผลลัพธ์)
+
+let pool;
+function getPool() {
+  if (!pool) {
+    pool = mysql.createPool({
+      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
+      port: Number(process.env.MYSQL_PORT) || 3306,
+      user: process.env.MYSQL_USER || 'root',
+      password: process.env.MYSQL_PASSWORD || '',
+      database: process.env.MYSQL_DATABASE || 'myfbdata',
+      waitForConnections: true,
+      connectionLimit: 5,
+      connectTimeout: 15000,
+    });
+  }
+  return pool;
+}
+
+// รหัสสาขา (outletId) → ชื่อฐานข้อมูลสาขา myfbdata<suffix>
+// ตรวจสอบแล้วจากค่า Cfg_LstOrdID ที่ตรงกับใบสั่งล่าสุดของแต่ละสาขาจริง
+const DB_SUFFIX = {
+  7: 'zjp', 12: 'crm', 19: 'xcm', 37: 'slr', 51: 'sum', 55: 'sts', 59: 'xum',
+  61: 'scs', 63: 'smp', 67: 'xsb', 72: 'xhh', 78: 'hrs', 79: 'clk', 80: 'p90',
+  400: 'zbw', 401: 'zpt', 501: 'wrm', 902: 'hps', 906: 'zk3', 950: 'fct',
+};
+// สาขาที่รหัสในเว็บกับชื่อ DB ไม่ตรงกัน
+const BRANCH_ALIAS = { sjp: 'zjp', zip: 'zjp' };
+
+const SUP_ID = 490;      // คลังกลางที่จ่ายของ (ตรงกับ Trn_From ในใบรับ)
+const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา
+
+// เวลาไทย (Vercel รันเป็น UTC)
+function bangkokNow() {
+  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }); // 'YYYY-MM-DD HH:mm:ss'
+  return { date: s.slice(0, 10), time: s.slice(11, 19), hour: Number(s.slice(11, 13)) };
+}
+
+async function resolveDb(conn, outletId, branch) {
+  const cands = [];
+  if (DB_SUFFIX[Number(outletId)]) cands.push(DB_SUFFIX[Number(outletId)]);
+  const b = String(branch || '').toLowerCase().trim();
+  if (b) cands.push(BRANCH_ALIAS[b] || b);
+  for (const suffix of cands) {
+    const db = 'myfbdata' + suffix;
+    try {
+      await conn.query(`SELECT Cfg_LstOrdID FROM \`${db}\`.config LIMIT 1`);
+      return db;
+    } catch (e) { /* ลองตัวถัดไป */ }
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,PUT');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Content-Type, Date');
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { outletId, deldate, no } = req.query;
-
-  if (!outletId || !deldate || !no) {
-    return res.status(400).json({ status: 'error', message: 'ระบุ outletId, deldate และ no ไม่ครบถ้วน' });
-  }
-
-  const url = `http://183.89.248.221:14369/api/insert_order?outletid=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(deldate)}&no=${encodeURIComponent(no)}`;
-
-  try {
-    const fetchRes = await fetch(url, { method: 'GET' });
-
-    if (!fetchRes.ok) {
-      return res.status(fetchRes.status).json({ status: 'error', message: `API Error: ${fetchRes.status}` });
-    }
-
-    let apiData;
-    const text = await fetchRes.text();
+  // ---- โหมดตรวจสอบ: ดูใบที่บันทึกไปแล้ว ----
+  if (req.method === 'GET' && req.query.peek) {
+    const { peek, outletId } = req.query;
+    if (!outletId) return res.status(400).json({ status: 'error', message: 'ระบุ outletId' });
     try {
-      apiData = JSON.parse(text);
-    } catch {
-      apiData = text;
+      const [rows] = await getPool().query(
+        `SELECT Ord_No, Ord_Seq, DATE_FORMAT(Ord_OrdDate,'%Y-%m-%d') ordDate,
+                DATE_FORMAT(Ord_DelDate,'%Y-%m-%d') delDate, Ord_PostTime postTime,
+                Ord_ItmID itemId, Ord_itemCode itemCode, Ord_ItemName itemName,
+                Ord_Qty qty, Ord_Unit unit, Ord_UnPr unitPrice, Ord_ReqType reqType
+           FROM orderd WHERE Ord_StrID = ? AND Ord_No = ? ORDER BY Ord_Seq`,
+        [Number(outletId), Number(peek)]
+      );
+      return res.status(200).json({ status: 'success', orderNo: Number(peek), count: rows.length, items: rows });
+    } catch (e) {
+      return res.status(500).json({ status: 'error', message: e.message });
+    }
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ status: 'error', message: 'ใช้ POST เพื่อส่งใบสั่งของ' });
+  }
+
+  const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+  const { outletId, branch, deldate, items, dryRun } = body;
+
+  if (!outletId) return res.status(400).json({ status: 'error', message: 'ไม่พบรหัสสาขา (outletId)' });
+  if (!deldate || !/^\d{4}-\d{2}-\d{2}$/.test(String(deldate))) {
+    return res.status(400).json({ status: 'error', message: 'วันที่รับสินค้า (deldate) ไม่ถูกต้อง ต้องเป็น YYYY-MM-DD' });
+  }
+
+  // เตรียมรายการ: เอาเฉพาะที่ขอเบิก > 0 และต้องมี itemId
+  const clean = (Array.isArray(items) ? items : [])
+    .map(it => ({
+      itemId: Number(it.itemId) || 0,
+      itemCode: String(it.itemCode ?? '').trim(),
+      itemName: String(it.itemName ?? '').trim().slice(0, 100),
+      qty: Number(it.qty) || 0,
+      unit: String(it.unit ?? '').trim().slice(0, 20),
+      price: Number(it.price) || 0,
+    }))
+    .filter(it => it.qty > 0);
+
+  if (clean.length === 0) return res.status(400).json({ status: 'error', message: 'ไม่มีรายการที่ขอเบิก' });
+  if (clean.length > 500) return res.status(400).json({ status: 'error', message: 'รายการเกิน 500 รายการ' });
+
+  const noItemId = clean.filter(it => !it.itemId);
+  if (noItemId.length) {
+    return res.status(400).json({
+      status: 'error',
+      message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item`,
+      missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
+    });
+  }
+
+  const conn = await getPool().getConnection();
+  try {
+    const db = await resolveDb(conn, outletId, branch);
+    if (!db) {
+      return res.status(400).json({ status: 'error', message: `ไม่พบฐานข้อมูลของสาขา (outletId=${outletId}, branch=${branch || '-'})` });
     }
 
-    return res.status(200).json({ status: 'success', data: apiData, orderNo: no });
+    const now = bangkokNow();
+    const shift = now.hour < 15 ? 1 : 3;
 
+    await conn.beginTransaction();
+
+    // ล็อกแถว config แล้วจองเลขที่ใบสั่งถัดไป
+    const [cfg] = await conn.query(`SELECT Cfg_LstOrdID AS last FROM \`${db}\`.config LIMIT 1 FOR UPDATE`);
+    const lastNo = Number(cfg[0]?.last) || 0;
+    const orderNo = lastNo + 1;
+
+    // กันชนซ้ำ เผื่อ config ไม่ตรงกับข้อมูลจริง
+    const [dup] = await conn.query('SELECT COUNT(*) c FROM orderd WHERE Ord_StrID = ? AND Ord_No = ?', [Number(outletId), orderNo]);
+    if (Number(dup[0].c) > 0) {
+      await conn.rollback();
+      return res.status(409).json({ status: 'error', message: `เลขที่ใบสั่ง ${orderNo} ถูกใช้ไปแล้ว — กรุณาลองใหม่อีกครั้ง` });
+    }
+
+    const rows = clean.map((it, idx) => [
+      orderNo, Number(outletId), idx + 1, deldate, SUP_ID, now.date,
+      it.itemId, it.qty, it.unit, it.price, 0, it.qty, 1,
+      now.date, now.time, shift,
+      '', '', '', '', '', '', '', '', '', '',
+      it.qty, it.itemCode, it.itemName, REQ_TYPE, '', '', '',
+    ]);
+
+    if (dryRun) {
+      await conn.rollback();
+      return res.status(200).json({
+        status: 'success', dryRun: true, db, orderNo,
+        message: `ทดสอบเท่านั้น — ไม่ได้บันทึกจริง (ใบถัดไปจะเป็นเลข ${orderNo})`,
+        deldate, ordDate: now.date, count: rows.length,
+        preview: clean.slice(0, 5),
+      });
+    }
+
+    await conn.query(`UPDATE \`${db}\`.config SET Cfg_LstOrdID = ?`, [orderNo]);
+    await conn.query(
+      `INSERT INTO orderd
+         (Ord_No, Ord_StrID, Ord_Seq, Ord_DelDate, Ord_SupID, Ord_OrdDate,
+          Ord_ItmID, Ord_Qty, Ord_Unit, Ord_UnPr, Ord_Total, Ord_Rest, Ord_Size,
+          Ord_PostDate, Ord_PostTime, Ord_Shift,
+          Ord_Rmk1, Ord_Rmk2, Ord_Rmk3, Ord_Rmk4, Ord_Rmk5,
+          Ord_Rmk6, Ord_Rmk7, Ord_Rmk8, Ord_Rmk9, Ord_Rmk10,
+          Ord_Qty3, Ord_itemCode, Ord_ItemName, Ord_ReqType,
+          Ord_Remark, Ord_ItmRemark, Ord_Send)
+       VALUES ?`,
+      [rows]
+    );
+
+    await conn.commit();
+
+    return res.status(200).json({
+      status: 'success', orderNo, db, deldate, ordDate: now.date,
+      count: rows.length,
+      totalQty: Number(clean.reduce((s, i) => s + i.qty, 0).toFixed(3)),
+      message: `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${rows.length} รายการ เรียบร้อย`,
+    });
   } catch (error) {
+    try { await conn.rollback(); } catch (e) { /* ignore */ }
     console.error('insert_order error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
+  } finally {
+    conn.release();
   }
 }

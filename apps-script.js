@@ -712,7 +712,7 @@ function doPost(e) {
       }
 
       // รายการสินค้า: อ่านจากชีท "item" ในไฟล์ BOM แทน แล้วกรองเฉพาะสาขานี้ (คอลัมน์ J = สาขาที่ใช้)
-      //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH")
+      //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH") K(index10)=itemid
       var itemSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
       var sheet = itemSs.getSheetByName('item');
       if (!sheet) throw new Error('Sheet "item" not found');
@@ -734,6 +734,7 @@ function doPost(e) {
         var normId = normalizeId(pId);
         items.push({
           productId: pId,
+          itemId: row[10] || '',         // K = itemid (ใช้ตอนส่งใบสั่งของเข้า POS)
           name: row[1] || '',
           unit: row[3] || '',            // D = หน่วย
           price: row[2] || '',           // C = ราคา

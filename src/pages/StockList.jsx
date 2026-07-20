@@ -616,7 +616,8 @@ export default function StockList() {
   };
 
   // --- Fetch pending orders ---
-  // ── ปุ่ม "สั่งของ" — ยิง insert_order (outletId + วันรับ + เลขใบเบิก) เท่านั้น ──
+  // ── ปุ่ม "สั่งของ" — ส่งรายการที่ขอเบิกเข้า myfbdata.orderd โดยตรง ──
+  //    เลขที่ใบสั่ง (Ord_No) ฝั่งเซิร์ฟเวอร์เป็นคนจองจาก config ของสาขา
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderDelDate, setOrderDelDate] = useState('');
   const [isOrdering, setIsOrdering] = useState(false);
@@ -628,19 +629,41 @@ export default function StockList() {
       ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
       : (user?.outletId || '');
     if (!outletId) { toast.error('ไม่พบรหัสสาขา (outletId)'); return; }
+
+    const orderItems = items
+      .filter(i => Number(i.requested) > 0)
+      .map(i => ({
+        itemId: i.itemId,
+        itemCode: i.productId,
+        itemName: i.name,
+        qty: Number(i.requested),
+        unit: i.unit,
+        price: Number(i.price) || 0,
+      }));
+    if (orderItems.length === 0) { toast.error('ไม่มีรายการที่ขอเบิก'); return; }
+
     setIsOrdering(true);
     setOrderResult(null);
     try {
-      const orderNo = await generateOrderNo(outletId);
-      const res = await fetch(
-        `/api/insert_order?outletId=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(orderDelDate)}&no=${encodeURIComponent(orderNo)}`
-      );
+      const res = await fetch('/api/insert_order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outletId,
+          branch: effectiveBranch,
+          deldate: orderDelDate,
+          items: orderItems,
+        }),
+      });
       const data = await res.json();
       if (data.status === 'success') {
-        setOrderResult({ no: orderNo, ok: true, message: `ส่งสั่งของสำเร็จ • เลขที่ใบเบิก ${orderNo}` });
-        toast.success(`📦 ส่งสั่งของสำเร็จ! เลขที่ใบเบิก ${orderNo}`, { duration: 6000 });
+        setOrderResult({ no: data.orderNo, ok: true, message: `ส่งสั่งของสำเร็จ • เลขที่ใบสั่ง ${data.orderNo} (${data.count} รายการ)` });
+        toast.success(`📦 ส่งสั่งของสำเร็จ! เลขที่ใบสั่ง ${data.orderNo} • ${data.count} รายการ`, { duration: 6000 });
       } else {
-        setOrderResult({ no: orderNo, ok: false, message: data.message || 'ส่งไม่สำเร็จ' });
+        const detail = Array.isArray(data.missing) && data.missing.length
+          ? `${data.message}\n${data.missing.slice(0, 5).join('\n')}`
+          : (data.message || 'ส่งไม่สำเร็จ');
+        setOrderResult({ ok: false, message: detail });
         toast.error(`ส่งสั่งของไม่สำเร็จ: ${data.message || 'เกิดข้อผิดพลาด'}`);
       }
     } catch (err) {
