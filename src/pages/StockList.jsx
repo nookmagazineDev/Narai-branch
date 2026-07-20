@@ -500,6 +500,13 @@ export default function StockList() {
       const avgMap = avgRes.data || {};
       if (!Object.keys(avgMap).length) throw new Error('ไม่พบค่าเฉลี่ยต่อหัวของสาขานี้ในชีท');
 
+      // 1.5) หน่วยเบิกของแต่ละสินค้า (คอลัมน์ L ชีท item) — ใช้ปัดเศษยอดเบิกเป็นจำนวนเต็มหน่วย
+      let unitMap = {};
+      try {
+        const uRes = await fetch('/api/insert_order?units=1').then(r => r.json());
+        if (uRes.status === 'success') unitMap = uRes.units || {};
+      } catch (e) { /* ไม่มีหน่วยเบิก → ปัดเป็นจำนวนเต็มปกติ */ }
+
       // 2) ดึงเปอร์เซ็นต์พิเศษรายวัน
       const pctRes = await fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json());
       const pctList = pctRes.status === 'success' ? (pctRes.data || []) : [];
@@ -571,9 +578,18 @@ export default function StockList() {
           ? Number(currentItem.remaining)
           : (Number(currentItem.lastStock) || 0);
 
-        const suggested = Number(Math.max(0, predictedUsage - remVal).toFixed(2));
-        newItems[j.idx] = { 
-          ...newItems[j.idx], 
+        const rawNeed = Math.max(0, predictedUsage - remVal);
+
+        // ปัดเศษเป็นจำนวนเต็มตามหน่วยเบิก (คอลัมน์ L): เศษเกิน 30% ของหน่วย → ปัดขึ้น, ไม่เกิน → ปัดลง
+        // เช่น หน่วยเบิก 5: คำนวณได้ 12 → 12/5=2.4 → ปัดขึ้น 3 → เบิก 15 | ได้ 10.5 → 2.1 → ปัดลง 2 → เบิก 10
+        const unitSize = Number(unitMap[String(currentItem.productId).trim()]) || 1;
+        const ratio = rawNeed / unitSize;
+        const whole = Math.floor(ratio);
+        const frac = ratio - whole;
+        const suggested = (frac > 0.3 + 1e-9 ? whole + 1 : whole) * unitSize;
+
+        newItems[j.idx] = {
+          ...newItems[j.idx],
           requested: String(suggested),
           calcCovers: coversGap
         };

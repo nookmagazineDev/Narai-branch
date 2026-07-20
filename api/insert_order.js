@@ -39,30 +39,38 @@ const SUP_ID = 490;      // คลังกลางที่จ่ายขอ�
 const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา (ใช้ทั้ง Ord_ReqType และ Inv_Type)
 const BATCH_ID = 1;      // Inv_BatchID
 
-// ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID
+// ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID, L=หน่วยเบิก
 // อ่านตรงจากชีทเลย จะได้ไม่ต้องรอ Apps Script ส่ง itemId มาให้
 const ITEM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
 const ITEM_SHEET_GID = '302875824';
-let sheetCache = { at: 0, map: null };
+let sheetCache = { at: 0, map: null, units: null };
 
-async function sheetItemIdMap() {
+async function loadSheetMaps() {
   // แคช 10 นาที กันยิงชีทซ้ำทุกครั้งที่สั่งของ
-  if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache.map;
+  if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache;
   const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
   const txt = await fetch(url).then(r => r.text());
   const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
   if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
   const json = JSON.parse(txt.slice(s, e + 1));
-  const map = new Map();
+  const map = new Map();   // รหัสสินค้า → itemid (K)
+  const units = {};        // รหัสสินค้า → หน่วยเบิก (L)
   for (const row of json.table.rows || []) {
     const cell = i => (row.c && row.c[i] ? row.c[i].v : null);
     const code = String(cell(0) ?? '').trim();
+    if (!code) continue;
     const id = Number(cell(10));
-    if (code && id) map.set(code, id);
+    if (id) map.set(code, id);
+    const u = Number(cell(11));
+    if (u > 0) units[code] = u;
   }
   if (map.size === 0) throw new Error('ชีทรายการสินค้าไม่มีข้อมูล itemid (คอลัมน์ K)');
-  sheetCache = { at: Date.now(), map };
-  return map;
+  sheetCache = { at: Date.now(), map, units };
+  return sheetCache;
+}
+
+async function sheetItemIdMap() {
+  return (await loadSheetMaps()).map;
 }
 
 // เวลาไทย (Vercel รันเป็น UTC)
@@ -93,6 +101,16 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Content-Type, Date');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  // ---- โหมดหน่วยเบิก: คืนแมพ รหัสสินค้า → หน่วยเบิก (คอลัมน์ L ของชีท item) ----
+  if (req.method === 'GET' && req.query.units) {
+    try {
+      const { units } = await loadSheetMaps();
+      return res.status(200).json({ status: 'success', count: Object.keys(units).length, units });
+    } catch (e) {
+      return res.status(500).json({ status: 'error', message: e.message });
+    }
+  }
 
   // ---- โหมดตรวจสอบ: ดูใบที่บันทึกไปแล้ว ----
   if (req.method === 'GET' && req.query.peek) {
