@@ -113,17 +113,31 @@ export default async function handler(req, res) {
   if (clean.length === 0) return res.status(400).json({ status: 'error', message: 'ไม่มีรายการที่ขอเบิก' });
   if (clean.length > 500) return res.status(400).json({ status: 'error', message: 'รายการเกิน 500 รายการ' });
 
-  const noItemId = clean.filter(it => !it.itemId);
-  if (noItemId.length) {
-    return res.status(400).json({
-      status: 'error',
-      message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item`,
-      missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
-    });
-  }
-
   const conn = await getPool().getConnection();
   try {
+    // สำรอง: รายการที่ไม่มี itemId (เช่น ยังไม่ได้กรอกคอลัมน์ K) ลองหาจากรหัสสินค้าใน POS
+    // ใช้เฉพาะรหัสที่ชี้ไปสินค้าตัวเดียวเท่านั้น ถ้ากำกวมถือว่าหาไม่เจอ
+    const needLookup = clean.filter(it => !it.itemId && it.itemCode);
+    if (needLookup.length) {
+      const [found] = await conn.query(
+        'SELECT Itm_Code code, MIN(Itm_ID) id, COUNT(*) n FROM item WHERE Itm_Code IN (?) GROUP BY Itm_Code HAVING n = 1',
+        [needLookup.map(it => it.itemCode)]
+      );
+      const map = new Map(found.map(r => [String(r.code).trim(), Number(r.id)]));
+      for (const it of clean) {
+        if (!it.itemId) it.itemId = map.get(it.itemCode) || 0;
+      }
+    }
+
+    const noItemId = clean.filter(it => !it.itemId);
+    if (noItemId.length) {
+      return res.status(400).json({
+        status: 'error',
+        message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item`,
+        missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
+      });
+    }
+
     const db = await resolveDb(conn, outletId, branch);
     if (!db) {
       return res.status(400).json({ status: 'error', message: `ไม่พบฐานข้อมูลของสาขา (outletId=${outletId}, branch=${branch || '-'})` });
