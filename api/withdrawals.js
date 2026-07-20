@@ -52,6 +52,25 @@ export default async function handler(req, res) {
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
   try {
+    // ตาราง trans มี 1.4 ล้านแถว ไม่มี index ตามสาขา/วันที่ — คิวรีตรงๆ กวาดทั้งตาราง (~5 วิ)
+    // เร่งด้วยการบีบช่วงเลขเอกสาร (Trn_DocNo) ให้ MySQL ใช้ PRIMARY KEY (Trn_Type, Trn_DocNo นำหน้า)
+    // เลขเอกสารเดินจากตัวนับกลาง config: TRF ใช้ Cfg_LstIss, RCV ใช้ Cfg_LstRcv (~15 เลข/วัน)
+    let docNoFilter = '';
+    let docNoParams = [];
+    try {
+      const [cfg] = await getPool().query('SELECT Cfg_LstIss AS iss, Cfg_LstRcv AS rcv FROM config LIMIT 1');
+      const lastIss = Number(cfg[0]?.iss) || 0;
+      const lastRcv = Number(cfg[0]?.rcv) || 0;
+      const days = Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / 86400000) + 1)
+        + Math.max(0, Math.ceil((Date.now() - new Date(endDate)) / 86400000)); // ย้อนถึงช่วงที่ขอ
+      const span = days * 25 + 300; // อัตราจริง ~15 เลข/วัน — เผื่อไว้ ~1.7 เท่า (ยิ่งกว้างยิ่งช้า)
+      if (lastIss > 0 && lastRcv > 0) {
+        docNoFilter = `AND ((Trn_Type = 'TRF' AND Trn_DocNo BETWEEN ? AND ?)
+                         OR (Trn_Type = 'RCV' AND Trn_DocNo BETWEEN ? AND ?))`;
+        docNoParams = [lastIss - span, lastIss + 50, lastRcv - span, lastRcv + 50];
+      }
+    } catch (e) { /* อ่านตัวนับไม่ได้ → ใช้คิวรีเต็มตาราง */ }
+
     const [rows] = await getPool().query(
       `SELECT Trn_InvNo AS invNo, Trn_Type AS docType, Trn_DocNo AS docNo,
               DATE_FORMAT(Trn_DocDate, '%Y-%m-%d') AS docDate,
@@ -59,10 +78,11 @@ export default async function handler(req, res) {
               Trn_InvQty AS qty, Trn_Unit AS unit, Trn_UnitPr AS unitPrice
          FROM trans
         WHERE Trn_Type IN ('TRF','RCV')
+          ${docNoFilter}
           AND Trn_To = ?
           AND Trn_DocDate BETWEEN ? AND ?
         ORDER BY Trn_DocDate DESC, Trn_InvNo DESC, Trn_Seq ASC`,
-      [outletId, startDate, endDate]
+      [...docNoParams, outletId, startDate, endDate]
     );
 
     // จัดกลุ่มเป็นใบเบิกตาม Trn_InvNo
