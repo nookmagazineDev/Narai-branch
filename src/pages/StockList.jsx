@@ -657,8 +657,17 @@ export default function StockList() {
       });
       const data = await res.json();
       if (data.status === 'success') {
-        setOrderResult({ no: data.orderNo, ok: true, message: `ส่งสั่งของสำเร็จ • เลขที่ใบสั่ง ${data.orderNo} (${data.count} รายการ)` });
-        toast.success(`📦 ส่งสั่งของสำเร็จ! เลขที่ใบสั่ง ${data.orderNo} • ${data.count} รายการ`, { duration: 6000 });
+        setOrderResult({
+          ok: true, no: data.orderNo, count: data.count, deldate: data.deldate,
+          message: `ส่งใบเบิกสำเร็จ • เลขที่ ${data.orderNo} (${data.count} รายการ)`,
+        });
+        toast.success(`📦 ส่งใบเบิกสำเร็จ! เลขที่ ${data.orderNo} • ${data.count} รายการ`, { duration: 8000 });
+        // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
+        try {
+          const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
+          const pj = await p.json();
+          if (pj.status === 'success') setPendingOrders(pj.data || []);
+        } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
       } else {
         const detail = Array.isArray(data.missing) && data.missing.length
           ? `${data.message}\n${data.missing.slice(0, 5).join('\n')}`
@@ -1644,19 +1653,26 @@ export default function StockList() {
                   <thead className="bg-amber-50 border-b">
                     <tr>
                       <th className="px-4 py-2 text-left text-amber-800 font-semibold">เลขที่ใบเบิก</th>
-                      <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่เบิก</th>
+                      <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่สั่ง</th>
+                      <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่รับ</th>
+                      <th className="px-4 py-2 text-right text-amber-800 font-semibold">รายการ</th>
                       <th className="px-4 py-2 text-center text-amber-800 font-semibold">สถานะ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
                     {pendingOrders.map((order, idx) => {
                       const no = order.no || order.No || order.Ord_No || '-';
+                      const ordDate = order.orderDate || '-';
                       const date = order.deldate || order.DelDate || order.Ord_DelDate || order.date || '-';
-                      const status = order.status || order.Status || order.Ord_Status || 'รอรับ';
+                      const status = order.status || order.Status || order.Ord_Status || 'รอรับของ';
                       return (
                         <tr key={idx} className="hover:bg-amber-50/50 transition-colors">
                           <td className="px-4 py-3 font-mono font-semibold text-amber-700">{no}</td>
+                          <td className="px-4 py-3 text-gray-600">{String(ordDate).split('T')[0]}</td>
                           <td className="px-4 py-3 text-gray-600">{String(date).split('T')[0]}</td>
+                          <td className="px-4 py-3 text-right text-gray-600">
+                            {order.itemCount != null ? `${order.itemCount} รายการ` : '-'}
+                          </td>
                           <td className="px-4 py-3 text-center">
                             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
                           </td>
@@ -1827,13 +1843,24 @@ export default function StockList() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">วันที่ต้องการรับสินค้า <span className="text-red-500">*</span></label>
                 <input type="date" value={orderDelDate} onChange={(e) => setOrderDelDate(e.target.value)}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
-                <p className="text-[11px] text-gray-400 mt-1">ระบบจะสร้างเลขที่ใบเบิกให้อัตโนมัติ แล้วส่งเข้าระบบ (insert_order)</p>
+                <p className="text-[11px] text-gray-400 mt-1">ระบบจะรันเลขที่ใบเบิกต่อจากใบล่าสุดของสาขาให้อัตโนมัติ</p>
               </div>
 
               {orderResult && (
-                <div className={`text-sm rounded-lg px-3 py-2 ${orderResult.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                  {orderResult.message}
-                </div>
+                orderResult.ok ? (
+                  <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-3 text-center">
+                    <p className="text-xs font-medium text-emerald-600">ส่งใบเบิกสำเร็จ • เลขที่ใบเบิก</p>
+                    <p className="text-3xl font-bold font-mono text-emerald-700 my-1 tracking-wide">{orderResult.no}</p>
+                    <p className="text-xs text-emerald-600">
+                      {orderResult.count} รายการ • รับวันที่ {orderResult.deldate}
+                    </p>
+                    <p className="text-[11px] text-emerald-500 mt-1.5">บันทึกไว้ในใบเบิกค้างแล้ว</p>
+                  </div>
+                ) : (
+                  <div className="text-sm rounded-lg px-3 py-2 bg-red-50 text-red-700 border border-red-200 whitespace-pre-line">
+                    {orderResult.message}
+                  </div>
+                )
               )}
             </div>
 
