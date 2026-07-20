@@ -616,6 +616,41 @@ export default function StockList() {
   };
 
   // --- Fetch pending orders ---
+  // ── ปุ่ม "สั่งของ" — ยิง insert_order (outletId + วันรับ + เลขใบเบิก) เท่านั้น ──
+  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [orderDelDate, setOrderDelDate] = useState('');
+  const [isOrdering, setIsOrdering] = useState(false);
+  const [orderResult, setOrderResult] = useState(null); // { no, message }
+
+  const submitOrder = async () => {
+    if (!orderDelDate) { toast.error('กรุณาเลือกวันที่รับสินค้า'); return; }
+    const outletId = isAll
+      ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
+      : (user?.outletId || '');
+    if (!outletId) { toast.error('ไม่พบรหัสสาขา (outletId)'); return; }
+    setIsOrdering(true);
+    setOrderResult(null);
+    try {
+      const orderNo = await generateOrderNo(outletId);
+      const res = await fetch(
+        `/api/insert_order?outletId=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(orderDelDate)}&no=${encodeURIComponent(orderNo)}`
+      );
+      const data = await res.json();
+      if (data.status === 'success') {
+        setOrderResult({ no: orderNo, ok: true, message: `ส่งสั่งของสำเร็จ • เลขที่ใบเบิก ${orderNo}` });
+        toast.success(`📦 ส่งสั่งของสำเร็จ! เลขที่ใบเบิก ${orderNo}`, { duration: 6000 });
+      } else {
+        setOrderResult({ no: orderNo, ok: false, message: data.message || 'ส่งไม่สำเร็จ' });
+        toast.error(`ส่งสั่งของไม่สำเร็จ: ${data.message || 'เกิดข้อผิดพลาด'}`);
+      }
+    } catch (err) {
+      setOrderResult({ ok: false, message: err.message });
+      toast.error('ส่งสั่งของไม่สำเร็จ: ' + err.message);
+    } finally {
+      setIsOrdering(false);
+    }
+  };
+
   const fetchPendingOrders = async () => {
     const outletId = isAll
       ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
@@ -804,6 +839,14 @@ export default function StockList() {
         {/* Save + Pending Orders buttons — hidden for 'all' */}
         {!isAll && (
           <div className="flex gap-2">
+            <button
+              onClick={() => { setOrderResult(null); setShowOrderModal(true); }}
+              disabled={!effectiveBranch}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl font-medium hover:bg-sky-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-sky-200"
+            >
+              <FileText className="w-4 h-4" />
+              <span className="text-sm">สั่งของ</span>
+            </button>
             <button
               onClick={fetchPendingOrders}
               disabled={isLoadingPending}
@@ -1696,6 +1739,41 @@ export default function StockList() {
             </div>
             <div className="px-5 py-3 border-t bg-gray-50 flex justify-end">
               <button onClick={() => setShowWithdrawalModal(false)} className="px-5 py-2 bg-white border border-gray-200 shadow-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium">ปิด</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal สั่งของ — เลือกวันรับ แล้วยิง insert_order */}
+      {showOrderModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => !isOrdering && setShowOrderModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-sky-600 text-white flex items-center justify-between">
+              <h3 className="text-base font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> สั่งของ (ส่งใบเบิก)</h3>
+              <button onClick={() => !isOrdering && setShowOrderModal(false)} className="text-sky-100 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="text-sm text-gray-500">สาขา: <span className="font-semibold text-gray-800">{effectiveBranch}</span></div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">วันที่ต้องการรับสินค้า <span className="text-red-500">*</span></label>
+                <input type="date" value={orderDelDate} onChange={(e) => setOrderDelDate(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
+                <p className="text-[11px] text-gray-400 mt-1">ระบบจะสร้างเลขที่ใบเบิกให้อัตโนมัติ แล้วส่งเข้าระบบ (insert_order)</p>
+              </div>
+              {orderResult && (
+                <div className={`text-sm rounded-lg px-3 py-2 ${orderResult.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                  {orderResult.message}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <button onClick={() => setShowOrderModal(false)} disabled={isOrdering}
+                  className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
+                <button onClick={submitOrder} disabled={isOrdering || !orderDelDate}
+                  className="px-5 py-2 rounded-xl text-sm font-semibold bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2">
+                  {isOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                  {isOrdering ? 'กำลังส่ง…' : 'ยืนยันสั่งของ'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
