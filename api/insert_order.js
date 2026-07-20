@@ -38,6 +38,32 @@ const BRANCH_ALIAS = { sjp: 'zjp', zip: 'zjp' };
 const SUP_ID = 490;      // คลังกลางที่จ่ายของ (ตรงกับ Trn_From ในใบรับ)
 const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา
 
+// ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID
+// อ่านตรงจากชีทเลย จะได้ไม่ต้องรอ Apps Script ส่ง itemId มาให้
+const ITEM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
+const ITEM_SHEET_GID = '302875824';
+let sheetCache = { at: 0, map: null };
+
+async function sheetItemIdMap() {
+  // แคช 10 นาที กันยิงชีทซ้ำทุกครั้งที่สั่งของ
+  if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache.map;
+  const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
+  const txt = await fetch(url).then(r => r.text());
+  const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
+  if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
+  const json = JSON.parse(txt.slice(s, e + 1));
+  const map = new Map();
+  for (const row of json.table.rows || []) {
+    const cell = i => (row.c && row.c[i] ? row.c[i].v : null);
+    const code = String(cell(0) ?? '').trim();
+    const id = Number(cell(10));
+    if (code && id) map.set(code, id);
+  }
+  if (map.size === 0) throw new Error('ชีทรายการสินค้าไม่มีข้อมูล itemid (คอลัมน์ K)');
+  sheetCache = { at: Date.now(), map };
+  return map;
+}
+
 // เวลาไทย (Vercel รันเป็น UTC)
 function bangkokNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }); // 'YYYY-MM-DD HH:mm:ss'
@@ -115,8 +141,19 @@ export default async function handler(req, res) {
 
   const conn = await getPool().getConnection();
   try {
-    // สำรอง: รายการที่ไม่มี itemId (เช่น ยังไม่ได้กรอกคอลัมน์ K) ลองหาจากรหัสสินค้าใน POS
-    // ใช้เฉพาะรหัสที่ชี้ไปสินค้าตัวเดียวเท่านั้น ถ้ากำกวมถือว่าหาไม่เจอ
+    // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา — ลำดับ: ชีทคอลัมน์ K → รหัสสินค้าใน POS
+    if (clean.some(it => !it.itemId)) {
+      try {
+        const fromSheet = await sheetItemIdMap();
+        for (const it of clean) {
+          if (!it.itemId) it.itemId = fromSheet.get(it.itemCode) || 0;
+        }
+      } catch (e) {
+        console.error('อ่าน itemid จากชีทไม่สำเร็จ:', e.message);
+      }
+    }
+
+    // สำรองชั้นสุดท้าย: หาจากรหัสสินค้าใน POS (ใช้เฉพาะรหัสที่ชี้ไปสินค้าตัวเดียว)
     const needLookup = clean.filter(it => !it.itemId && it.itemCode);
     if (needLookup.length) {
       const [found] = await conn.query(
