@@ -1744,40 +1744,89 @@ export default function StockList() {
         </div>
       )}
 
-      {/* Modal สั่งของ — เลือกวันรับ แล้วยิง insert_order */}
-      {showOrderModal && (
+      {/* Modal สั่งของ — พรีวิวรายการที่จะเบิก + เลือกวันรับ แล้วยิง insert_order */}
+      {showOrderModal && (() => {
+        const orderItems = items.filter(i => Number(i.requested) > 0);
+        const totalQty = orderItems.reduce((s, i) => s + (Number(i.requested) || 0), 0);
+        return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => !isOrdering && setShowOrderModal(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-6 py-4 bg-sky-600 text-white flex items-center justify-between">
-              <h3 className="text-base font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> สั่งของ (ส่งใบเบิก)</h3>
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-sky-600 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> สั่งของ (ส่งใบเบิก)</h3>
+                <p className="text-xs text-sky-100 mt-0.5">สาขา {effectiveBranch} • {orderItems.length} รายการ</p>
+              </div>
               <button onClick={() => !isOrdering && setShowOrderModal(false)} className="text-sky-100 hover:text-white text-xl leading-none">&times;</button>
             </div>
-            <div className="p-6 space-y-4">
-              <div className="text-sm text-gray-500">สาขา: <span className="font-semibold text-gray-800">{effectiveBranch}</span></div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* พรีวิวรายการที่ขอเบิก */}
+              <div>
+                <p className="text-sm font-semibold text-gray-700 mb-2">รายการที่จะเบิก ({orderItems.length})</p>
+                {orderItems.length === 0 ? (
+                  <div className="py-8 text-center text-amber-600 text-sm bg-amber-50 border border-amber-200 rounded-xl">
+                    ยังไม่มีรายการที่กรอก "ขอเบิก" — กรุณากรอกจำนวนในช่องขอเบิกก่อน
+                  </div>
+                ) : (
+                  <div className="border border-gray-100 rounded-xl overflow-hidden max-h-[40vh] overflow-y-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead className="sticky top-0">
+                        <tr className="text-gray-600 bg-gray-50">
+                          <th className="px-3 py-2 text-left">รหัส</th>
+                          <th className="px-3 py-2 text-left">ชื่อสินค้า</th>
+                          <th className="px-3 py-2 text-center">หน่วย</th>
+                          <th className="px-3 py-2 text-right">ขอเบิก</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 text-gray-700">
+                        {orderItems.map((it) => (
+                          <tr key={it.productId} className="hover:bg-sky-50/40">
+                            <td className="px-3 py-1.5 font-mono text-gray-400">{it.productId}</td>
+                            <td className="px-3 py-1.5 font-medium text-gray-800">{it.name}</td>
+                            <td className="px-3 py-1.5 text-center text-gray-500">{it.unit || '-'}</td>
+                            <td className="px-3 py-1.5 text-right font-mono font-semibold text-sky-700">{Number(it.requested).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-50 font-bold text-gray-800">
+                          <td className="px-3 py-2" colSpan={3}>รวม {orderItems.length} รายการ</td>
+                          <td className="px-3 py-2 text-right font-mono">{Number(totalQty).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* วันที่รับ */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">วันที่ต้องการรับสินค้า <span className="text-red-500">*</span></label>
                 <input type="date" value={orderDelDate} onChange={(e) => setOrderDelDate(e.target.value)}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
                 <p className="text-[11px] text-gray-400 mt-1">ระบบจะสร้างเลขที่ใบเบิกให้อัตโนมัติ แล้วส่งเข้าระบบ (insert_order)</p>
               </div>
+
               {orderResult && (
                 <div className={`text-sm rounded-lg px-3 py-2 ${orderResult.ok ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
                   {orderResult.message}
                 </div>
               )}
-              <div className="flex justify-end gap-2 pt-1">
-                <button onClick={() => setShowOrderModal(false)} disabled={isOrdering}
-                  className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
-                <button onClick={submitOrder} disabled={isOrdering || !orderDelDate}
-                  className="px-5 py-2 rounded-xl text-sm font-semibold bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2">
-                  {isOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                  {isOrdering ? 'กำลังส่ง…' : 'ยืนยันสั่งของ'}
-                </button>
-              </div>
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 shrink-0">
+              <button onClick={() => setShowOrderModal(false)} disabled={isOrdering}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
+              <button onClick={submitOrder} disabled={isOrdering || !orderDelDate || orderItems.length === 0}
+                className="px-5 py-2 rounded-xl text-sm font-semibold bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2">
+                {isOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                {isOrdering ? 'กำลังส่ง…' : `ยืนยันสั่งของ (${orderItems.length})`}
+              </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* เครื่องคิดเลขสะสมของช่องคงเหลือ */}
       <CalcModal
