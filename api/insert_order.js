@@ -182,23 +182,10 @@ export default async function handler(req, res) {
 
     const now = bangkokNow();
     const shift = now.hour < 15 ? 1 : 3;
+    const oid = Number(outletId);
 
-    await conn.beginTransaction();
-
-    // ล็อกแถว config แล้วจองเลขที่ใบสั่งถัดไป
-    const [cfg] = await conn.query(`SELECT Cfg_LstOrdID AS last FROM \`${db}\`.config LIMIT 1 FOR UPDATE`);
-    const lastNo = Number(cfg[0]?.last) || 0;
-    const orderNo = lastNo + 1;
-
-    // กันชนซ้ำ เผื่อ config ไม่ตรงกับข้อมูลจริง
-    const [dup] = await conn.query('SELECT COUNT(*) c FROM orderd WHERE Ord_StrID = ? AND Ord_No = ?', [Number(outletId), orderNo]);
-    if (Number(dup[0].c) > 0) {
-      await conn.rollback();
-      return res.status(409).json({ status: 'error', message: `เลขที่ใบสั่ง ${orderNo} ถูกใช้ไปแล้ว — กรุณาลองใหม่อีกครั้ง` });
-    }
-
-    const rows = clean.map((it, idx) => [
-      orderNo, Number(outletId), idx + 1, deldate, SUP_ID, now.date,
+    const buildRows = (ordNo) => clean.map((it, idx) => [
+      ordNo, oid, idx + 1, deldate, SUP_ID, now.date,
       it.itemId, it.qty, it.unit, it.price, 0, it.qty, 1,
       now.date, now.time, shift,
       '', '', '', '', '', '', '', '', '', '',
@@ -206,39 +193,67 @@ export default async function handler(req, res) {
     ]);
 
     if (dryRun) {
-      await conn.rollback();
+      const [cfg] = await conn.query(`SELECT Cfg_LstOrdID AS last FROM \`${db}\`.config LIMIT 1`);
+      const next = (Number(cfg[0]?.last) || 0) + 1;
       return res.status(200).json({
-        status: 'success', dryRun: true, db, orderNo,
-        message: `ทดสอบเท่านั้น — ไม่ได้บันทึกจริง (ใบถัดไปจะเป็นเลข ${orderNo})`,
-        deldate, ordDate: now.date, count: rows.length,
+        status: 'success', dryRun: true, db, orderNo: next,
+        message: `ทดสอบเท่านั้น — ไม่ได้บันทึกจริง (ใบถัดไปจะเป็นเลข ${next})`,
+        deldate, ordDate: now.date, count: clean.length,
         preview: clean.slice(0, 5),
       });
     }
 
-    await conn.query(`UPDATE \`${db}\`.config SET Cfg_LstOrdID = ?`, [orderNo]);
-    await conn.query(
-      `INSERT INTO orderd
-         (Ord_No, Ord_StrID, Ord_Seq, Ord_DelDate, Ord_SupID, Ord_OrdDate,
-          Ord_ItmID, Ord_Qty, Ord_Unit, Ord_UnPr, Ord_Total, Ord_Rest, Ord_Size,
-          Ord_PostDate, Ord_PostTime, Ord_Shift,
-          Ord_Rmk1, Ord_Rmk2, Ord_Rmk3, Ord_Rmk4, Ord_Rmk5,
-          Ord_Rmk6, Ord_Rmk7, Ord_Rmk8, Ord_Rmk9, Ord_Rmk10,
-          Ord_Qty3, Ord_itemCode, Ord_ItemName, Ord_ReqType,
-          Ord_Remark, Ord_ItmRemark, Ord_Send)
-       VALUES ?`,
-      [rows]
-    );
+    // ตาราง POS เป็น MyISAM — ไม่มี transaction และ SELECT ... FOR UPDATE ไม่ทำงาน
+    // จึงต้องใช้ LOCK TABLES ซึ่งเป็นการล็อกที่ MyISAM รองรับจริง
+    // ระหว่างที่ล็อก ไม่มีใคร (รวมถึงเครื่อง POS ที่สาขา) แทรกใบใหม่ได้ ใช้เวลาแค่เสี้ยววินาที
+    let orderNo = 0;
+    await conn.query(`LOCK TABLES \`myfbdata\`.orderd WRITE, \`${db}\`.config WRITE`);
+    try {
+      const [cfg] = await conn.query(`SELECT Cfg_LstOrdID AS last FROM \`${db}\`.config LIMIT 1`);
+      let candidate = (Number(cfg[0]?.last) || 0) + 1;
 
-    await conn.commit();
+      // ถ้าเลขนั้นมีคนใช้ไปแล้ว (config ไม่ตรงกับข้อมูลจริง) ให้ข้ามไปเลขถัดไป
+      for (let i = 0; i < 100; i++) {
+        const [dup] = await conn.query(
+          'SELECT COUNT(*) c FROM `myfbdata`.orderd WHERE Ord_StrID = ? AND Ord_No = ?', [oid, candidate]
+        );
+        if (!Number(dup[0].c)) break;
+        candidate += 1;
+      }
+      orderNo = candidate;
+
+      try {
+        await conn.query(
+          `INSERT INTO \`myfbdata\`.orderd
+             (Ord_No, Ord_StrID, Ord_Seq, Ord_DelDate, Ord_SupID, Ord_OrdDate,
+              Ord_ItmID, Ord_Qty, Ord_Unit, Ord_UnPr, Ord_Total, Ord_Rest, Ord_Size,
+              Ord_PostDate, Ord_PostTime, Ord_Shift,
+              Ord_Rmk1, Ord_Rmk2, Ord_Rmk3, Ord_Rmk4, Ord_Rmk5,
+              Ord_Rmk6, Ord_Rmk7, Ord_Rmk8, Ord_Rmk9, Ord_Rmk10,
+              Ord_Qty3, Ord_itemCode, Ord_ItemName, Ord_ReqType,
+              Ord_Remark, Ord_ItmRemark, Ord_Send)
+           VALUES ?`,
+          [buildRows(orderNo)]
+        );
+      } catch (insErr) {
+        // MyISAM ไม่มี rollback — ถ้าใส่ไปได้บางส่วนต้องเก็บกวาดเอง
+        // ปลอดภัยเพราะเช็คแล้วว่าเลขนี้ว่างตอนที่ยังถือล็อกอยู่
+        await conn.query('DELETE FROM `myfbdata`.orderd WHERE Ord_StrID = ? AND Ord_No = ?', [oid, orderNo]);
+        throw insErr;
+      }
+
+      await conn.query(`UPDATE \`${db}\`.config SET Cfg_LstOrdID = ?`, [orderNo]);
+    } finally {
+      await conn.query('UNLOCK TABLES');
+    }
 
     return res.status(200).json({
       status: 'success', orderNo, db, deldate, ordDate: now.date,
-      count: rows.length,
+      count: clean.length,
       totalQty: Number(clean.reduce((s, i) => s + i.qty, 0).toFixed(3)),
-      message: `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${rows.length} รายการ เรียบร้อย`,
+      message: `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${clean.length} รายการ เรียบร้อย`,
     });
   } catch (error) {
-    try { await conn.rollback(); } catch (e) { /* ignore */ }
     console.error('insert_order error:', error);
     return res.status(500).json({ status: 'error', message: error.message });
   } finally {
