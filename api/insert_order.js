@@ -36,7 +36,8 @@ const DB_SUFFIX = {
 const BRANCH_ALIAS = { sjp: 'zjp', zip: 'zjp' };
 
 const SUP_ID = 490;      // คลังกลางที่จ่ายของ (ตรงกับ Trn_From ในใบรับ)
-const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา
+const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา (ใช้ทั้ง Ord_ReqType และ Inv_Type)
+const BATCH_ID = 1;      // Inv_BatchID
 
 // ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID
 // อ่านตรงจากชีทเลย จะได้ไม่ต้องรอ Apps Script ส่ง itemId มาให้
@@ -207,15 +208,18 @@ export default async function handler(req, res) {
     // จึงต้องใช้ LOCK TABLES ซึ่งเป็นการล็อกที่ MyISAM รองรับจริง
     // ระหว่างที่ล็อก ไม่มีใคร (รวมถึงเครื่อง POS ที่สาขา) แทรกใบใหม่ได้ ใช้เวลาแค่เสี้ยววินาที
     let orderNo = 0;
-    await conn.query(`LOCK TABLES \`myfbdata\`.orderd WRITE, \`${db}\`.config WRITE`);
+    await conn.query(`LOCK TABLES \`myfbdata\`.orderd WRITE, \`myfbdata\`.invoice WRITE, \`${db}\`.config WRITE`);
     try {
       const [cfg] = await conn.query(`SELECT Cfg_LstOrdID AS last FROM \`${db}\`.config LIMIT 1`);
       let candidate = (Number(cfg[0]?.last) || 0) + 1;
 
       // ถ้าเลขนั้นมีคนใช้ไปแล้ว (config ไม่ตรงกับข้อมูลจริง) ให้ข้ามไปเลขถัดไป
+      // เช็คทั้งรายการสินค้าและหัวใบ เพราะต้องว่างทั้งคู่ถึงจะใช้เลขนั้นได้
       for (let i = 0; i < 100; i++) {
         const [dup] = await conn.query(
-          'SELECT COUNT(*) c FROM `myfbdata`.orderd WHERE Ord_StrID = ? AND Ord_No = ?', [oid, candidate]
+          `SELECT (SELECT COUNT(*) FROM \`myfbdata\`.orderd WHERE Ord_StrID = ? AND Ord_No = ?)
+                + (SELECT COUNT(*) FROM \`myfbdata\`.invoice WHERE Inv_StrID = ? AND Inv_DocNo = ? AND Inv_Type = ?) AS c`,
+          [oid, candidate, oid, candidate, REQ_TYPE]
         );
         if (!Number(dup[0].c)) break;
         candidate += 1;
@@ -235,10 +239,23 @@ export default async function handler(req, res) {
            VALUES ?`,
           [buildRows(orderNo)]
         );
+        // หัวใบเบิกในตาราง invoice — คู่กับรายการสินค้าใน orderd
+        //   Inv_DocDate = วันที่ส่งของ, Inv_InvDate = วันที่กรอกข้อมูล
+        await conn.query(
+          `INSERT INTO \`myfbdata\`.invoice
+             (Inv_Type, Inv_DocNo, Inv_StrID, Inv_InvNo, Inv_DocDate, Inv_DocType,
+              Inv_SupID, Inv_InvDate, Inv_VatType, Inv_BatchID, Inv_Remark,
+              Inv_Rmk1, Inv_Rmk2, Inv_Rmk3, Inv_Rmk4, Inv_Rmk5,
+              Inv_Rmk6, Inv_Rmk7, Inv_Rmk8, Inv_Rmk9, Inv_Rmk10)
+           VALUES (?, ?, ?, '', ?, '', ?, ?, '', ?, '',
+                   ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ')`,
+          [REQ_TYPE, orderNo, oid, deldate, SUP_ID, now.date, BATCH_ID]
+        );
       } catch (insErr) {
         // MyISAM ไม่มี rollback — ถ้าใส่ไปได้บางส่วนต้องเก็บกวาดเอง
         // ปลอดภัยเพราะเช็คแล้วว่าเลขนี้ว่างตอนที่ยังถือล็อกอยู่
         await conn.query('DELETE FROM `myfbdata`.orderd WHERE Ord_StrID = ? AND Ord_No = ?', [oid, orderNo]);
+        await conn.query('DELETE FROM `myfbdata`.invoice WHERE Inv_StrID = ? AND Inv_DocNo = ? AND Inv_Type = ?', [oid, orderNo, REQ_TYPE]);
         throw insErr;
       }
 
