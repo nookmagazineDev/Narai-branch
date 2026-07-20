@@ -24,6 +24,13 @@ function getPool() {
 
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
+// รหัสสาขา → ชื่อฐานข้อมูลสาขา (ใช้อ่านเลขใบล่าสุดจาก config — ชุดเดียวกับ insert_order)
+const DB_SUFFIX = {
+  7: 'zjp', 12: 'crm', 19: 'xcm', 37: 'slr', 51: 'sum', 55: 'sts', 59: 'xum',
+  61: 'scs', 63: 'smp', 67: 'xsb', 72: 'xhh', 78: 'hrs', 79: 'clk', 80: 'p90',
+  400: 'zbw', 401: 'zpt', 501: 'wrm', 902: 'hps', 906: 'zk3', 950: 'fct',
+};
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -51,6 +58,27 @@ export default async function handler(req, res) {
     }
 
     const back = Math.min(Number(days) || 120, 400);
+
+    // ตาราง orderd มี 2.2 ล้านแถวและไม่มี index ตามสาขา/วันที่ — คิวรีตรงๆ กวาดทั้งตาราง (6-9 วิ)
+    // เร่งด้วยการอ่านเลขใบล่าสุดจาก config ของสาขา แล้วระบุช่วงเลขเป็นรายตัว (IN)
+    // ให้ MySQL ใช้ PRIMARY KEY (Ord_No นำหน้า) ชี้ตรงจุด → เหลือ ~0.2 วิ
+    let inClause = '';
+    let inParams = [];
+    const suffix = DB_SUFFIX[Number(outletId)];
+    if (suffix) {
+      try {
+        const [cfg] = await getPool().query(`SELECT Cfg_LstOrdID AS v FROM \`myfbdata${suffix}\`.config LIMIT 1`);
+        const last = Number(cfg[0]?.v) || 0;
+        if (last > 0) {
+          // 500 เลขย้อนหลังครอบคลุมเกิน 120 วันของทุกสาขา (สาขาที่สั่งถี่สุดใช้ ~210 เลข)
+          const nos = [];
+          for (let n = last + 10; n > Math.max(0, last - 500); n--) nos.push(n);
+          inClause = 'Ord_No IN (?) AND ';
+          inParams = [nos];
+        }
+      } catch (e) { /* อ่าน config ไม่ได้ → ใช้คิวรีเต็มตาราง */ }
+    }
+
     const [rows] = await getPool().query(
       `SELECT Ord_No AS no,
               DATE_FORMAT(Ord_OrdDate, '%Y-%m-%d') AS orderDate,
@@ -59,11 +87,11 @@ export default async function handler(req, res) {
               SUM(Ord_Qty) AS totalQty,
               SUM(COALESCE(Ord_Rcv, 0)) AS receivedQty
          FROM orderd
-        WHERE Ord_StrID = ?
+        WHERE ${inClause}Ord_StrID = ?
           AND Ord_OrdDate >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
         GROUP BY Ord_No, Ord_OrdDate, Ord_DelDate
         ORDER BY Ord_OrdDate DESC, Ord_No DESC`,
-      [Number(outletId), back]
+      [...inParams, Number(outletId), back]
     );
 
     const all = rows.map(r => ({
