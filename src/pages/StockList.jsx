@@ -93,15 +93,17 @@ const thaiMonths = [
 ];
 
 // ── คาดการณ์จำนวนหัวลูกค้ารายวัน จากข้อมูลเดือนที่แล้ว ──
-// แบ่งวัน 2 ประเภท: วันธรรมดา (จ-พฤ) / วันหยุด (ศ-ส-อา)
+// แบ่งวัน 3 ประเภท: วันธรรมดา (จ-พฤ) / วันศุกร์ (แยกเดี่ยว) / วันหยุดสุดสัปดาห์ (ส-อา)
 // แบ่งช่วงเดือน 3 ช่วง: ต้นเดือน 1-10 / กลางเดือน 11-23 / ปลายเดือน 24-สิ้นเดือน
 const dayBand = (dayOfMonth) => (dayOfMonth <= 10 ? 'early' : dayOfMonth <= 23 ? 'mid' : 'late');
-const dayType = (dow) => (dow >= 1 && dow <= 4 ? 'weekday' : 'holiday'); // 0=อา,5=ศ,6=ส
+const DAY_TYPES = ['weekday', 'friday', 'weekend'];
+const dayType = (dow) => (dow >= 1 && dow <= 4 ? 'weekday' : dow === 5 ? 'friday' : 'weekend'); // 0=อา,5=ศ,6=ส
 
-// สรุปยอดหัวลูกค้ารายวัน (coversByDate: {ymd: number}) เป็นค่าเฉลี่ย 6 กลุ่ม (2 ประเภทวัน × 3 ช่วงเดือน)
+// สรุปยอดหัวลูกค้ารายวัน (coversByDate: {ymd: number}) เป็นค่าเฉลี่ย 9 กลุ่ม (3 ประเภทวัน × 3 ช่วงเดือน)
 function buildCoverBuckets(coversByDate) {
-  const sums = { weekday: { early: 0, mid: 0, late: 0 }, holiday: { early: 0, mid: 0, late: 0 } };
-  const counts = { weekday: { early: 0, mid: 0, late: 0 }, holiday: { early: 0, mid: 0, late: 0 } };
+  const emptyBands = () => ({ early: 0, mid: 0, late: 0 });
+  const sums = { weekday: emptyBands(), friday: emptyBands(), weekend: emptyBands() };
+  const counts = { weekday: emptyBands(), friday: emptyBands(), weekend: emptyBands() };
   Object.entries(coversByDate).forEach(([ymd, covers]) => {
     const d = new Date(ymd + 'T00:00:00');
     if (isNaN(d)) return;
@@ -110,8 +112,8 @@ function buildCoverBuckets(coversByDate) {
     sums[type][band] += Number(covers) || 0;
     counts[type][band] += 1;
   });
-  const avg = { weekday: {}, holiday: {} };
-  ['weekday', 'holiday'].forEach(type => {
+  const avg = { weekday: {}, friday: {}, weekend: {} };
+  DAY_TYPES.forEach(type => {
     ['early', 'mid', 'late'].forEach(band => {
       avg[type][band] = counts[type][band] > 0 ? sums[type][band] / counts[type][band] : 0;
     });
@@ -1123,7 +1125,8 @@ export default function StockList() {
                         <>
                           <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้าจากเดือนที่แล้ว ({coverBucketsLabel}):</span>{' '}
                           วันธรรมดา(จ-พฤ) ต้นเดือน {Math.round(coverBuckets.weekday.early)} · กลางเดือน {Math.round(coverBuckets.weekday.mid)} · ปลายเดือน {Math.round(coverBuckets.weekday.late)} คน
-                          {' | '}วันหยุด(ศ-ส-อา) ต้นเดือน {Math.round(coverBuckets.holiday.early)} · กลางเดือน {Math.round(coverBuckets.holiday.mid)} · ปลายเดือน {Math.round(coverBuckets.holiday.late)} คน
+                          {' | '}วันศุกร์ ต้นเดือน {Math.round(coverBuckets.friday.early)} · กลางเดือน {Math.round(coverBuckets.friday.mid)} · ปลายเดือน {Math.round(coverBuckets.friday.late)} คน
+                          {' | '}เสาร์-อาทิตย์ ต้นเดือน {Math.round(coverBuckets.weekend.early)} · กลางเดือน {Math.round(coverBuckets.weekend.mid)} · ปลายเดือน {Math.round(coverBuckets.weekend.late)} คน
                         </>
                       ) : (
                         <span>ยังไม่มีข้อมูลค่าเฉลี่ยจากเดือนที่แล้ว</span>
