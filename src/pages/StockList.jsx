@@ -577,21 +577,7 @@ export default function StockList() {
         if (uRes.status === 'success') unitMap = uRes.units || {};
       } catch (e) { /* ไม่มีหน่วยเบิก → ปัดเป็นจำนวนเต็มปกติ */ }
 
-      // 2) จำนวนหัวลูกค้าคาดการณ์รายวัน: ใช้ค่าที่บันทึกไว้ในปฏิทินก่อน ถ้าวันไหนไม่มีใช้ค่าเฉลี่ยจากเดือนที่แล้ว (6 กลุ่ม)
-      const [pctRes, bucketInfo] = await Promise.all([
-        fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json()),
-        fetchCoverBuckets(effectiveBranch),
-      ]);
-      const savedCoversMap = {};
-      if (pctRes.status === 'success') {
-        (pctRes.data || []).forEach(item => { savedCoversMap[item.date] = Number(item.percent) || 0; });
-      }
-      const coversForDate = (d) => {
-        const ymdStr = toYMD(d);
-        return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
-      };
-
-      // 3) หารายการที่พร้อมคำนวณ (ต้องมีทั้งค่าเฉลี่ยต่อหัว + วันนับล่าสุด)
+      // 2) หารายการที่พร้อมคำนวณ (ต้องมีทั้งค่าเฉลี่ยต่อหัว + วันนับล่าสุด)
       const jobs = [];
       items.forEach((item, idx) => {
         const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
@@ -603,11 +589,48 @@ export default function StockList() {
       });
       if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดคงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
 
+      // 3) จำนวนหัวลูกค้ารายวันในช่วงคำนวณ เรียงลำดับความสำคัญ:
+      //    ก) วันที่ผ่านไปแล้วจริง (ก่อนวันนี้) → ใช้ยอดขายจริงจากแดชบอร์ด (แม่นกว่าค่าประมาณเสมอ)
+      //    ข) วันนี้/อนาคต ที่มีค่าบันทึกไว้เองในปฏิทิน → ใช้ค่านั้น
+      //    ค) วันนี้/อนาคต ที่ไม่มีค่าบันทึก → ใช้ค่าเฉลี่ยจากเดือนที่แล้ว (9 กลุ่ม)
+      const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
+      const todayYmd = toYMD(todayDate);
+      const targetForecast = new Date(useDate + 'T00:00:00');
+
+      let realRangeStart = null;
+      jobs.forEach(j => {
+        const sf = new Date(j.lastD); sf.setDate(sf.getDate() + 1);
+        if (!realRangeStart || sf < realRangeStart) realRangeStart = sf;
+      });
+      const yesterday = new Date(todayDate); yesterday.setDate(yesterday.getDate() - 1);
+      const realRangeEnd = targetForecast < yesterday ? targetForecast : yesterday;
+
+      const [pctRes, bucketInfo, realRes] = await Promise.all([
+        fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json()),
+        fetchCoverBuckets(effectiveBranch),
+        (realRangeStart && realRangeStart <= realRangeEnd)
+          ? fetch(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(realRangeStart)}&endDate=${toYMD(realRangeEnd)}`).then(r => r.json())
+          : Promise.resolve(null),
+      ]);
+
+      const savedCoversMap = {};
+      if (pctRes.status === 'success') {
+        (pctRes.data || []).forEach(item => { savedCoversMap[item.date] = Number(item.percent) || 0; });
+      }
+      const realCoversMap = {};
+      if (realRes && realRes.status === 'success') {
+        (realRes.data?.daily || []).forEach(d => { realCoversMap[d.date] = Number(d.covers) || 0; });
+      }
+      const coversForDate = (d) => {
+        const ymdStr = toYMD(d);
+        if (realCoversMap[ymdStr] !== undefined) return realCoversMap[ymdStr];
+        return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
+      };
+
       // 4) คำนวณและเติมลงช่องขอเบิก
       const newItems = [...items];
       let filled = 0;
       let maxForecastCovers = 0;
-      const targetForecast = new Date(useDate + 'T00:00:00');
       for (const j of jobs) {
         // ช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
         const startForecast = new Date(j.lastD);
