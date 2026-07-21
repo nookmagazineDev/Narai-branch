@@ -132,6 +132,15 @@ function coverBucketFor(date, buckets) {
 const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
 const fmtBucketLine = (b) => `ต้นเดือน ${Math.round(b.early)} · กลางเดือน ${Math.round(b.mid)} · ปลายเดือน ${Math.round(b.late)} คน`;
 
+// สินค้ากลุ่มพรีเมียม — เสิร์ฟเฉพาะลูกค้าราคา 359 เท่านั้น (ลูกค้า 259 ไม่มีสิทธิ์)
+// ใช้จำนวนหัวลูกค้า 359 ล้วนๆ ในการคำนวณยอดเบิก แทนยอดรวมทุกราคา — เฉพาะสาขาที่มี 2 ราคาเท่านั้น
+const PREMIUM_359_ONLY_CODES = new Set([
+  '2000038', '11010068', '2000062', '11000441', '11000442', '11000499', '1000198',
+  '11000622', '11000623', '11000629', '11000145', '11000425', '11050007', '11050101',
+  '3000016', '5000102', '5000103', '11000261', '11000701', '11020050', '11020051',
+  '11050030', '11050069',
+]);
+
 export default function StockList() {
   const { user } = useAuth();
   const isAll = user?.branch?.toLowerCase() === 'all';
@@ -602,7 +611,7 @@ export default function StockList() {
         if (avg <= 0) return;
         const lastD = parseDMY(item.lastStockDate);
         if (!lastD) return;
-        jobs.push({ idx, avg, lastD });
+        jobs.push({ idx, avg, lastD, isPremium359Only: PREMIUM_359_ONLY_CODES.has(nid) });
       });
       if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดคงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
 
@@ -635,13 +644,24 @@ export default function StockList() {
         (pctRes.data || []).forEach(item => { savedCoversMap[item.date] = Number(item.percent) || 0; });
       }
       const realCoversMap = {};
+      const realCovers359Map = {};
       if (realRes && realRes.status === 'success') {
-        (realRes.data?.daily || []).forEach(d => { realCoversMap[d.date] = Number(d.covers) || 0; });
+        (realRes.data?.daily || []).forEach(d => {
+          realCoversMap[d.date] = Number(d.covers) || 0;
+          realCovers359Map[d.date] = Number(d.buffet359) || 0;
+        });
       }
       const coversForDate = (d) => {
         const ymdStr = toYMD(d);
         if (realCoversMap[ymdStr] !== undefined) return realCoversMap[ymdStr];
         return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
+      };
+      // สำหรับสินค้าพรีเมียม (PREMIUM_359_ONLY_CODES) ในสาขาที่มี 2 ราคา — ใช้หัวลูกค้า 359 ล้วนๆ แทนยอดรวม
+      // (ไม่มีค่าที่บันทึกเองแยกราคาในปฏิทิน จึงใช้ยอดขายจริง(ถ้ามี) หรือค่าเฉลี่ย 359 จากเดือนที่แล้วเท่านั้น)
+      const covers359ForDate = (d) => {
+        const ymdStr = toYMD(d);
+        if (realCovers359Map[ymdStr] !== undefined) return realCovers359Map[ymdStr];
+        return coverBucketFor(d, bucketInfo.buckets359);
       };
 
       // 4) คำนวณและเติมลงช่องขอเบิก
@@ -653,10 +673,14 @@ export default function StockList() {
         const startForecast = new Date(j.lastD);
         startForecast.setDate(startForecast.getDate() + 1);
 
+        // สินค้าพรีเมียม 359 อย่างเดียว + สาขามี 2 ราคาจริง → ใช้หัวลูกค้า 359 ล้วนๆ แทนยอดรวมทุกราคา
+        const usePremiumOnly = j.isPremium359Only && bucketInfo.hasTwoTier;
+        const getDayCovers = usePremiumOnly ? covers359ForDate : coversForDate;
+
         let totalForecastCovers = 0;
         const tempD = new Date(startForecast);
         while (tempD <= targetForecast) {
-          totalForecastCovers += coversForDate(tempD);
+          totalForecastCovers += getDayCovers(tempD);
           tempD.setDate(tempD.getDate() + 1);
         }
         if (totalForecastCovers <= 0) continue;
