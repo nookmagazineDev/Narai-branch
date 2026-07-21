@@ -92,6 +92,43 @@ const thaiMonths = [
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
 ];
 
+// ── คาดการณ์จำนวนหัวลูกค้ารายวัน จากข้อมูลเดือนที่แล้ว ──
+// แบ่งวัน 2 ประเภท: วันธรรมดา (จ-พฤ) / วันหยุด (ศ-ส-อา)
+// แบ่งช่วงเดือน 3 ช่วง: ต้นเดือน 1-10 / กลางเดือน 11-23 / ปลายเดือน 24-สิ้นเดือน
+const dayBand = (dayOfMonth) => (dayOfMonth <= 10 ? 'early' : dayOfMonth <= 23 ? 'mid' : 'late');
+const dayType = (dow) => (dow >= 1 && dow <= 4 ? 'weekday' : 'holiday'); // 0=อา,5=ศ,6=ส
+
+// สรุปยอดหัวลูกค้ารายวัน (coversByDate: {ymd: number}) เป็นค่าเฉลี่ย 6 กลุ่ม (2 ประเภทวัน × 3 ช่วงเดือน)
+function buildCoverBuckets(coversByDate) {
+  const sums = { weekday: { early: 0, mid: 0, late: 0 }, holiday: { early: 0, mid: 0, late: 0 } };
+  const counts = { weekday: { early: 0, mid: 0, late: 0 }, holiday: { early: 0, mid: 0, late: 0 } };
+  Object.entries(coversByDate).forEach(([ymd, covers]) => {
+    const d = new Date(ymd + 'T00:00:00');
+    if (isNaN(d)) return;
+    const type = dayType(d.getDay());
+    const band = dayBand(d.getDate());
+    sums[type][band] += Number(covers) || 0;
+    counts[type][band] += 1;
+  });
+  const avg = { weekday: {}, holiday: {} };
+  ['weekday', 'holiday'].forEach(type => {
+    ['early', 'mid', 'late'].forEach(band => {
+      avg[type][band] = counts[type][band] > 0 ? sums[type][band] / counts[type][band] : 0;
+    });
+  });
+  return avg;
+}
+
+// ค่าคาดการณ์จำนวนหัวลูกค้าของวันที่กำหนด จากกลุ่มค่าเฉลี่ยที่คำนวณไว้ (ปัดเป็นจำนวนเต็ม)
+function coverBucketFor(date, buckets) {
+  if (!buckets) return 0;
+  const type = dayType(date.getDay());
+  const band = dayBand(date.getDate());
+  return Math.round(buckets[type]?.[band] || 0);
+}
+
+const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
+
 export default function StockList() {
   const { user } = useAuth();
   const isAll = user?.branch?.toLowerCase() === 'all';
@@ -117,7 +154,10 @@ export default function StockList() {
   const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
   const [pctInputMap, setPctInputMap] = useState({});
   const [isSavingAllPcts, setIsSavingAllPcts] = useState(false);
-  
+  const [coverBuckets, setCoverBuckets] = useState(null);
+  const [coverBucketsLabel, setCoverBucketsLabel] = useState('');
+  const [isLoadingBuckets, setIsLoadingBuckets] = useState(false);
+
   const [apiStartDate, setApiStartDate] = useState('');
   const [apiEndDate, setApiEndDate] = useState('');
   const [isFetchingApi, setIsFetchingApi] = useState(false);
@@ -172,11 +212,39 @@ export default function StockList() {
     }
   };
 
+  // ดึงจำนวนหัวลูกค้ารายวันของ "เดือนที่แล้ว" (เดือนปฏิทินก่อนหน้าวันนี้) มาสรุปเป็นค่าเฉลี่ย 6 กลุ่ม
+  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก"
+  const fetchCoverBuckets = async (branch) => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0);
+    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const label = `${thaiMonths[start.getMonth()]} ${start.getFullYear() + 543}`;
+    try {
+      const res = await fetch(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(start)}&endDate=${ymd(end)}`).then(r => r.json());
+      const coversByDate = {};
+      if (res.status === 'success') {
+        (res.data?.daily || []).forEach(d => { coversByDate[d.date] = Number(d.covers) || 0; });
+      }
+      return { buckets: buildCoverBuckets(coversByDate), label };
+    } catch (e) {
+      return { buckets: buildCoverBuckets({}), label };
+    }
+  };
+
   useEffect(() => {
     if (effectiveBranch) {
       loadSpecialPcts(effectiveBranch);
+      setIsLoadingBuckets(true);
+      fetchCoverBuckets(effectiveBranch).then(({ buckets, label }) => {
+        setCoverBuckets(buckets);
+        setCoverBucketsLabel(label);
+        setIsLoadingBuckets(false);
+      });
     } else {
       setSpecialPcts([]);
+      setCoverBuckets(null);
+      setCoverBucketsLabel('');
     }
   }, [effectiveBranch]);
 
@@ -507,70 +575,52 @@ export default function StockList() {
         if (uRes.status === 'success') unitMap = uRes.units || {};
       } catch (e) { /* ไม่มีหน่วยเบิก → ปัดเป็นจำนวนเต็มปกติ */ }
 
-      // 2) ดึงเปอร์เซ็นต์พิเศษรายวัน
-      const pctRes = await fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json());
-      const pctList = pctRes.status === 'success' ? (pctRes.data || []) : [];
-      const pctMap = {};
-      pctList.forEach(item => {
-        pctMap[item.date] = 1 + (Number(item.percent) / 100);
-      });
+      // 2) จำนวนหัวลูกค้าคาดการณ์รายวัน: ใช้ค่าที่บันทึกไว้ในปฏิทินก่อน ถ้าวันไหนไม่มีใช้ค่าเฉลี่ยจากเดือนที่แล้ว (6 กลุ่ม)
+      const [pctRes, bucketInfo] = await Promise.all([
+        fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json()),
+        fetchCoverBuckets(effectiveBranch),
+      ]);
+      const savedCoversMap = {};
+      if (pctRes.status === 'success') {
+        (pctRes.data || []).forEach(item => { savedCoversMap[item.date] = Number(item.percent) || 0; });
+      }
+      const coversForDate = (d) => {
+        const ymdStr = toYMD(d);
+        return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
+      };
 
-      // 3) หา ช่วงวัน (นับก่อนหน้า → นับล่าสุด) ต่อรายการ + ช่วงรวมสำหรับดึงจำนวนหัวลูกค้า
-      let minPrev = null, maxLast = null;
+      // 3) หารายการที่พร้อมคำนวณ (ต้องมีทั้งค่าเฉลี่ยต่อหัว + วันนับล่าสุด)
       const jobs = [];
       items.forEach((item, idx) => {
         const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
         const avg = Number(avgMap[nid]) || 0;
         if (avg <= 0) return;
-        const prevD = parseDMY(item.previousBalanceDate);
         const lastD = parseDMY(item.lastStockDate);
-        if (!prevD || !lastD) return;
-        const gapDays = Math.round((lastD - prevD) / 86400000);
-        if (gapDays < 1) return;
-        jobs.push({ idx, avg, prevD, lastD, gapDays });
-        if (!minPrev || prevD < minPrev) minPrev = prevD;
-        if (!maxLast || lastD > maxLast) maxLast = lastD;
+        if (!lastD) return;
+        jobs.push({ idx, avg, lastD });
       });
-      if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดนับก่อนหน้า + คงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
+      if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดคงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
 
-      // จำกัดช่วงย้อนหลังไม่เกิน 92 วัน (กันดึงข้อมูลหนักเกิน)
-      const minAllowed = new Date(); minAllowed.setDate(minAllowed.getDate() - 92);
-      if (minPrev < minAllowed) minPrev = minAllowed;
-
-      // 4) จำนวนหัวลูกค้ารายวันของสาขา (covers จากแดชบอร์ด)
-      const dashRes = await fetch(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(minPrev)}&endDate=${toYMD(maxLast)}`).then(r => r.json());
-      if (dashRes.status !== 'success') throw new Error(dashRes.message || 'ดึงจำนวนหัวลูกค้าไม่สำเร็จ');
-      const coversByDate = {};
-      (dashRes.data?.daily || []).forEach(d => { coversByDate[d.date] = Number(d.covers) || 0; });
-
-      // 5) คำนวณและเติมลงช่องขอเบิก
+      // 4) คำนวณและเติมลงช่องขอเบิก
       const newItems = [...items];
       let filled = 0;
-      let totalCalculatedCovers = 0;
+      let maxForecastCovers = 0;
+      const targetForecast = new Date(useDate + 'T00:00:00');
       for (const j of jobs) {
-        let coversGap = 0;
-        const d = new Date(j.prevD); d.setDate(d.getDate() + 1); // นับวันถัดจากวันนับก่อนหน้า ถึงวันนับล่าสุด
-        while (d <= j.lastD) { coversGap += coversByDate[toYMD(d)] || 0; d.setDate(d.getDate() + 1); }
-        if (coversGap <= 0) continue;
-
-        // คำนวณระยะวันช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
+        // ช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
         const startForecast = new Date(j.lastD);
         startForecast.setDate(startForecast.getDate() + 1);
-        const targetForecast = new Date(useDate + 'T00:00:00');
-        
-        let totalMult = 0;
+
+        let totalForecastCovers = 0;
         const tempD = new Date(startForecast);
         while (tempD <= targetForecast) {
-          const ymdStr = toYMD(tempD);
-          const dayMult = pctMap[ymdStr] !== undefined ? pctMap[ymdStr] : 1.0;
-          totalMult += dayMult;
+          totalForecastCovers += coversForDate(tempD);
           tempD.setDate(tempD.getDate() + 1);
         }
+        if (totalForecastCovers <= 0) continue;
 
-        if (totalMult <= 0) continue;
-
-        // สูตรยอดใช้คาดการณ์รวม: (avg per head * เฉลี่ยจำนวนลูกค้าต่อวันในช่วงก่อนหน้า) * ตัวคูณสะสมรวม
-        const predictedUsage = j.avg * (coversGap / j.gapDays) * totalMult;
+        // สูตรยอดใช้คาดการณ์รวม: ค่าเฉลี่ยต่อหัว × ผลรวมจำนวนหัวลูกค้าที่คาดการณ์แต่ละวัน
+        const predictedUsage = j.avg * totalForecastCovers;
 
         // หักลบด้วยยอดคงเหลือปัจจุบัน: ช่อง "กรอกคงเหลือ" (remaining) ถ้าไม่มีใช้ "คงเหลือล่าสุด" (lastStock)
         const currentItem = newItems[j.idx];
@@ -591,13 +641,17 @@ export default function StockList() {
         newItems[j.idx] = {
           ...newItems[j.idx],
           requested: String(suggested),
-          calcCovers: coversGap
+          calcCovers: totalForecastCovers
         };
         filled++;
-        totalCalculatedCovers = Math.max(totalCalculatedCovers, coversGap);
+        maxForecastCovers = Math.max(maxForecastCovers, totalForecastCovers);
       }
       setItems(newItems);
-      toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ (จำนวนลูกค้าสูงสุดในช่วงสะสม: ${totalCalculatedCovers} คน)`, { duration: 6000 });
+      if (filled === 0) {
+        toast.error('ไม่พบจำนวนหัวลูกค้าคาดการณ์สำหรับช่วงวันที่เลือก กรุณาตรวจสอบข้อมูลยอดขายเดือนที่แล้ว หรือตั้งค่าจำนวนหัวลูกค้ารายวันเอง');
+      } else {
+        toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ (จำนวนหัวลูกค้าคาดการณ์สะสมสูงสุด: ${maxForecastCovers} คน)`, { duration: 6000 });
+      }
     } catch (e) {
       toast.error(e.message || 'คำนวณยอดเบิกไม่สำเร็จ');
     } finally {
@@ -1037,18 +1091,18 @@ export default function StockList() {
                     type="button"
                     onClick={() => setShowPctPanel(!showPctPanel)}
                     className="px-3 py-1.5 border border-amber-300 text-amber-800 text-xs rounded-lg hover:bg-amber-100/50 flex items-center gap-1.5 transition-colors whitespace-nowrap">
-                    ⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน ({specialPcts.length})
+                    ⚙️ ตั้งค่าจำนวนหัวลูกค้าคาดการณ์รายวัน ({specialPcts.length})
                   </button>
                 </div>
-                
+
                 <div className="text-[11px] text-gray-500 leading-relaxed">
-                  สูตร: (ยอดใช้เฉลี่ยรายวัน × วันห่างนับล่าสุดถึงวันใช้ของ × %ตัวคูณตามชีท) - สต๊อกคงเหลือล่าสุด
+                  สูตร: (ค่าเฉลี่ยยอดใช้ต่อหัว × ผลรวมจำนวนหัวลูกค้าคาดการณ์แต่ละวัน ตั้งแต่วันนับล่าสุดถึงวันใช้ของ) - สต๊อกคงเหลือล่าสุด
                 </div>
-                
+
                 {showPctPanel && (
                   <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4 shadow-sm">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">⚙️ ตั้งค่าเปอร์เซ็นต์เพิ่มพิเศษรายวัน (สาขา {effectiveBranch})</h4>
+                      <h4 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">⚙️ ตั้งค่าจำนวนหัวลูกค้าคาดการณ์รายวัน (สาขา {effectiveBranch})</h4>
                       <div className="flex items-center gap-2">
                         <button type="button" onClick={handlePrevMonth} className="p-1 hover:bg-amber-50 text-amber-700 rounded transition-colors">
                           <ChevronLeft className="w-4 h-4" />
@@ -1060,6 +1114,20 @@ export default function StockList() {
                           <ChevronRight className="w-4 h-4" />
                         </button>
                       </div>
+                    </div>
+
+                    <div className="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 leading-relaxed">
+                      {isLoadingBuckets ? (
+                        <span className="flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> กำลังคำนวณค่าเฉลี่ยจากเดือนที่แล้ว...</span>
+                      ) : coverBuckets ? (
+                        <>
+                          <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้าจากเดือนที่แล้ว ({coverBucketsLabel}):</span>{' '}
+                          วันธรรมดา(จ-พฤ) ต้นเดือน {Math.round(coverBuckets.weekday.early)} · กลางเดือน {Math.round(coverBuckets.weekday.mid)} · ปลายเดือน {Math.round(coverBuckets.weekday.late)} คน
+                          {' | '}วันหยุด(ศ-ส-อา) ต้นเดือน {Math.round(coverBuckets.holiday.early)} · กลางเดือน {Math.round(coverBuckets.holiday.mid)} · ปลายเดือน {Math.round(coverBuckets.holiday.late)} คน
+                        </>
+                      ) : (
+                        <span>ยังไม่มีข้อมูลค่าเฉลี่ยจากเดือนที่แล้ว</span>
+                      )}
                     </div>
 
                     {isLoadingPct ? (
@@ -1085,7 +1153,8 @@ export default function StockList() {
                             const ymdStr = dateToYMD(dayObj.date);
                             const isToday = dateToYMD(new Date()) === ymdStr;
                             const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
-                            
+                            const suggestedVal = coverBucketFor(dayObj.date, coverBuckets);
+
                             const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
                             const currentValNum = val === '' ? 0 : Number(val);
                             const originalValNum = originalVal === undefined ? 0 : Number(originalVal);
@@ -1124,11 +1193,11 @@ export default function StockList() {
                                     ? 'border-amber-300 focus-within:ring-amber-500 focus-within:border-amber-500' 
                                     : 'border-gray-200 focus-within:ring-purple-500 focus-within:border-purple-500'
                                 }`}>
-                                  <span className="text-[9px] text-gray-400 font-semibold">%</span>
                                   <input
                                     type="number"
                                     min="0"
-                                    placeholder="0"
+                                    step="1"
+                                    placeholder={String(suggestedVal)}
                                     value={val}
                                     onChange={(e) => handleTempPctChange(ymdStr, e.target.value)}
                                     onKeyDown={(e) => {
@@ -1137,8 +1206,10 @@ export default function StockList() {
                                       }
                                     }}
                                     disabled={isSavingAllPcts}
-                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    title={val === '' ? `ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)` : undefined}
+                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                   />
+                                  <span className="text-[9px] text-gray-400 font-semibold shrink-0">คน</span>
                                 </div>
                               </div>
                             );
@@ -1147,7 +1218,7 @@ export default function StockList() {
                         
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100">
                           <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-                            <span>💡 กรอกตัวเลขเปอร์เซ็นต์ที่ต้องการลงในตาราง (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกข้อมูลด้านขวาเพื่อบันทึกการเปลี่ยนแปลงทั้งหมด</span>
+                            <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ (ใช้ในการคำนวณยอดเบิกได้เลยแม้ไม่บันทึก) พิมพ์ทับเพื่อปรับเฉพาะวัน (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกด้านขวาเพื่อบันทึกค่าที่ปรับทั้งหมด</span>
                           </div>
                           <button
                             type="button"
@@ -1156,7 +1227,7 @@ export default function StockList() {
                             className="w-full sm:w-auto px-5 py-2.5 bg-amber-500 text-white text-xs font-semibold rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm shadow-amber-200 shrink-0 cursor-pointer"
                           >
                             {isSavingAllPcts ? <Loader2 className="w-3 h-3 animate-spin" /> : '💾'}
-                            <span>{isSavingAllPcts ? 'กำลังบันทึก...' : 'บันทึกเปอร์เซ็นต์พิเศษ'}</span>
+                            <span>{isSavingAllPcts ? 'กำลังบันทึก...' : 'บันทึกจำนวนหัวลูกค้าที่ปรับ'}</span>
                           </button>
                         </div>
                       </div>
