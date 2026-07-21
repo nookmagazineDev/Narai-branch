@@ -783,7 +783,16 @@ export default function DashboardHome() {
           icon={TrendingUp} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
         />
         <StatCard
-          title="จำนวนลูกค้าทั้งหมด" value={intf(d.covers)} sub="คน (Covers)"
+          title="จำนวนลูกค้าทั้งหมด" value={intf(d.covers)}
+          sub={(() => {
+            // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359 พร้อมกัน) แยกให้เห็นตรงนี้เลย ไม่ต้องคลิกเข้าไปดู
+            const bd = d.coversBreakdown || [];
+            const q259 = bd.find(g => g.key === 'buffet259')?.qty || 0;
+            const q359 = bd.find(g => g.key === 'buffet359')?.qty || 0;
+            return (q259 > 0 && q359 > 0)
+              ? `259: ${intf(q259)} • 359: ${intf(q359)} คน`
+              : 'คน (Covers)';
+          })()}
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
           onClick={data && (d.coversBreakdown || []).length ? () => setShowCovers(true) : undefined}
         />
