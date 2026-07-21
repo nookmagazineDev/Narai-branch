@@ -829,6 +829,7 @@ export default function StockList() {
   const [manualPickDate, setManualPickDate] = useState('');
   const [isManualOrdering, setIsManualOrdering] = useState(false);
   const [manualOrderResults, setManualOrderResults] = useState(null); // [{deldate, ok, no, count, message}]
+  const [manualConfirmStep, setManualConfirmStep] = useState(false); // true = อยู่หน้าพรีวิวยืนยันรอบสุดท้าย
 
   const manualSearchResults = manualSearchTerm.trim().length
     ? items.filter(i => {
@@ -903,6 +904,7 @@ export default function StockList() {
     }
     setManualOrderResults(results);
     setIsManualOrdering(false);
+    setManualConfirmStep(false); // ส่งแล้ว กลับไปหน้าตะกร้าปกติ (ไม่ค้างอยู่หน้ายืนยันรอบสุดท้าย)
 
     const okResults = results.filter(r => r.ok);
     const failedDates = new Set(results.filter(r => !r.ok).map(r => r.deldate));
@@ -1120,7 +1122,7 @@ export default function StockList() {
               <span className="text-sm">สั่งของ</span>
             </button>
             <button
-              onClick={() => { setManualOrderResults(null); setShowManualOrderModal(true); }}
+              onClick={() => { setManualOrderResults(null); setManualConfirmStep(false); setShowManualOrderModal(true); }}
               disabled={!effectiveBranch}
               className="flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-teal-200"
             >
@@ -2196,7 +2198,20 @@ export default function StockList() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              {/* ── ฟอร์มเพิ่มรายการ ── */}
+              {manualConfirmStep && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl px-4 py-3 flex items-start gap-2">
+                  <span className="text-lg">🔎</span>
+                  <div>
+                    <p className="text-sm font-bold text-amber-800">ตรวจสอบรายการก่อนส่งจริง</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      รวม {manualCart.length} รายการ • {dateKeys.length} ใบเบิก (แยกตามวันที่รับ) — กด "ย้อนกลับแก้ไข" ถ้าต้องการปรับ หรือ "ยืนยันส่งจริง" เพื่อบันทึกเข้าระบบ
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* ── ฟอร์มเพิ่มรายการ (ซ่อนตอนอยู่หน้าตรวจสอบรอบสุดท้าย) ── */}
+              {!manualConfirmStep && (
               <div className="bg-teal-50/50 border border-teal-100 rounded-xl p-3 space-y-2.5">
                 <div className="relative">
                   <label className="block text-xs font-medium text-gray-600 mb-1">ค้นหาสินค้า (รหัสหรือชื่อ)</label>
@@ -2266,6 +2281,7 @@ export default function StockList() {
                   <Plus className="w-4 h-4" /> เพิ่มรายการลงตะกร้า
                 </button>
               </div>
+              )}
 
               {/* ── ตะกร้ารายการ แบ่งกลุ่มตามวันที่รับ ── */}
               <div>
@@ -2299,9 +2315,11 @@ export default function StockList() {
                                   <td className="px-3 py-1.5 font-medium text-gray-800">{r.itemName}</td>
                                   <td className="px-3 py-1.5 text-center text-gray-500">{r.unit || '-'}</td>
                                   <td className="px-3 py-1.5 text-right font-mono font-semibold text-teal-700">{r.qty.toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
-                                  <td className="px-2 py-1.5 text-right">
-                                    <button onClick={() => removeManualCartRow(r.key)} disabled={isManualOrdering} className="text-gray-300 hover:text-rose-600 disabled:opacity-30"><Trash2 className="w-3.5 h-3.5" /></button>
-                                  </td>
+                                  {!manualConfirmStep && (
+                                    <td className="px-2 py-1.5 text-right">
+                                      <button onClick={() => removeManualCartRow(r.key)} disabled={isManualOrdering} className="text-gray-300 hover:text-rose-600 disabled:opacity-30"><Trash2 className="w-3.5 h-3.5" /></button>
+                                    </td>
+                                  )}
                                 </tr>
                               ))}
                             </tbody>
@@ -2321,13 +2339,27 @@ export default function StockList() {
             </div>
 
             <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 shrink-0">
-              <button onClick={() => setShowManualOrderModal(false)} disabled={isManualOrdering}
-                className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
-              <button onClick={submitManualOrder} disabled={isManualOrdering || manualCart.length === 0}
-                className="px-5 py-2 rounded-xl text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 flex items-center gap-2">
-                {isManualOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
-                {isManualOrdering ? 'กำลังส่ง…' : `ยืนยันสั่งของ (${dateKeys.length} ใบ)`}
-              </button>
+              {manualConfirmStep ? (
+                <>
+                  <button onClick={() => setManualConfirmStep(false)} disabled={isManualOrdering}
+                    className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">← ย้อนกลับแก้ไข</button>
+                  <button onClick={submitManualOrder} disabled={isManualOrdering || manualCart.length === 0}
+                    className="px-5 py-2 rounded-xl text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2">
+                    {isManualOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    {isManualOrdering ? 'กำลังส่ง…' : `ยืนยันส่งจริง (${dateKeys.length} ใบ)`}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => setShowManualOrderModal(false)} disabled={isManualOrdering}
+                    className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
+                  <button onClick={() => setManualConfirmStep(true)} disabled={isManualOrdering || manualCart.length === 0}
+                    className="px-5 py-2 rounded-xl text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 flex items-center gap-2">
+                    <ClipboardList className="w-4 h-4" />
+                    {`ตรวจสอบก่อนส่ง (${dateKeys.length} ใบ)`}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
