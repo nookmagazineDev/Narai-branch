@@ -1165,6 +1165,11 @@ export default function StockList() {
                   สูตร: (ค่าเฉลี่ยยอดใช้ต่อหัว × ผลรวมจำนวนหัวลูกค้าคาดการณ์แต่ละวัน ตั้งแต่วันนับล่าสุดถึงวันใช้ของ) - สต๊อกคงเหลือล่าสุด
                 </div>
 
+                <div className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
+                  <span>⚠️</span>
+                  <span>ถ้านับสต๊อกตอนเช้า ให้เลือก "วันที่ใช้ของ" เพิ่มอีก 1 วัน จากวันที่ต้องการใช้ของจริง</span>
+                </div>
+
                 {showPctPanel && (
                   <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4 shadow-sm">
                     <div className="flex items-center justify-between">
