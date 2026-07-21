@@ -819,6 +819,110 @@ export default function StockList() {
     }
   };
 
+  // ── ปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" — เลือกสินค้า/จำนวน/วันรับเองอิสระจากตารางนับสต๊อก ──
+  //    เพิ่มได้หลายรายการ, สินค้าเดิมซ้ำได้ถ้าคนละวันที่รับ, ส่งจริงจะแยกเป็นใบเบิกตามวันที่รับ (1 วัน = 1 ใบ)
+  const [showManualOrderModal, setShowManualOrderModal] = useState(false);
+  const [manualCart, setManualCart] = useState([]); // [{key, itemCode, itemId, itemName, unit, price, qty, delDate}]
+  const [manualSearchTerm, setManualSearchTerm] = useState('');
+  const [manualPickedItem, setManualPickedItem] = useState(null);
+  const [manualPickQty, setManualPickQty] = useState('');
+  const [manualPickDate, setManualPickDate] = useState('');
+  const [isManualOrdering, setIsManualOrdering] = useState(false);
+  const [manualOrderResults, setManualOrderResults] = useState(null); // [{deldate, ok, no, count, message}]
+
+  const manualSearchResults = manualSearchTerm.trim().length
+    ? items.filter(i => {
+        const t = manualSearchTerm.trim().toLowerCase();
+        return String(i.productId).toLowerCase().includes(t) || String(i.name).toLowerCase().includes(t);
+      }).slice(0, 8)
+    : [];
+
+  const addManualCartRow = () => {
+    if (!manualPickedItem) { toast.error('กรุณาเลือกสินค้า'); return; }
+    const qty = Number(manualPickQty);
+    if (!qty || qty <= 0) { toast.error('กรุณาระบุจำนวนให้ถูกต้อง'); return; }
+    if (!manualPickDate) { toast.error('กรุณาเลือกวันที่รับ'); return; }
+    setManualCart(prev => ([
+      ...prev,
+      {
+        key: `${manualPickedItem.productId}-${manualPickDate}-${prev.length}-${prev.filter(r => r.itemCode === manualPickedItem.productId && r.delDate === manualPickDate).length}`,
+        itemCode: manualPickedItem.productId,
+        itemId: manualPickedItem.itemId,
+        itemName: manualPickedItem.name,
+        unit: manualPickedItem.unit,
+        price: Number(manualPickedItem.price) || 0,
+        qty,
+        delDate: manualPickDate,
+      },
+    ]));
+    setManualPickedItem(null);
+    setManualSearchTerm('');
+    setManualPickQty('');
+    // เก็บวันที่รับไว้ ช่วยให้ใส่หลายรายการติดกันสำหรับวันเดียวกันได้เร็วขึ้น
+  };
+
+  const removeManualCartRow = (key) => {
+    setManualCart(prev => prev.filter(r => r.key !== key));
+  };
+
+  const submitManualOrder = async () => {
+    if (manualCart.length === 0) { toast.error('ยังไม่มีรายการในตะกร้า'); return; }
+    const outletId = isAll
+      ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
+      : (user?.outletId || '');
+    if (!outletId) { toast.error('ไม่พบรหัสสาขา (outletId)'); return; }
+
+    // จัดกลุ่มตามวันที่รับ — วันที่รับต่างกัน = ใบเบิกคนละใบ (Ord_No แยกกัน)
+    const groups = {};
+    manualCart.forEach(r => { (groups[r.delDate] = groups[r.delDate] || []).push(r); });
+    const dates = Object.keys(groups).sort();
+
+    setIsManualOrdering(true);
+    setManualOrderResults(null);
+    const results = [];
+    for (const date of dates) {
+      const rows = groups[date];
+      try {
+        const res = await fetch('/api/insert_order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            outletId, branch: effectiveBranch, deldate: date,
+            items: rows.map(r => ({ itemId: r.itemId, itemCode: r.itemCode, itemName: r.itemName, qty: r.qty, unit: r.unit, price: r.price })),
+          }),
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          results.push({ deldate: date, ok: true, no: data.orderNo, count: data.count });
+        } else {
+          results.push({ deldate: date, ok: false, message: data.message, missing: data.missing });
+        }
+      } catch (err) {
+        results.push({ deldate: date, ok: false, message: err.message });
+      }
+    }
+    setManualOrderResults(results);
+    setIsManualOrdering(false);
+
+    const okResults = results.filter(r => r.ok);
+    const failedDates = new Set(results.filter(r => !r.ok).map(r => r.deldate));
+    // ลบเฉพาะรายการของวันที่สำเร็จออกจากตะกร้า เหลือเฉพาะวันที่ล้มเหลวไว้ให้แก้ไข/ลองใหม่
+    setManualCart(prev => prev.filter(r => failedDates.has(r.delDate)));
+
+    if (okResults.length === results.length) {
+      toast.success(`ส่งสำเร็จทั้งหมด ${okResults.length} ใบ (เลขที่ ${okResults.map(r => r.no).join(', ')})`, { duration: 8000 });
+    } else if (okResults.length > 0) {
+      toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางวันมีปัญหา ดูรายละเอียดด้านล่างแล้วลองใหม่`);
+    } else {
+      toast.error('ส่งสั่งของไม่สำเร็จเลยสักใบ');
+    }
+    try {
+      const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
+      const pj = await p.json();
+      if (pj.status === 'success') setPendingOrders(pj.data || []);
+    } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
+  };
+
   const fetchPendingOrders = async () => {
     const outletId = isAll
       ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
@@ -1014,6 +1118,14 @@ export default function StockList() {
             >
               <FileText className="w-4 h-4" />
               <span className="text-sm">สั่งของ</span>
+            </button>
+            <button
+              onClick={() => { setManualOrderResults(null); setShowManualOrderModal(true); }}
+              disabled={!effectiveBranch}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-teal-200"
+            >
+              <ClipboardList className="w-4 h-4" />
+              <span className="text-sm">สั่งสินค้าแพลน/สั่งเพิ่มเติม</span>
             </button>
             <button
               onClick={fetchPendingOrders}
@@ -2059,6 +2171,162 @@ export default function StockList() {
                 className="px-5 py-2 rounded-xl text-sm font-semibold bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2">
                 {isOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                 {isOrdering ? 'กำลังส่ง…' : `ยืนยันสั่งของ (${orderItems.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Modal สั่งสินค้าแพลน/สั่งเพิ่มเติม — เลือกสินค้า/จำนวน/วันรับเองทีละรายการ สะสมเป็นตะกร้า ส่งได้หลายวันในรอบเดียว */}
+      {showManualOrderModal && (() => {
+        const cartByDate = {};
+        manualCart.forEach(r => { (cartByDate[r.delDate] = cartByDate[r.delDate] || []).push(r); });
+        const dateKeys = Object.keys(cartByDate).sort();
+
+        return (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => !isManualOrdering && setShowManualOrderModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-teal-600 text-white flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2"><ClipboardList className="w-5 h-5" /> สั่งสินค้าแพลน/สั่งเพิ่มเติม</h3>
+                <p className="text-xs text-teal-100 mt-0.5">สาขา {effectiveBranch} • เลือกสินค้า/จำนวน/วันรับเองอิสระ ใส่ได้หลายรายการ</p>
+              </div>
+              <button onClick={() => !isManualOrdering && setShowManualOrderModal(false)} className="text-teal-100 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {/* ── ฟอร์มเพิ่มรายการ ── */}
+              <div className="bg-teal-50/50 border border-teal-100 rounded-xl p-3 space-y-2.5">
+                <div className="relative">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">ค้นหาสินค้า (รหัสหรือชื่อ)</label>
+                  {manualPickedItem ? (
+                    <div className="flex items-center justify-between px-3 py-2 bg-white border border-teal-300 rounded-lg">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-800 truncate">{manualPickedItem.name}</p>
+                        <p className="text-[11px] text-gray-400">{manualPickedItem.productId} • หน่วย {manualPickedItem.unit || '-'}</p>
+                      </div>
+                      <button onClick={() => { setManualPickedItem(null); setManualSearchTerm(''); }} className="text-gray-400 hover:text-rose-600 shrink-0 ml-2"><X className="w-4 h-4" /></button>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="text" value={manualSearchTerm}
+                        onChange={(e) => setManualSearchTerm(e.target.value)}
+                        placeholder="พิมพ์รหัสหรือชื่อสินค้า..."
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                      />
+                      {manualSearchResults.length > 0 && (
+                        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                          {manualSearchResults.map((it) => (
+                            <button
+                              key={it.productId}
+                              type="button"
+                              onClick={() => { setManualPickedItem(it); setManualSearchTerm(''); }}
+                              className="w-full text-left px-3 py-2 hover:bg-teal-50 border-b border-gray-50 last:border-b-0"
+                            >
+                              <p className="text-sm text-gray-800 truncate">{it.name}</p>
+                              <p className="text-[11px] text-gray-400">{it.productId} • หน่วย {it.unit || '-'}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {manualSearchTerm.trim().length > 0 && manualSearchResults.length === 0 && (
+                        <p className="text-[11px] text-gray-400 mt-1">ไม่พบสินค้าที่ตรงกับ "{manualSearchTerm}"</p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">จำนวน</label>
+                    <input
+                      type="number" min="0" step="any" value={manualPickQty}
+                      onChange={(e) => setManualPickQty(e.target.value)}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-teal-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">วันที่รับ</label>
+                    <input
+                      type="date" value={manualPickDate}
+                      onChange={(e) => setManualPickDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button" onClick={addManualCartRow}
+                  disabled={!manualPickedItem || !manualPickQty || !manualPickDate}
+                  className="w-full py-2 rounded-lg bg-teal-600 text-white text-sm font-semibold hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" /> เพิ่มรายการลงตะกร้า
+                </button>
+              </div>
+
+              {/* ── ตะกร้ารายการ แบ่งกลุ่มตามวันที่รับ ── */}
+              <div>
+                <p className="text-sm font-semibold text-gray-700 mb-2">
+                  รายการในตะกร้า ({manualCart.length}) {dateKeys.length > 1 && `• ${dateKeys.length} วันที่รับ → จะแยกเป็น ${dateKeys.length} ใบเบิก`}
+                </p>
+                {manualCart.length === 0 ? (
+                  <div className="py-8 text-center text-gray-400 text-sm bg-gray-50 border border-gray-100 rounded-xl">
+                    ยังไม่มีรายการ — ค้นหาสินค้าด้านบนแล้วกด "เพิ่มรายการลงตะกร้า"
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {dateKeys.map((date) => {
+                      const rows = cartByDate[date];
+                      const dateResult = manualOrderResults?.find(r => r.deldate === date);
+                      return (
+                        <div key={date} className="border border-gray-100 rounded-xl overflow-hidden">
+                          <div className="px-3 py-1.5 bg-teal-50 border-b border-teal-100 text-xs font-semibold text-teal-800 flex items-center justify-between">
+                            <span>รับวันที่ {date} • {rows.length} รายการ</span>
+                            {dateResult && (
+                              dateResult.ok
+                                ? <span className="text-emerald-600">✓ ส่งแล้ว เลขที่ {dateResult.no}</span>
+                                : <span className="text-rose-600">✕ ส่งไม่สำเร็จ</span>
+                            )}
+                          </div>
+                          <table className="w-full text-xs border-collapse">
+                            <tbody className="divide-y divide-gray-100 text-gray-700">
+                              {rows.map((r) => (
+                                <tr key={r.key} className="hover:bg-gray-50/50">
+                                  <td className="px-3 py-1.5 font-mono text-gray-400">{r.itemCode}</td>
+                                  <td className="px-3 py-1.5 font-medium text-gray-800">{r.itemName}</td>
+                                  <td className="px-3 py-1.5 text-center text-gray-500">{r.unit || '-'}</td>
+                                  <td className="px-3 py-1.5 text-right font-mono font-semibold text-teal-700">{r.qty.toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                                  <td className="px-2 py-1.5 text-right">
+                                    <button onClick={() => removeManualCartRow(r.key)} disabled={isManualOrdering} className="text-gray-300 hover:text-rose-600 disabled:opacity-30"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {dateResult && !dateResult.ok && (
+                            <div className="px-3 py-1.5 bg-rose-50 text-rose-700 text-[11px] border-t border-rose-100 whitespace-pre-line">
+                              {dateResult.message}
+                              {Array.isArray(dateResult.missing) && dateResult.missing.length > 0 && `\n${dateResult.missing.slice(0, 5).join('\n')}`}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2 shrink-0">
+              <button onClick={() => setShowManualOrderModal(false)} disabled={isManualOrdering}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50">ปิด</button>
+              <button onClick={submitManualOrder} disabled={isManualOrdering || manualCart.length === 0}
+                className="px-5 py-2 rounded-xl text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 flex items-center gap-2">
+                {isManualOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
+                {isManualOrdering ? 'กำลังส่ง…' : `ยืนยันสั่งของ (${dateKeys.length} ใบ)`}
               </button>
             </div>
           </div>
