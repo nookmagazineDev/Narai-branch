@@ -130,6 +130,7 @@ function coverBucketFor(date, buckets) {
 }
 
 const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
+const fmtBucketLine = (b) => `ต้นเดือน ${Math.round(b.early)} · กลางเดือน ${Math.round(b.mid)} · ปลายเดือน ${Math.round(b.late)} คน`;
 
 export default function StockList() {
   const { user } = useAuth();
@@ -214,8 +215,9 @@ export default function StockList() {
     }
   };
 
-  // ดึงจำนวนหัวลูกค้ารายวันของ "เดือนที่แล้ว" (เดือนปฏิทินก่อนหน้าวันนี้) มาสรุปเป็นค่าเฉลี่ย 6 กลุ่ม
-  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก"
+  // ดึงจำนวนหัวลูกค้ารายวันของ "เดือนที่แล้ว" (เดือนปฏิทินก่อนหน้าวันนี้) มาสรุปเป็นค่าเฉลี่ย 9 กลุ่ม
+  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก" (ยังใช้ยอดรวม ไม่แยกราคา)
+  // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) จะได้ buckets259/buckets359 มาแสดงแยกเพิ่มด้วย (informational)
   const fetchCoverBuckets = async (branch) => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -224,13 +226,28 @@ export default function StockList() {
     const label = `${thaiMonths[start.getMonth()]} ${start.getFullYear() + 543}`;
     try {
       const res = await fetch(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(start)}&endDate=${ymd(end)}`).then(r => r.json());
-      const coversByDate = {};
+      const coversByDate = {}, covers259ByDate = {}, covers359ByDate = {};
+      let total259 = 0, total359 = 0;
       if (res.status === 'success') {
-        (res.data?.daily || []).forEach(d => { coversByDate[d.date] = Number(d.covers) || 0; });
+        (res.data?.daily || []).forEach(d => {
+          coversByDate[d.date] = Number(d.covers) || 0;
+          const q259 = Number(d.buffet259) || 0;
+          const q359 = Number(d.buffet359) || 0;
+          covers259ByDate[d.date] = q259;
+          covers359ByDate[d.date] = q359;
+          total259 += q259;
+          total359 += q359;
+        });
       }
-      return { buckets: buildCoverBuckets(coversByDate), label };
+      return {
+        buckets: buildCoverBuckets(coversByDate),
+        buckets259: buildCoverBuckets(covers259ByDate),
+        buckets359: buildCoverBuckets(covers359ByDate),
+        hasTwoTier: total259 > 0 && total359 > 0,
+        label,
+      };
     } catch (e) {
-      return { buckets: buildCoverBuckets({}), label };
+      return { buckets: buildCoverBuckets({}), buckets259: buildCoverBuckets({}), buckets359: buildCoverBuckets({}), hasTwoTier: false, label };
     }
   };
 
@@ -238,9 +255,9 @@ export default function StockList() {
     if (effectiveBranch) {
       loadSpecialPcts(effectiveBranch);
       setIsLoadingBuckets(true);
-      fetchCoverBuckets(effectiveBranch).then(({ buckets, label }) => {
-        setCoverBuckets(buckets);
-        setCoverBucketsLabel(label);
+      fetchCoverBuckets(effectiveBranch).then((info) => {
+        setCoverBuckets(info);
+        setCoverBucketsLabel(info.label);
         setIsLoadingBuckets(false);
       });
     } else {
@@ -1141,15 +1158,33 @@ export default function StockList() {
                       </div>
                     </div>
 
-                    <div className="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 leading-relaxed">
+                    <div className="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 leading-relaxed space-y-1">
                       {isLoadingBuckets ? (
                         <span className="flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> กำลังคำนวณค่าเฉลี่ยจากเดือนที่แล้ว...</span>
                       ) : coverBuckets ? (
                         <>
-                          <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้าจากเดือนที่แล้ว ({coverBucketsLabel}):</span>{' '}
-                          วันธรรมดา(จ-พฤ) ต้นเดือน {Math.round(coverBuckets.weekday.early)} · กลางเดือน {Math.round(coverBuckets.weekday.mid)} · ปลายเดือน {Math.round(coverBuckets.weekday.late)} คน
-                          {' | '}วันศุกร์ ต้นเดือน {Math.round(coverBuckets.friday.early)} · กลางเดือน {Math.round(coverBuckets.friday.mid)} · ปลายเดือน {Math.round(coverBuckets.friday.late)} คน
-                          {' | '}เสาร์-อาทิตย์ ต้นเดือน {Math.round(coverBuckets.weekend.early)} · กลางเดือน {Math.round(coverBuckets.weekend.mid)} · ปลายเดือน {Math.round(coverBuckets.weekend.late)} คน
+                          <div>
+                            <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้ารวมจากเดือนที่แล้ว ({coverBucketsLabel}):</span>{' '}
+                            วันธรรมดา(จ-พฤ) {fmtBucketLine(coverBuckets.buckets.weekday)}
+                            {' | '}วันศุกร์ {fmtBucketLine(coverBuckets.buckets.friday)}
+                            {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets.weekend)}
+                          </div>
+                          {coverBuckets.hasTwoTier && (
+                            <>
+                              <div className="pt-1 border-t border-gray-200">
+                                <span className="font-semibold text-sky-700">แยกราคา 259:</span>{' '}
+                                วันธรรมดา {fmtBucketLine(coverBuckets.buckets259.weekday)}
+                                {' | '}ศุกร์ {fmtBucketLine(coverBuckets.buckets259.friday)}
+                                {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets259.weekend)}
+                              </div>
+                              <div>
+                                <span className="font-semibold text-rose-700">แยกราคา 359:</span>{' '}
+                                วันธรรมดา {fmtBucketLine(coverBuckets.buckets359.weekday)}
+                                {' | '}ศุกร์ {fmtBucketLine(coverBuckets.buckets359.friday)}
+                                {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets359.weekend)}
+                              </div>
+                            </>
+                          )}
                         </>
                       ) : (
                         <span>ยังไม่มีข้อมูลค่าเฉลี่ยจากเดือนที่แล้ว</span>
@@ -1179,7 +1214,11 @@ export default function StockList() {
                             const ymdStr = dateToYMD(dayObj.date);
                             const isToday = dateToYMD(new Date()) === ymdStr;
                             const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
-                            const suggestedVal = coverBucketFor(dayObj.date, coverBuckets);
+                            const suggestedVal = coverBucketFor(dayObj.date, coverBuckets?.buckets);
+                            // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) แสดงแยกให้เห็นใต้ตัวเลขรวม (แสดงผลอย่างเดียว
+                            // ไม่กระทบค่าที่ใช้จริง/บันทึก ซึ่งยังเป็นยอดรวมเหมือนเดิม)
+                            const suggested259 = coverBuckets?.hasTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets259) : null;
+                            const suggested359 = coverBuckets?.hasTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets359) : null;
 
                             const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
                             const currentValNum = val === '' ? 0 : Number(val);
@@ -1189,7 +1228,7 @@ export default function StockList() {
                             return (
                               <div
                                 key={dayObj.key}
-                                className={`p-1.5 border rounded-lg flex flex-col justify-between min-h-[64px] transition-colors ${
+                                className={`p-1.5 border rounded-lg flex flex-col justify-between ${coverBuckets?.hasTwoTier ? 'min-h-[76px]' : 'min-h-[64px]'} transition-colors ${
                                   dayObj.isCurrentMonth
                                     ? isModified
                                       ? 'border-amber-400 bg-amber-50/50 shadow-sm'
@@ -1237,6 +1276,13 @@ export default function StockList() {
                                   />
                                   <span className="text-[9px] text-gray-400 font-semibold shrink-0">คน</span>
                                 </div>
+                                {suggested259 !== null && (
+                                  <div className="mt-0.5 text-[8px] leading-tight text-center whitespace-nowrap">
+                                    <span className="text-sky-600 font-semibold">259:{suggested259}</span>
+                                    <span className="text-gray-300"> · </span>
+                                    <span className="text-rose-600 font-semibold">359:{suggested359}</span>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}

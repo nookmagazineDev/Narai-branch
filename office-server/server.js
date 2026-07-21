@@ -407,11 +407,15 @@ async function computeDashboard(outletNum, start, end) {
       memberBills += dayMembers;
 
       // รวมรายการ (detail) ของสาขานี้ + คิดต้นทุน/นับคนแยกรายวัน (สำหรับ drill-down รายวัน)
-      let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0;
+      // แยกจำนวนหัว Buffet259/Premium359 รายวันด้วย — ใช้กับสาขาที่มี 2 ราคา (หน้าคาดการณ์หัวลูกค้า)
+      let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0, dBuffet259 = 0, dBuffet359 = 0;
       const di = entry.dashItems.get(outletNum);
       if (di) for (const [ic, v] of Object.entries(di)) {
         const a = itemsAgg[ic] || (itemsAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
         if (dashCoverItem(ic)) dCovers += v.qty;
+        const icn = parseInt(ic);
+        if (DASH_COVER_GROUPS[0].codes.indexOf(icn) >= 0) dBuffet259 += v.qty;
+        else if (DASH_COVER_GROUPS[1].codes.indexOf(icn) >= 0) dBuffet359 += v.qty;
         const tc = (menuCost[ic] ?? 0) * v.qty;
         if (dashExclItem(ic)) { dExcl += tc; dExclQty += v.qty; }
         else if (dashPrepKg(ic)) { dPrep += tc; dPrepQty += v.qty; }
@@ -435,6 +439,8 @@ async function computeDashboard(outletNum, start, end) {
         bills: dayBills,
         memberBills: dayMembers,
         covers: r2(dCovers),
+        buffet259: r2(dBuffet259),
+        buffet359: r2(dBuffet359),
       });
     }
   }
