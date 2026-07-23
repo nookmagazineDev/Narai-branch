@@ -130,12 +130,22 @@ function coverBucketFor(date, buckets) {
 }
 
 const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
-// จัดเรียงรายการสั่งของตามหมวดสโตร์ (คอลัมน์ N ชีท item) — ช่วยให้คลังหยิบของเป็นโซนเดียวกันต่อเนื่องกัน
-// สินค้าที่ยังไม่มีหมวด (คอลัมน์ N ว่าง) จะไปอยู่ท้ายสุดของรายการ
+// เรียงรหัสสินค้า — ตัวเลขล้วนเรียงตามค่าตัวเลข (กันปัญหา "11090003" มาก่อน "1000005" ทั้งที่ 1000005 น้อยกว่า)
+// รหัสที่ไม่ใช่ตัวเลขล้วนเรียงแบบ string เทียบกัน
+const byProductCode = (a, b) => {
+  const ca = String(a.productId ?? '').trim();
+  const cb = String(b.productId ?? '').trim();
+  const na = Number(ca), nb = Number(cb);
+  if (ca !== '' && cb !== '' && !isNaN(na) && !isNaN(nb)) return na - nb;
+  return ca.localeCompare(cb);
+};
+
+// จัดเรียงรายการสั่งของตามหมวดสโตร์ (คอลัมน์ N ชีท item) แล้วเรียงตามรหัสสินค้าในหมวดเดียวกัน
+// ช่วยให้คลังหยิบของเป็นโซนเดียวกันต่อเนื่องกัน — สินค้าที่ยังไม่มีหมวด (คอลัมน์ N ว่าง) จะไปอยู่ท้ายสุดของรายการ
 const byStoreCat = (a, b) => {
   const ca = String(a.storeCat || '').trim();
   const cb = String(b.storeCat || '').trim();
-  if (ca === cb) return String(a.name || '').localeCompare(String(b.name || ''), 'th');
+  if (ca === cb) return byProductCode(a, b);
   if (!ca) return 1;
   if (!cb) return -1;
   return ca.localeCompare(cb, 'th');
