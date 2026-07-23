@@ -699,6 +699,49 @@ export default function StockList() {
     }
   };
 
+  // ใบเบิกที่ยังไม่ได้รับของ (pendingOrders) มีแค่สรุปยอด ไม่มีรายการสินค้าติดมาด้วย
+  // ต้องดึงรายละเอียดจาก /api/pending_orders?no=... ก่อน แล้วแปลงเป็นรูปแบบเดียวกับ doc ของ withdrawalDocs
+  const buildDocFromPendingOrder = async (order) => {
+    const outletId = isAll
+      ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
+      : (user?.outletId || '');
+    if (!outletId) throw new Error('ไม่พบรหัสสาขา (outletId)');
+    const res = await fetch(`/api/pending_orders?no=${encodeURIComponent(order.no)}&outletId=${encodeURIComponent(outletId)}`);
+    const data = await res.json();
+    if (data.status !== 'success') throw new Error(data.message || 'ดึงรายละเอียดใบเบิกไม่สำเร็จ');
+    const items = (data.items || []).map(it => ({
+      itemCode: it.itemCode, itemName: it.itemName, qty: Number(it.qty) || 0,
+      unit: it.unit, unitPrice: Number(it.unitPrice) || 0,
+      amount: Math.round((Number(it.qty) || 0) * (Number(it.unitPrice) || 0) * 100) / 100,
+    }));
+    return {
+      invNo: order.no, docNo: order.no, docDate: order.orderDate,
+      items,
+      totalQty: items.reduce((s, i) => s + i.qty, 0),
+      totalAmt: items.reduce((s, i) => s + i.amount, 0),
+    };
+  };
+
+  const exportPendingOrderToPDF = async (order) => {
+    try {
+      const doc = await buildDocFromPendingOrder(order);
+      await exportDocToPDF(doc);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'สร้าง PDF ไม่สำเร็จ');
+    }
+  };
+
+  const exportPendingOrderToExcel = async (order) => {
+    try {
+      const doc = await buildDocFromPendingOrder(order);
+      exportDocToExcel(doc);
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || 'สร้าง Excel ไม่สำเร็จ');
+    }
+  };
+
   const exportDocToExcel = (doc) => {
     try {
       const rows = [
@@ -2162,6 +2205,7 @@ export default function StockList() {
                       <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่รับ</th>
                       <th className="px-4 py-2 text-right text-amber-800 font-semibold">รายการ</th>
                       <th className="px-4 py-2 text-center text-amber-800 font-semibold">สถานะ</th>
+                      <th className="px-4 py-2 text-center text-amber-800 font-semibold">Export</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -2180,6 +2224,24 @@ export default function StockList() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => exportPendingOrderToPDF(order)}
+                                title="ดาวน์โหลด PDF"
+                                className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                              >
+                                <FileDown className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => exportPendingOrderToExcel(order)}
+                                title="ดาวน์โหลด Excel"
+                                className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                              >
+                                <FileSpreadsheet className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
