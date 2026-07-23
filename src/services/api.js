@@ -1,4 +1,4 @@
-export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz3scE1W_YVAOd1vhhnx0HlShQn_2wh6ryIY1hJR_HdKe0xHP8-rin_aEqEZ0JJcqVJ/exec";
+export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
 export const apiCall = async (action, payload) => {
   if (SCRIPT_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL" || SCRIPT_URL === "") {
