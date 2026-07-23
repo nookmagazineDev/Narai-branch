@@ -130,6 +130,16 @@ function coverBucketFor(date, buckets) {
 }
 
 const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
+// จัดเรียงรายการสั่งของตามหมวดสโตร์ (คอลัมน์ N ชีท item) — ช่วยให้คลังหยิบของเป็นโซนเดียวกันต่อเนื่องกัน
+// สินค้าที่ยังไม่มีหมวด (คอลัมน์ N ว่าง) จะไปอยู่ท้ายสุดของรายการ
+const byStoreCat = (a, b) => {
+  const ca = String(a.storeCat || '').trim();
+  const cb = String(b.storeCat || '').trim();
+  if (ca === cb) return String(a.name || '').localeCompare(String(b.name || ''), 'th');
+  if (!ca) return 1;
+  if (!cb) return -1;
+  return ca.localeCompare(cb, 'th');
+};
 const fmtBucketLine = (b) => `ต้นเดือน ${Math.round(b.early)} · กลางเดือน ${Math.round(b.mid)} · ปลายเดือน ${Math.round(b.late)} คน`;
 
 // สินค้ากลุ่มพรีเมียม — เสิร์ฟเฉพาะลูกค้าราคา 359 เท่านั้น (ลูกค้า 259 ไม่มีสิทธิ์)
@@ -768,6 +778,7 @@ export default function StockList() {
 
     const orderItems = items
       .filter(i => Number(i.requested) > 0)
+      .sort(byStoreCat) // จัดกลุ่มตามหมวดสโตร์ก่อนส่ง — ลำดับนี้จะถูกบันทึกเป็น Ord_Seq ในใบเบิกด้วย
       .map(i => ({
         itemId: i.itemId,
         itemCode: i.productId,
@@ -2087,8 +2098,9 @@ export default function StockList() {
 
       {/* Modal สั่งของ — พรีวิวรายการที่จะเบิก + เลือกวันรับ แล้วยิง insert_order */}
       {showOrderModal && (() => {
-        const orderItems = items.filter(i => Number(i.requested) > 0);
+        const orderItems = items.filter(i => Number(i.requested) > 0).sort(byStoreCat);
         const totalQty = orderItems.reduce((s, i) => s + (Number(i.requested) || 0), 0);
+        let prevCat = null; // ใช้คั่นหัวข้อกลุ่มตอนเรนเดอร์ตาราง (เปลี่ยนหมวดเมื่อไรค่อยขึ้นหัวใหม่)
         return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => !isOrdering && setShowOrderModal(false)}>
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -2120,14 +2132,28 @@ export default function StockList() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 text-gray-700">
-                        {orderItems.map((it) => (
-                          <tr key={it.productId} className="hover:bg-sky-50/40">
+                        {orderItems.map((it) => {
+                          const cat = String(it.storeCat || '').trim();
+                          const showGroupHeader = cat !== prevCat;
+                          prevCat = cat;
+                          return (
+                          <React.Fragment key={it.productId}>
+                            {showGroupHeader && (
+                              <tr className="bg-sky-50/70">
+                                <td colSpan={4} className="px-3 py-1 text-[10px] font-bold text-sky-700 uppercase tracking-wide">
+                                  {cat || 'ยังไม่ระบุหมวด'}
+                                </td>
+                              </tr>
+                            )}
+                            <tr className="hover:bg-sky-50/40">
                             <td className="px-3 py-1.5 font-mono text-gray-400">{it.productId}</td>
                             <td className="px-3 py-1.5 font-medium text-gray-800">{it.name}</td>
                             <td className="px-3 py-1.5 text-center text-gray-500">{it.unit || '-'}</td>
                             <td className="px-3 py-1.5 text-right font-mono font-semibold text-sky-700">{Number(it.requested).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
-                          </tr>
-                        ))}
+                            </tr>
+                          </React.Fragment>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr className="bg-gray-50 font-bold text-gray-800">
