@@ -619,8 +619,40 @@ export default function StockList() {
   };
 
   // ── Export ใบสั่งของ (ใบเบิก) เป็น PDF / Excel ──
-  //    PDF: render เป็น HTML แล้วแคปเจอร์ด้วย html2canvas ก่อนฝังลง jsPDF กันปัญหาฟอนต์ไทย
+  //    จัดกลุ่มรายการตามหมวดสโตร์ (คอลัมน์ N ชีท item) ก่อน export เสมอ — ช่วยให้ตรวจของตามโซนคลังง่ายขึ้น
+  //    doc.items ที่ส่งเข้ามาไม่มี storeCat ติดมา (มาจาก withdrawals/pending_orders API) ต้อง lookup จาก items state เอง
+  const normCode = (v) => String(v ?? '').trim().replace(/^0+/, '').toLowerCase();
+
+  const groupDocItemsByStoreCat = (docItems) => {
+    const catMap = {};
+    items.forEach(i => {
+      const norm = normCode(i.productId);
+      if (norm) catMap[norm] = i.storeCat || '';
+    });
+    const withCat = docItems.map(it => ({ ...it, storeCat: catMap[normCode(it.itemCode)] || '' }));
+    withCat.sort((a, b) => {
+      if (a.storeCat === b.storeCat) {
+        const na = Number(a.itemCode), nb = Number(b.itemCode);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a.itemCode).localeCompare(String(b.itemCode));
+      }
+      if (!a.storeCat) return 1;
+      if (!b.storeCat) return -1;
+      return a.storeCat.localeCompare(b.storeCat, 'th');
+    });
+    const groups = [];
+    withCat.forEach(it => {
+      const cat = it.storeCat || 'ไม่ระบุหมวด';
+      let g = groups[groups.length - 1];
+      if (!g || g.cat !== cat) { g = { cat, items: [] }; groups.push(g); }
+      g.items.push(it);
+    });
+    return groups;
+  };
+
+  // PDF: render เป็น HTML แล้วแคปเจอร์ด้วย html2canvas ก่อนฝังลง jsPDF กันปัญหาฟอนต์ไทย
   const buildInvoiceExportEl = (doc) => {
+    const groups = groupDocItemsByStoreCat(doc.items);
     const el = document.createElement('div');
     el.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#fff;padding:24px;font-family:"Segoe UI",sans-serif;color:#111;';
     el.innerHTML = `
@@ -644,15 +676,19 @@ export default function StockList() {
           </tr>
         </thead>
         <tbody>
-          ${doc.items.map(it => `
+          ${groups.map(g => `
             <tr>
-              <td style="border:1px solid #ddd;padding:4px;">${it.itemCode}</td>
-              <td style="border:1px solid #ddd;padding:4px;">${it.itemName}</td>
-              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${it.qty}</td>
-              <td style="border:1px solid #ddd;padding:4px;">${it.unit}</td>
-              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.unitPrice).toLocaleString('th-TH')}</td>
-              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
-            </tr>`).join('')}
+              <td colspan="6" style="border:1px solid #ddd;padding:4px 6px;background:#eef2ff;font-weight:bold;color:#3730a3;">หมวด: ${g.cat}</td>
+            </tr>
+            ${g.items.map(it => `
+              <tr>
+                <td style="border:1px solid #ddd;padding:4px;">${it.itemCode}</td>
+                <td style="border:1px solid #ddd;padding:4px;">${it.itemName}</td>
+                <td style="border:1px solid #ddd;padding:4px;text-align:right;">${it.qty}</td>
+                <td style="border:1px solid #ddd;padding:4px;">${it.unit}</td>
+                <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.unitPrice).toLocaleString('th-TH')}</td>
+                <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+              </tr>`).join('')}`).join('')}
         </tbody>
         <tfoot>
           <tr>
@@ -744,13 +780,17 @@ export default function StockList() {
 
   const exportDocToExcel = (doc) => {
     try {
+      const groups = groupDocItemsByStoreCat(doc.items);
       const rows = [
         ['ใบสั่งของ / ใบเบิก'],
         [`สาขา ${branchLabel}`],
         [`เลขที่ใบเบิก: ${doc.invNo || doc.docNo}`, '', `วันที่: ${doc.docDate}`],
         [],
         ['รหัส', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่า'],
-        ...doc.items.map(it => [it.itemCode, it.itemName, Number(it.qty), it.unit, Number(it.unitPrice), Number(it.amount)]),
+        ...groups.flatMap(g => [
+          [`หมวด: ${g.cat}`],
+          ...g.items.map(it => [it.itemCode, it.itemName, Number(it.qty), it.unit, Number(it.unitPrice), Number(it.amount)]),
+        ]),
         [],
         ['', 'รวม', Number(doc.totalQty), '', '', Number(doc.totalAmt)],
       ];
