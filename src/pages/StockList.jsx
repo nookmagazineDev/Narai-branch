@@ -474,16 +474,18 @@ export default function StockList() {
         ? (branches.find(b => b.name === branch)?.outletId || '')
         : (user?.outletId || '');
 
-      const [itemsRes, empRes, incomingRes] = await Promise.all([
+      const [itemsRes, empRes, incomingRes, avgRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
         apiCall('getScheduleEmployees', { branch }),
         outletId
           ? fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`).then(r => r.json()).catch(() => null)
           : Promise.resolve(null),
+        fetch(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`).then(r => r.json()).catch(() => null),
       ]);
 
       if (itemsRes.status === 'success') {
         const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
+        const avgMap = (avgRes?.status === 'success') ? avgRes.data : {};
         // ยอดยกมาเดือนที่แล้ว คำนวณจาก stockHistory ที่ได้มาแล้ว (ไม่ยิง API เพิ่ม)
         setItems(itemsRes.data.map(item => {
           const pm = prevMonthFromHistory(item.stockHistory);
@@ -494,6 +496,7 @@ export default function StockList() {
             incomingQty: incoming ? incoming.qty : undefined,
             incomingDate: incoming ? incoming.deldate : '',
             incomingOrderNo: incoming ? incoming.orderNo : '',
+            avgPerHead: avgMap[nid.toLowerCase()] !== undefined ? Number(avgMap[nid.toLowerCase()]) : undefined,
           };
         }));
       } else {
@@ -1548,6 +1551,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-28 bg-fuchsia-50/60" title="จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว">ค่าเฉลี่ย/หัว</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-teal-600 uppercase w-32 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดนับก่อนหน้า</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
@@ -1562,7 +1566,7 @@ export default function StockList() {
                   <tbody className="bg-white divide-y divide-gray-100">
                     {sortedAndFilteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={12} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={13} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -1587,6 +1591,13 @@ export default function StockList() {
                             </div>
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
+
+                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว ใช้ตอนคำนวณยอดเบิกอัตโนมัติ */}
+                          <td className="px-4 py-3 text-center bg-fuchsia-50/30">
+                            <span className="text-sm font-semibold text-fuchsia-700">
+                              {item.avgPerHead !== undefined ? item.avgPerHead.toLocaleString('th-TH', { maximumFractionDigits: 4 }) : '-'}
+                            </span>
+                          </td>
 
                           {/* ยอดยกมาเดือนที่แล้ว (นับสิ้นเดือนก่อน จาก stockcount.previous) */}
                           <td className="px-4 py-3 text-center bg-teal-50/30">
