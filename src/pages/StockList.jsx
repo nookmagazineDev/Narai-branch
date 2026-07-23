@@ -140,6 +140,31 @@ const byStoreCat = (a, b) => {
   if (!cb) return -1;
   return ca.localeCompare(cb, 'th');
 };
+
+// หมวดที่ต้องแยกเป็นใบเบิกต่างหากเสมอ (คนละ Ord_No จากใบหลัก) แม้วันที่รับจะเป็นวันเดียวกัน
+// เพิ่มชื่อหมวดในนี้ได้เรื่อยๆ ถ้ามีคลัง/ทีมที่ต้องแยกใบเพิ่ม
+const SPLIT_ORDER_CATEGORIES = ['ห้องผัก'];
+
+// แบ่งรายการที่จะสั่งออกเป็นกลุ่มใบเบิก — 1 กลุ่ม = 1 ใบ (1 Ord_No)
+// รายการหมวดใน SPLIT_ORDER_CATEGORIES แยกออกไปเป็นใบของตัวเอง ที่เหลือรวมเป็น "ใบเบิกทั่วไป" 1 ใบ
+function partitionOrderGroups(sortedItems) {
+  const main = [];
+  const special = {};
+  sortedItems.forEach(it => {
+    const cat = String(it.storeCat || '').trim();
+    if (SPLIT_ORDER_CATEGORIES.includes(cat)) {
+      (special[cat] = special[cat] || []).push(it);
+    } else {
+      main.push(it);
+    }
+  });
+  const groups = [];
+  if (main.length) groups.push({ label: 'ใบเบิกทั่วไป', cat: null, items: main });
+  SPLIT_ORDER_CATEGORIES.forEach(cat => {
+    if (special[cat]?.length) groups.push({ label: `ใบเบิก ${cat}`, cat, items: special[cat] });
+  });
+  return groups;
+}
 const fmtBucketLine = (b) => `ต้นเดือน ${Math.round(b.early)} · กลางเดือน ${Math.round(b.mid)} · ปลายเดือน ${Math.round(b.late)} คน`;
 
 // สินค้ากลุ่มพรีเมียม — เสิร์ฟเฉพาะลูกค้าราคา 359 เท่านั้น (ลูกค้า 259 ไม่มีสิทธิ์)
@@ -767,7 +792,7 @@ export default function StockList() {
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderDelDate, setOrderDelDate] = useState('');
   const [isOrdering, setIsOrdering] = useState(false);
-  const [orderResult, setOrderResult] = useState(null); // { no, message }
+  const [orderResult, setOrderResult] = useState(null); // [{ ok, label, no, count, deldate, message }] — 1 รายการต่อใบเบิกที่ส่ง
 
   const submitOrder = async () => {
     if (!orderDelDate) { toast.error('กรุณาเลือกวันที่รับสินค้า'); return; }
@@ -776,10 +801,18 @@ export default function StockList() {
       : (user?.outletId || '');
     if (!outletId) { toast.error('ไม่พบรหัสสาขา (outletId)'); return; }
 
-    const orderItems = items
-      .filter(i => Number(i.requested) > 0)
-      .sort(byStoreCat) // จัดกลุ่มตามหมวดสโตร์ก่อนส่ง — ลำดับนี้จะถูกบันทึกเป็น Ord_Seq ในใบเบิกด้วย
-      .map(i => ({
+    // จัดกลุ่มตามหมวดสโตร์ก่อนส่ง — ลำดับนี้จะถูกบันทึกเป็น Ord_Seq ในใบเบิกด้วย
+    const eligible = items.filter(i => Number(i.requested) > 0).sort(byStoreCat);
+    if (eligible.length === 0) { toast.error('ไม่มีรายการที่ขอเบิก'); return; }
+
+    // หมวดใน SPLIT_ORDER_CATEGORIES (เช่น "ห้องผัก") แยกเป็นใบเบิกของตัวเอง ที่เหลือรวมเป็นใบเบิกทั่วไป
+    const groups = partitionOrderGroups(eligible);
+
+    setIsOrdering(true);
+    setOrderResult(null);
+    const results = [];
+    for (const g of groups) {
+      const payloadItems = g.items.map(i => ({
         itemId: i.itemId,
         itemCode: i.productId,
         itemName: i.name,
@@ -787,47 +820,45 @@ export default function StockList() {
         unit: i.unit,
         price: Number(i.price) || 0,
       }));
-    if (orderItems.length === 0) { toast.error('ไม่มีรายการที่ขอเบิก'); return; }
-
-    setIsOrdering(true);
-    setOrderResult(null);
-    try {
-      const res = await fetch('/api/insert_order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          outletId,
-          branch: effectiveBranch,
-          deldate: orderDelDate,
-          items: orderItems,
-        }),
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setOrderResult({
-          ok: true, no: data.orderNo, count: data.count, deldate: data.deldate,
-          message: `ส่งใบเบิกสำเร็จ • เลขที่ ${data.orderNo} (${data.count} รายการ)`,
+      try {
+        const res = await fetch('/api/insert_order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ outletId, branch: effectiveBranch, deldate: orderDelDate, items: payloadItems }),
         });
-        toast.success(`📦 ส่งใบเบิกสำเร็จ! เลขที่ ${data.orderNo} • ${data.count} รายการ`, { duration: 8000 });
-        // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
-        try {
-          const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-          const pj = await p.json();
-          if (pj.status === 'success') setPendingOrders(pj.data || []);
-        } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
-      } else {
-        const detail = Array.isArray(data.missing) && data.missing.length
-          ? `${data.message}\n${data.missing.slice(0, 5).join('\n')}`
-          : (data.message || 'ส่งไม่สำเร็จ');
-        setOrderResult({ ok: false, message: detail });
-        toast.error(`ส่งสั่งของไม่สำเร็จ: ${data.message || 'เกิดข้อผิดพลาด'}`);
+        const data = await res.json();
+        if (data.status === 'success') {
+          results.push({ ok: true, label: g.label, no: data.orderNo, count: data.count, deldate: data.deldate });
+        } else {
+          const detail = Array.isArray(data.missing) && data.missing.length
+            ? `${data.message}\n${data.missing.slice(0, 5).join('\n')}`
+            : (data.message || 'ส่งไม่สำเร็จ');
+          results.push({ ok: false, label: g.label, message: detail });
+        }
+      } catch (err) {
+        results.push({ ok: false, label: g.label, message: err.message });
       }
-    } catch (err) {
-      setOrderResult({ ok: false, message: err.message });
-      toast.error('ส่งสั่งของไม่สำเร็จ: ' + err.message);
-    } finally {
-      setIsOrdering(false);
     }
+    setOrderResult(results);
+    setIsOrdering(false);
+
+    const okResults = results.filter(r => r.ok);
+    if (okResults.length === results.length) {
+      toast.success(
+        results.length > 1
+          ? `📦 ส่งใบเบิกสำเร็จ ${results.length} ใบ (เลขที่ ${okResults.map(r => r.no).join(', ')})`
+          : `📦 ส่งใบเบิกสำเร็จ! เลขที่ ${okResults[0].no} • ${okResults[0].count} รายการ`,
+        { duration: 8000 }
+      );
+    } else {
+      toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางใบมีปัญหา ดูรายละเอียดด้านล่าง`);
+    }
+    // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
+    try {
+      const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
+      const pj = await p.json();
+      if (pj.status === 'success') setPendingOrders(pj.data || []);
+    } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
   };
 
   // ── ปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" — เลือกสินค้า/จำนวน/วันรับเองอิสระจากตารางนับสต๊อก ──
@@ -2096,74 +2127,94 @@ export default function StockList() {
         </div>
       )}
 
-      {/* Modal สั่งของ — พรีวิวรายการที่จะเบิก + เลือกวันรับ แล้วยิง insert_order */}
+      {/* Modal สั่งของ — พรีวิวรายการที่จะเบิก + เลือกวันรับ แล้วยิง insert_order (แยกใบตามหมวดใน SPLIT_ORDER_CATEGORIES) */}
       {showOrderModal && (() => {
         const orderItems = items.filter(i => Number(i.requested) > 0).sort(byStoreCat);
         const totalQty = orderItems.reduce((s, i) => s + (Number(i.requested) || 0), 0);
-        let prevCat = null; // ใช้คั่นหัวข้อกลุ่มตอนเรนเดอร์ตาราง (เปลี่ยนหมวดเมื่อไรค่อยขึ้นหัวใหม่)
+        const orderGroups = partitionOrderGroups(orderItems);
         return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => !isOrdering && setShowOrderModal(false)}>
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 bg-sky-600 text-white flex items-center justify-between shrink-0">
               <div>
                 <h3 className="text-base font-bold flex items-center gap-2"><FileText className="w-5 h-5" /> สั่งของ (ส่งใบเบิก)</h3>
-                <p className="text-xs text-sky-100 mt-0.5">สาขา {effectiveBranch} • {orderItems.length} รายการ</p>
+                <p className="text-xs text-sky-100 mt-0.5">
+                  สาขา {effectiveBranch} • {orderItems.length} รายการ
+                  {orderGroups.length > 1 && ` • แยกเป็น ${orderGroups.length} ใบ`}
+                </p>
               </div>
               <button onClick={() => !isOrdering && setShowOrderModal(false)} className="text-sky-100 hover:text-white text-xl leading-none">&times;</button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              {/* พรีวิวรายการที่ขอเบิก */}
-              <div>
-                <p className="text-sm font-semibold text-gray-700 mb-2">รายการที่จะเบิก ({orderItems.length})</p>
+              {/* พรีวิวรายการที่ขอเบิก — แยกเป็นการ์ดตามใบเบิก (ปกติมีใบเดียว ยกเว้นมีหมวดที่ต้องแยกใบ) */}
+              <div className="space-y-3">
                 {orderItems.length === 0 ? (
                   <div className="py-8 text-center text-amber-600 text-sm bg-amber-50 border border-amber-200 rounded-xl">
                     ยังไม่มีรายการที่กรอก "ขอเบิก" — กรุณากรอกจำนวนในช่องขอเบิกก่อน
                   </div>
-                ) : (
-                  <div className="border border-gray-100 rounded-xl overflow-hidden max-h-[40vh] overflow-y-auto">
-                    <table className="w-full text-xs border-collapse">
-                      <thead className="sticky top-0">
-                        <tr className="text-gray-600 bg-gray-50">
-                          <th className="px-3 py-2 text-left">รหัส</th>
-                          <th className="px-3 py-2 text-left">ชื่อสินค้า</th>
-                          <th className="px-3 py-2 text-center">หน่วย</th>
-                          <th className="px-3 py-2 text-right">ขอเบิก</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100 text-gray-700">
-                        {orderItems.map((it) => {
-                          const cat = String(it.storeCat || '').trim();
-                          const showGroupHeader = cat !== prevCat;
-                          prevCat = cat;
-                          return (
-                          <React.Fragment key={it.productId}>
-                            {showGroupHeader && (
-                              <tr className="bg-sky-50/70">
-                                <td colSpan={4} className="px-3 py-1 text-[10px] font-bold text-sky-700 uppercase tracking-wide">
-                                  {cat || 'ยังไม่ระบุหมวด'}
-                                </td>
+                ) : orderGroups.map((g, gi) => {
+                  const gQty = g.items.reduce((s, i) => s + (Number(i.requested) || 0), 0);
+                  let prevCat = null;
+                  const gResult = orderResult?.[gi];
+                  return (
+                    <div key={g.label} className="border border-gray-100 rounded-xl overflow-hidden">
+                      <div className="px-3 py-1.5 bg-sky-50 border-b border-sky-100 text-xs font-semibold text-sky-800 flex items-center justify-between">
+                        <span>{g.label} • {g.items.length} รายการ</span>
+                        {gResult && (
+                          gResult.ok
+                            ? <span className="text-emerald-600">✓ ส่งแล้ว เลขที่ {gResult.no}</span>
+                            : <span className="text-rose-600">✕ ส่งไม่สำเร็จ</span>
+                        )}
+                      </div>
+                      <table className="w-full text-xs border-collapse max-h-[30vh]">
+                        <thead className="sticky top-0">
+                          <tr className="text-gray-600 bg-gray-50">
+                            <th className="px-3 py-2 text-left">รหัส</th>
+                            <th className="px-3 py-2 text-left">ชื่อสินค้า</th>
+                            <th className="px-3 py-2 text-center">หน่วย</th>
+                            <th className="px-3 py-2 text-right">ขอเบิก</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 text-gray-700">
+                          {g.items.map((it) => {
+                            const cat = String(it.storeCat || '').trim();
+                            const showGroupHeader = g.cat === null && cat !== prevCat;
+                            prevCat = cat;
+                            return (
+                            <React.Fragment key={it.productId}>
+                              {showGroupHeader && (
+                                <tr className="bg-sky-50/50">
+                                  <td colSpan={4} className="px-3 py-1 text-[10px] font-bold text-sky-700 uppercase tracking-wide">
+                                    {cat || 'ยังไม่ระบุหมวด'}
+                                  </td>
+                                </tr>
+                              )}
+                              <tr className="hover:bg-sky-50/40">
+                              <td className="px-3 py-1.5 font-mono text-gray-400">{it.productId}</td>
+                              <td className="px-3 py-1.5 font-medium text-gray-800">{it.name}</td>
+                              <td className="px-3 py-1.5 text-center text-gray-500">{it.unit || '-'}</td>
+                              <td className="px-3 py-1.5 text-right font-mono font-semibold text-sky-700">{Number(it.requested).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
                               </tr>
-                            )}
-                            <tr className="hover:bg-sky-50/40">
-                            <td className="px-3 py-1.5 font-mono text-gray-400">{it.productId}</td>
-                            <td className="px-3 py-1.5 font-medium text-gray-800">{it.name}</td>
-                            <td className="px-3 py-1.5 text-center text-gray-500">{it.unit || '-'}</td>
-                            <td className="px-3 py-1.5 text-right font-mono font-semibold text-sky-700">{Number(it.requested).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
-                            </tr>
-                          </React.Fragment>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="bg-gray-50 font-bold text-gray-800">
-                          <td className="px-3 py-2" colSpan={3}>รวม {orderItems.length} รายการ</td>
-                          <td className="px-3 py-2 text-right font-mono">{Number(totalQty).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                )}
+                            </React.Fragment>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-gray-50 font-bold text-gray-800">
+                            <td className="px-3 py-2" colSpan={3}>รวม {g.items.length} รายการ</td>
+                            <td className="px-3 py-2 text-right font-mono">{Number(gQty).toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                      {gResult && !gResult.ok && (
+                        <div className="px-3 py-1.5 bg-rose-50 text-rose-700 text-[11px] border-t border-rose-100 whitespace-pre-line">
+                          {gResult.message}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* วันที่รับ */}
@@ -2171,24 +2222,21 @@ export default function StockList() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">วันที่ต้องการรับสินค้า <span className="text-red-500">*</span></label>
                 <input type="date" value={orderDelDate} onChange={(e) => setOrderDelDate(e.target.value)}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
-                <p className="text-[11px] text-gray-400 mt-1">ระบบจะรันเลขที่ใบเบิกต่อจากใบล่าสุดของสาขาให้อัตโนมัติ</p>
+                <p className="text-[11px] text-gray-400 mt-1">
+                  ระบบจะรันเลขที่ใบเบิกต่อจากใบล่าสุดของสาขาให้อัตโนมัติ
+                  {orderGroups.length > 1 && ' — ทุกใบใช้วันที่รับเดียวกัน'}
+                </p>
               </div>
 
-              {orderResult && (
-                orderResult.ok ? (
-                  <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-3 text-center">
-                    <p className="text-xs font-medium text-emerald-600">ส่งใบเบิกสำเร็จ • เลขที่ใบเบิก</p>
-                    <p className="text-3xl font-bold font-mono text-emerald-700 my-1 tracking-wide">{orderResult.no}</p>
-                    <p className="text-xs text-emerald-600">
-                      {orderResult.count} รายการ • รับวันที่ {orderResult.deldate}
-                    </p>
-                    <p className="text-[11px] text-emerald-500 mt-1.5">บันทึกไว้ในใบเบิกค้างแล้ว</p>
-                  </div>
-                ) : (
-                  <div className="text-sm rounded-lg px-3 py-2 bg-red-50 text-red-700 border border-red-200 whitespace-pre-line">
-                    {orderResult.message}
-                  </div>
-                )
+              {orderResult && orderResult.every(r => r.ok) && (
+                <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-3 text-center">
+                  <p className="text-xs font-medium text-emerald-600">ส่งใบเบิกสำเร็จ • เลขที่ใบเบิก</p>
+                  <p className="text-2xl font-bold font-mono text-emerald-700 my-1 tracking-wide">
+                    {orderResult.map(r => r.no).join(' , ')}
+                  </p>
+                  <p className="text-xs text-emerald-600">รับวันที่ {orderResult[0]?.deldate}</p>
+                  <p className="text-[11px] text-emerald-500 mt-1.5">บันทึกไว้ในใบเบิกค้างแล้ว</p>
+                </div>
               )}
             </div>
 
@@ -2198,7 +2246,7 @@ export default function StockList() {
               <button onClick={submitOrder} disabled={isOrdering || !orderDelDate || orderItems.length === 0}
                 className="px-5 py-2 rounded-xl text-sm font-semibold bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 flex items-center gap-2">
                 {isOrdering ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                {isOrdering ? 'กำลังส่ง…' : `ยืนยันสั่งของ (${orderItems.length})`}
+                {isOrdering ? 'กำลังส่ง…' : orderGroups.length > 1 ? `ยืนยันสั่งของ (${orderGroups.length} ใบ)` : `ยืนยันสั่งของ (${orderItems.length})`}
               </button>
             </div>
           </div>
