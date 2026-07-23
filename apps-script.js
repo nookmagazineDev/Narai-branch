@@ -605,8 +605,13 @@ function doPost(e) {
         return a.name.localeCompare(b.name);
       });
     } else if (action === 'getStockItems') {
+      // ชั่วคราว: จับเวลาแต่ละขั้นตอนเพื่อหาสาเหตุที่หน้านับสต๊อกโหลดช้า (ลบออกได้เมื่อหาสาเหตุเจอแล้ว)
+      var _debug = !!data.debug;
+      var _t0 = new Date().getTime();
+      var _timing = {};
       var reqBranch = (data.branch || '').toLowerCase();
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      _timing.openStockSs = new Date().getTime() - _t0;
 
       var balanceMap = {};
       var balanceSheet = stockSs.getSheetByName('ยอดยกมา');
@@ -633,6 +638,7 @@ function doPost(e) {
           }
         }
       }
+      _timing.readBalanceSheet = new Date().getTime() - _t0;
 
       // Build lastStock map from ข้อมูลนับสตอค sheet — keep full history per product
       var lastStockMap = {};
@@ -667,6 +673,7 @@ function doPost(e) {
           }
         }
       }
+      _timing.readCountSheet = new Date().getTime() - _t0;
 
       // Build lastRequest map from ข้อมูลเบิก sheet (latest request per product per branch)
       var lastRequestMap = {};
@@ -710,13 +717,16 @@ function doPost(e) {
           }
         }
       }
+      _timing.readCategorySheet = new Date().getTime() - _t0;
 
       // รายการสินค้า: อ่านจากชีท "item" ในไฟล์ BOM แทน แล้วกรองเฉพาะสาขานี้ (คอลัมน์ J = สาขาที่ใช้)
       //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH") K(index10)=itemid L(index11)=หน่วยเบิก N(index13)=หมวดสโตร์ O(index14)=Plan (true=สั่งได้เฉพาะปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" เท่านั้น)
       var itemSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
+      _timing.openItemSs = new Date().getTime() - _t0;
       var sheet = itemSs.getSheetByName('item');
       if (!sheet) throw new Error('Sheet "item" not found');
       var values = sheet.getDataRange().getValues();
+      _timing.readItemSheet = new Date().getTime() - _t0;
       // สาขาในชีทเป็นตัวใหญ่ (SJP,CRM..) เว็บใช้ zjp = SJP ในชีท
       var itemBranchAlias = { 'zjp': 'sjp', 'zip': 'sjp' };
       var reqBranchU = (itemBranchAlias[reqBranch] || reqBranch).toUpperCase();
@@ -754,8 +764,10 @@ function doPost(e) {
           lastRequester: lastRequestMap[normId] ? lastRequestMap[normId].requester : ''
         });
       }
+      _timing.buildItems = new Date().getTime() - _t0;
       response.status = 'success';
       response.data = items;
+      if (_debug) response._timing = _timing;
     } else if (action === 'getStockTotal') {
       var endDateStr = data.endDate || '';
       var endDateObj = null;
