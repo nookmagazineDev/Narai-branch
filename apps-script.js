@@ -1032,6 +1032,100 @@ function doPost(e) {
       response.status = 'success';
       response.data = gscOut;
 
+    } else if (action === 'saveMonthEndClosing') {
+      // ปิดยอดสิ้นเดือน: บันทึกยอดคงเหลือ ณ วันที่ปิดยอด + มูลค่าต่อหน่วย/มูลค่ารวม
+      // ลงชีท "ปิดรอบสิ้นเดือน" ในไฟล์สต๊อก — ซ้ำ (วันที่+สาขา+รหัส) แก้ทับแถวเดิมแทนเพิ่มแถวใหม่
+      var mecSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      var mecSheet = mecSs.getSheetByName('ปิดรอบสิ้นเดือน');
+      if (!mecSheet) {
+        mecSheet = mecSs.insertSheet('ปิดรอบสิ้นเดือน');
+        mecSheet.appendRow(['วันที่ปิดยอด', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือสิ้นเดือน', 'มูลค่า/หน่วย', 'มูลค่ารวม', 'ผู้บันทึก', 'เวลาบันทึก']);
+        mecSheet.getRange('A1:J1').setFontWeight('bold');
+      } else if (mecSheet.getLastRow() < 1 || String(mecSheet.getRange(1, 1).getValue() || '') === '') {
+        mecSheet.getRange(1, 1, 1, 10).setValues([['วันที่ปิดยอด', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือสิ้นเดือน', 'มูลค่า/หน่วย', 'มูลค่ารวม', 'ผู้บันทึก', 'เวลาบันทึก']]);
+        mecSheet.getRange('A1:J1').setFontWeight('bold');
+      }
+
+      var mecNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var mecToYmd = function (v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+
+      var mecItems = data.items || [];
+      var mecBranch = (data.branch || '').toLowerCase().trim();
+      var mecDate = String(data.date || '').trim();
+      var mecRecorder = data.recorder || 'Unknown';
+      if (!mecBranch) throw new Error('ไม่ระบุสาขา');
+      if (!mecDate) throw new Error('ไม่ระบุวันที่ปิดยอด');
+      if (!mecItems.length) throw new Error('ไม่มีรายการที่กรอกยอดคงเหลือ');
+
+      var mecExistRow = {}; // codeN -> row number (1-based)
+      var mecVals = mecSheet.getDataRange().getValues();
+      for (var mv = 1; mv < mecVals.length; mv++) {
+        if (String(mecVals[mv][1] || '').toLowerCase().trim() !== mecBranch) continue;
+        if (mecToYmd(mecVals[mv][0]) !== mecDate) continue;
+        mecExistRow[mecNorm(mecVals[mv][2])] = mv + 1;
+      }
+
+      var mecNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+      var mecNew = 0, mecUpd = 0, mecTotal = 0;
+      mecItems.forEach(function (it) {
+        var q = parseFloat(it.qty);
+        if (isNaN(q) || q < 0) return;
+        var codeN = mecNorm(it.productId);
+        var unitPrice = parseFloat(it.price) || 0;
+        var amount = Math.round(q * unitPrice * 100) / 100;
+        mecTotal += amount;
+        if (mecExistRow[codeN]) {
+          var mecRow = mecExistRow[codeN];
+          mecSheet.getRange(mecRow, 6, 1, 3).setValues([[q, unitPrice, amount]]);
+          mecSheet.getRange(mecRow, 9, 1, 2).setValues([[mecRecorder, mecNow]]);
+          mecUpd++;
+        } else {
+          mecSheet.appendRow([mecDate, mecBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, mecRecorder, mecNow]);
+          mecNew++;
+        }
+      });
+
+      response.status = 'success';
+      response.message = 'บันทึกปิดยอดสิ้นเดือนแล้ว ' + (mecNew + mecUpd) + ' รายการ (ใหม่ ' + mecNew + ' / แก้ไข ' + mecUpd + ') รวมมูลค่า ฿' + mecTotal.toFixed(2);
+      response.data = { count: mecNew + mecUpd, total: Math.round(mecTotal * 100) / 100 };
+
+    } else if (action === 'getMonthEndClosing') {
+      // ดึงยอดปิดสิ้นเดือนที่บันทึกไว้ของ (สาขา+วันที่) มาแสดง/แก้ไขต่อ
+      var gmeSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      var gmeSheet = gmeSs.getSheetByName('ปิดรอบสิ้นเดือน');
+      var gmeBranch = (data.branch || '').toLowerCase().trim();
+      var gmeDate = String(data.date || '').trim();
+      var gmeNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var gmeToYmd = function (v) {
+        if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
+        var s = String(v == null ? '' : v).trim();
+        var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+        m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+        return s;
+      };
+      var gmeOut = {};
+      if (gmeSheet && gmeSheet.getLastRow() > 1 && gmeBranch && gmeDate) {
+        var gmeVals = gmeSheet.getDataRange().getValues();
+        for (var gm = 1; gm < gmeVals.length; gm++) {
+          var gmr = gmeVals[gm];
+          if (String(gmr[1] || '').toLowerCase().trim() !== gmeBranch) continue;
+          if (gmeToYmd(gmr[0]) !== gmeDate) continue;
+          gmeOut[gmeNorm(gmr[2])] = { qty: gmr[5], price: gmr[6], amount: gmr[7] };
+        }
+      }
+      response.status = 'success';
+      response.data = gmeOut;
+
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
 
