@@ -1114,6 +1114,45 @@ function doPost(e) {
       response.status = 'success';
       response.data = gmeOut;
 
+    } else if (action === 'savePlanOrderLog') {
+      // บันทึกใบสั่งจากปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" ลงชีท "plan" (gid=571271047)
+      // เขียนคู่กับตอนที่ /api/insert_order บันทึกลง MySQL แล้ว (SQL คือ source of truth ชีทนี้คือสำเนาไว้ดู)
+      var planSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      var planSheet = null;
+      var planAllSheets = planSs.getSheets();
+      for (var psi = 0; psi < planAllSheets.length; psi++) {
+        if (planAllSheets[psi].getSheetId() === 571271047) { planSheet = planAllSheets[psi]; break; }
+      }
+      if (!planSheet) throw new Error('ไม่พบชีท plan (gid=571271047)');
+
+      var planHeader = ['วันที่สั่ง', 'เวลาบันทึก', 'สาขา', 'รหัสสาขา', 'เลขที่ใบสั่ง', 'ลำดับ', 'วันที่รับ', 'itemId', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'ประเภท', 'ผู้บันทึก'];
+      if (planSheet.getLastRow() < 1 || String(planSheet.getRange(1, 1).getValue() || '') === '') {
+        planSheet.getRange(1, 1, 1, planHeader.length).setValues([planHeader]);
+        planSheet.getRange(1, 1, 1, planHeader.length).setFontWeight('bold');
+      }
+
+      var planItems = data.items || [];
+      if (!planItems.length) throw new Error('ไม่มีรายการที่สั่ง');
+      var planNow = new Date();
+      var planDateStr = Utilities.formatDate(planNow, 'Asia/Bangkok', 'dd/MM/yyyy');
+      var planTimeStr = Utilities.formatDate(planNow, 'Asia/Bangkok', 'HH:mm:ss');
+      var planRows = [];
+      planItems.forEach(function (it, idx) {
+        var pQty = Number(it.qty) || 0;
+        var pPrice = Number(it.price) || 0;
+        planRows.push([
+          planDateStr, planTimeStr, data.branch || '', data.outletId || '',
+          data.orderNo || '', idx + 1, data.deldate || '',
+          it.itemId || '', it.itemCode || '', it.itemName || '',
+          pQty, it.unit || '', pPrice, Math.round(pQty * pPrice * 100) / 100,
+          'TRF', data.requester || ''
+        ]);
+      });
+      planSheet.getRange(planSheet.getLastRow() + 1, 1, planRows.length, planHeader.length).setValues(planRows);
+
+      response.status = 'success';
+      response.data = { count: planRows.length };
+
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
 
