@@ -4,6 +4,8 @@ import mysql from 'mysql2/promise';
 //   ใบที่ยังไม่ได้รับ = ยังไม่มีรายการไหนถูกบันทึกรับเข้า (Ord_Rcv ยังว่าง)
 //   ใบที่รับของแล้ว POS จะเติมค่า Ord_Rcv ให้ทุกแถว
 // GET ?outletId=7[&days=120][&no=3498]
+// GET ?outletId=7&incoming=1  → สินค้ารอเข้า: ต่อ 1 รหัสสินค้า เอาแถวที่ยังไม่รับ (Ord_Rcv ว่าง)
+//   ซึ่งวันที่รับ (deldate) ใกล้ที่สุด (ถ้ารหัสเดียวกันค้างอยู่หลายใบ เอาใบที่จะถึงก่อน)
 
 let pool;
 function getPool() {
@@ -77,6 +79,27 @@ export default async function handler(req, res) {
           inParams = [nos];
         }
       } catch (e) { /* อ่าน config ไม่ได้ → ใช้คิวรีเต็มตาราง */ }
+    }
+
+    // สินค้ารอเข้า — ต่อรหัสสินค้า 1 รายการ เอาแถวที่ยังไม่รับ วันรับใกล้ที่สุด (เฉพาะช่วงใกล้ปัจจุบัน
+    // กันใบเก่าที่ค้าง Ord_Rcv ว่างมานาน — POS ไม่ได้บันทึกรับจริง ไม่ใช่ของที่ยังรอเข้าจริง)
+    if (req.query.incoming) {
+      const [rows] = await getPool().query(
+        `SELECT Ord_itemCode AS itemCode, Ord_ItemName AS itemName, Ord_Qty AS qty,
+                Ord_Unit AS unit, DATE_FORMAT(Ord_DelDate, '%Y-%m-%d') AS deldate, Ord_No AS orderNo
+           FROM orderd
+          WHERE ${inClause}Ord_StrID = ? AND Ord_Rcv IS NULL
+            AND Ord_DelDate >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+          ORDER BY Ord_DelDate ASC`,
+        [...inParams, Number(outletId)]
+      );
+      const incoming = {};
+      for (const r of rows) {
+        const code = String(r.itemCode || '').replace(/^0+/, '');
+        if (!code || incoming[code]) continue; // เรียงตามวันรับแล้ว — เจอครั้งแรกคือใกล้ที่สุด
+        incoming[code] = { qty: r2(r.qty), unit: r.unit, deldate: r.deldate, orderNo: r.orderNo };
+      }
+      return res.status(200).json({ status: 'success', data: incoming });
     }
 
     const [rows] = await getPool().query(

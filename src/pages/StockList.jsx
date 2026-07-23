@@ -460,16 +460,31 @@ export default function StockList() {
     setLoading(true);
     setItems([]);
     try {
-      const [itemsRes, empRes] = await Promise.all([
+      const outletId = isAll
+        ? (branches.find(b => b.name === branch)?.outletId || '')
+        : (user?.outletId || '');
+
+      const [itemsRes, empRes, incomingRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
         apiCall('getScheduleEmployees', { branch }),
+        outletId
+          ? fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`).then(r => r.json()).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       if (itemsRes.status === 'success') {
+        const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
         // ยอดยกมาเดือนที่แล้ว คำนวณจาก stockHistory ที่ได้มาแล้ว (ไม่ยิง API เพิ่ม)
         setItems(itemsRes.data.map(item => {
           const pm = prevMonthFromHistory(item.stockHistory);
-          return { ...item, remaining: '', requested: '', prevMonthQty: pm ? pm.qty : undefined, prevMonthDate: pm ? pm.date : '' };
+          const nid = String(item.productId).replace(/^0+/, '');
+          const incoming = incomingMap[nid];
+          return {
+            ...item, remaining: '', requested: '', prevMonthQty: pm ? pm.qty : undefined, prevMonthDate: pm ? pm.date : '',
+            incomingQty: incoming ? incoming.qty : undefined,
+            incomingDate: incoming ? incoming.deldate : '',
+            incomingOrderNo: incoming ? incoming.orderNo : '',
+          };
         }));
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
@@ -1192,6 +1207,18 @@ export default function StockList() {
 
       </div>
 
+      {/* พนักงานนับสต๊อก — ย้ายมาไว้ด้านบนสุด เพราะต้องเลือกก่อนเริ่มทำงาน */}
+      {!isAll && (
+        <div className="bg-white rounded-2xl shadow-sm border border-purple-100 p-4 flex items-center gap-3">
+          <label className="text-purple-900 font-medium whitespace-nowrap text-sm">👤 พนักงานนับสต๊อก <span className="text-red-500">*</span> :</label>
+          <select value={counterName} onChange={(e) => setCounterName(e.target.value)}
+            className="px-4 py-2 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-gray-700 bg-white max-w-sm w-full text-sm">
+            <option value="">-- เลือกพนักงาน --</option>
+            {employees.map((emp, idx) => <option key={idx} value={emp.name}>{emp.name}</option>)}
+          </select>
+        </div>
+      )}
+
       {/* Branch selector for 'all' users */}
       {isAll && (
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex items-center gap-4">
@@ -1236,40 +1263,8 @@ export default function StockList() {
       {/* Only show table section if branch selected (for 'all') or always for branch users */}
       {(!isAll || selectedBranch) && (
         <>
-          {/* Search */}
+          {/* Date range + usage/received fetch — ยังอยู่บนสุดเหมือนเดิม (ช่องค้นหาย้ายไปอยู่ติดตารางแทน) */}
           <div className="flex flex-col md:flex-row gap-4 mb-4">
-            <div className="relative flex-1 flex gap-2">
-              <div className="relative flex-1">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search className="h-5 w-5 text-gray-400" />
-                </div>
-                <input type="text"
-                  className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
-                  placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)} />
-              </div>
-              <select 
-                value={filterCategory} 
-                onChange={(e) => setFilterCategory(e.target.value)}
-                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700 max-w-[200px]"
-              >
-                <option value="">ทั้งหมด (ทุกหมวด)</option>
-                {uniqueCategories.map((cat, idx) => (
-                  <option key={idx} value={cat}>{cat}</option>
-                ))}
-              </select>
-              <select 
-                value={sortBy} 
-                onChange={(e) => setSortBy(e.target.value)}
-                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700"
-              >
-                <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
-                <option value="productId">เรียงตามรหัสสินค้า</option>
-                <option value="name">เรียงตามชื่อสินค้า</option>
-              </select>
-            </div>
-            
             {/* Shared Date Picker for Usage + Received */}
             <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-sky-50 border border-emerald-100 p-2 rounded-xl">
               <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
@@ -1298,7 +1293,7 @@ export default function StockList() {
             {!isAll && (
               <div className="p-4 border-b border-amber-100 bg-amber-50/40 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-3">
-                  <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ — วันที่ใช้ของ:</label>
+                  <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ  ใช้ยอดเบิกถึงวันที่:</label>
                   <input type="date" value={useDate} onChange={(e) => setUseDate(e.target.value)}
                     className="px-2 py-1.5 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-500" />
                   
@@ -1493,16 +1488,39 @@ export default function StockList() {
                 )}
               </div>
             )}
-            {!isAll && (
-              <div className="p-4 border-b border-purple-100 bg-purple-50/30 flex items-center gap-3 max-w-sm">
-                <label className="text-purple-900 font-medium whitespace-nowrap text-sm">👤 พนักงานนับสต๊อก <span className="text-red-500">*</span> :</label>
-                <select value={counterName} onChange={(e) => setCounterName(e.target.value)}
-                  className="px-4 py-2 border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none text-gray-700 bg-white w-full text-sm">
-                  <option value="">-- เลือกพนักงาน --</option>
-                  {employees.map((emp, idx) => <option key={idx} value={emp.name}>{emp.name}</option>)}
-                </select>
+
+            {/* ช่องค้นหา/กรองหมวด/เรียงลำดับ — อยู่ติดกับตารางด้านล่างนี้ */}
+            <div className="p-4 border-b border-gray-100 flex flex-col md:flex-row gap-2">
+              <div className="relative flex-1">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-5 w-5 text-gray-400" />
+                </div>
+                <input type="text"
+                  className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-purple-500 focus:border-purple-500 sm:text-sm"
+                  placeholder="ค้นหาด้วยรหัส หรือ ชื่อสินค้า..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
-            )}
+              <select
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700 md:max-w-[200px]"
+              >
+                <option value="">ทั้งหมด (ทุกหมวด)</option>
+                {uniqueCategories.map((cat, idx) => (
+                  <option key={idx} value={cat}>{cat}</option>
+                ))}
+              </select>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 text-gray-700"
+              >
+                <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
+                <option value="productId">เรียงตามรหัสสินค้า</option>
+                <option value="name">เรียงตามชื่อสินค้า</option>
+              </select>
+            </div>
 
             <div className="overflow-x-auto">
               {loading ? (
@@ -1514,7 +1532,7 @@ export default function StockList() {
                 </div>
               ) : (
                 <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50/50">
+                  <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัส</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
@@ -1523,7 +1541,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-teal-600 uppercase w-32 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดนับก่อนหน้า</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">สินค้ารอเข้า</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
@@ -1601,15 +1619,15 @@ export default function StockList() {
                             )}
                           </td>
 
-                          {/* ยอดเบิกล่าสุด */}
+                          {/* สินค้ารอเข้า — จำนวนตามใบเบิกที่ยังไม่รับ วันรับใกล้ที่สุด */}
                           <td className="px-4 py-3 text-center bg-orange-50/30">
                             <div className="font-semibold text-orange-600 text-sm">
-                              {item.lastRequest !== '' && item.lastRequest !== undefined ? item.lastRequest : '-'}
+                              {item.incomingQty !== '' && item.incomingQty !== undefined ? item.incomingQty : '-'}
                             </div>
-                            {item.lastRequestDate && (
-                              <div className="text-[10px] text-gray-400 mt-0.5" title={`ผู้เบิก: ${item.lastRequester || '-'}`}>
-                                {String(item.lastRequestDate || '').split(' ')[0]}
-                                {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
+                            {item.incomingDate && (
+                              <div className="text-[10px] text-gray-400 mt-0.5" title={`ใบเบิกเลขที่ ${item.incomingOrderNo || '-'}`}>
+                                {item.incomingDate}
+                                {item.incomingOrderNo && <span className="ml-1 text-orange-400">· #{item.incomingOrderNo}</span>}
                               </div>
                             )}
                           </td>
@@ -2219,7 +2237,7 @@ export default function StockList() {
 
               {/* วันที่รับ */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">วันที่ต้องการรับสินค้า <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">วันรับสินค้า <span className="text-red-500">*</span></label>
                 <input type="date" value={orderDelDate} onChange={(e) => setOrderDelDate(e.target.value)}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none" />
                 <p className="text-[11px] text-gray-400 mt-1">
