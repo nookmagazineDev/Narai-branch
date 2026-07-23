@@ -830,7 +830,8 @@ export default function StockList() {
     if (!outletId) { toast.error('ไม่พบรหัสสาขา (outletId)'); return; }
 
     // จัดกลุ่มตามหมวดสโตร์ก่อนส่ง — ลำดับนี้จะถูกบันทึกเป็น Ord_Seq ในใบเบิกด้วย
-    const eligible = items.filter(i => Number(i.requested) > 0).sort(byStoreCat);
+    // สินค้าที่คอลัมน์ Plan = true สั่งได้เฉพาะปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" เท่านั้น ไม่ส่งไปกับปุ่มนี้
+    const eligible = items.filter(i => Number(i.requested) > 0 && !i.planOnly).sort(byStoreCat);
     if (eligible.length === 0) { toast.error('ไม่มีรายการที่ขอเบิก'); return; }
 
     // หมวดใน SPLIT_ORDER_CATEGORIES (เช่น "ห้องผัก") แยกเป็นใบเบิกของตัวเอง ที่เหลือรวมเป็นใบเบิกทั่วไป
@@ -2168,7 +2169,9 @@ export default function StockList() {
 
       {/* Modal สั่งของ — พรีวิวรายการที่จะเบิก + เลือกวันรับ แล้วยิง insert_order (แยกใบตามหมวดใน SPLIT_ORDER_CATEGORIES) */}
       {showOrderModal && (() => {
-        const orderItems = items.filter(i => Number(i.requested) > 0).sort(byStoreCat);
+        const requestedItems = items.filter(i => Number(i.requested) > 0);
+        const orderItems = requestedItems.filter(i => !i.planOnly).sort(byStoreCat);
+        const planOnlyExcluded = requestedItems.filter(i => i.planOnly);
         const totalQty = orderItems.reduce((s, i) => s + (Number(i.requested) || 0), 0);
         const orderGroups = partitionOrderGroups(orderItems);
         return (
@@ -2186,6 +2189,13 @@ export default function StockList() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {planOnlyExcluded.length > 0 && (
+                <div className="text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2">
+                  <p className="font-semibold">⚠️ {planOnlyExcluded.length} รายการไม่ถูกส่ง — สั่งได้เฉพาะปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" เท่านั้น</p>
+                  <p className="mt-0.5 text-amber-600">{planOnlyExcluded.map(i => i.name).join(', ')}</p>
+                </div>
+              )}
+
               {/* พรีวิวรายการที่ขอเบิก — แยกเป็นการ์ดตามใบเบิก (ปกติมีใบเดียว ยกเว้นมีหมวดที่ต้องแยกใบ) */}
               <div className="space-y-3">
                 {orderItems.length === 0 ? (

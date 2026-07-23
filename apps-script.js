@@ -712,7 +712,7 @@ function doPost(e) {
       }
 
       // รายการสินค้า: อ่านจากชีท "item" ในไฟล์ BOM แทน แล้วกรองเฉพาะสาขานี้ (คอลัมน์ J = สาขาที่ใช้)
-      //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH") K(index10)=itemid L(index11)=หน่วยเบิก N(index13)=หมวดสโตร์
+      //   A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ ... J(index9)=สาขาที่ใช้ (คั่นด้วย , เช่น "CRM,HRS,XHH") K(index10)=itemid L(index11)=หน่วยเบิก N(index13)=หมวดสโตร์ O(index14)=Plan (true=สั่งได้เฉพาะปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" เท่านั้น)
       var itemSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
       var sheet = itemSs.getSheetByName('item');
       if (!sheet) throw new Error('Sheet "item" not found');
@@ -740,6 +740,7 @@ function doPost(e) {
           price: row[2] || '',           // C = ราคา
           status: row[4] || '',          // E = สถานะ
           storeCat: row[13] || '',       // N = หมวดสโตร์ (ใช้จัดกลุ่มตอนสั่งของ)
+          planOnly: /^(true|ture)$/i.test(String(row[14] || '').trim()), // O = Plan (สั่งได้เฉพาะปุ่ม "สั่งสินค้าแพลน" เท่านั้น)
           storageCat: categoryMap[normId] !== undefined ? categoryMap[normId] : '',
           rdCat: '',
           previousBalance: previousStockMap[normId] ? previousStockMap[normId].remaining : (balanceMap[normId] ? balanceMap[normId].balance : ''),
