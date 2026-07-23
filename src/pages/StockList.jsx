@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 
 // ยอดยกมาเดือนที่แล้ว = ยอดนับล่าสุดของ "เดือนก่อน" จาก stockHistory (date รูปแบบ dd/MM/yyyy)
 // คำนวณฝั่ง client จากประวัติที่ getStockItems ส่งมาแล้ว (ไม่ต้องยิง API เพิ่ม)
@@ -615,6 +618,111 @@ export default function StockList() {
     }
   };
 
+  // ── Export ใบสั่งของ (ใบเบิก) เป็น PDF / Excel ──
+  //    PDF: render เป็น HTML แล้วแคปเจอร์ด้วย html2canvas ก่อนฝังลง jsPDF กันปัญหาฟอนต์ไทย
+  const buildInvoiceExportEl = (doc) => {
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#fff;padding:24px;font-family:"Segoe UI",sans-serif;color:#111;';
+    el.innerHTML = `
+      <h2 style="text-align:center;margin:0 0 4px;font-size:18px;">ใบสั่งของ / ใบเบิก</h2>
+      <p style="text-align:center;margin:0 0 16px;font-size:12px;color:#555;">สาขา ${branchLabel}</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:12px;">
+        <tr>
+          <td style="padding:2px 0;"><b>เลขที่ใบเบิก:</b> ${doc.invNo || doc.docNo}</td>
+          <td style="padding:2px 0;text-align:right;"><b>วันที่:</b> ${doc.docDate}</td>
+        </tr>
+      </table>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr style="background:#f3f4f6;">
+            <th style="border:1px solid #ddd;padding:4px;text-align:left;">รหัส</th>
+            <th style="border:1px solid #ddd;padding:4px;text-align:left;">ชื่อสินค้า</th>
+            <th style="border:1px solid #ddd;padding:4px;text-align:right;">จำนวน</th>
+            <th style="border:1px solid #ddd;padding:4px;text-align:left;">หน่วย</th>
+            <th style="border:1px solid #ddd;padding:4px;text-align:right;">ราคา/หน่วย</th>
+            <th style="border:1px solid #ddd;padding:4px;text-align:right;">มูลค่า</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${doc.items.map(it => `
+            <tr>
+              <td style="border:1px solid #ddd;padding:4px;">${it.itemCode}</td>
+              <td style="border:1px solid #ddd;padding:4px;">${it.itemName}</td>
+              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${it.qty}</td>
+              <td style="border:1px solid #ddd;padding:4px;">${it.unit}</td>
+              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.unitPrice).toLocaleString('th-TH')}</td>
+              <td style="border:1px solid #ddd;padding:4px;text-align:right;">${Number(it.amount).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="2" style="padding:6px 4px;text-align:right;font-weight:bold;border-top:2px solid #333;">รวม</td>
+            <td style="padding:6px 4px;text-align:right;font-weight:bold;border-top:2px solid #333;">${doc.totalQty}</td>
+            <td style="border-top:2px solid #333;"></td>
+            <td style="border-top:2px solid #333;"></td>
+            <td style="padding:6px 4px;text-align:right;font-weight:bold;border-top:2px solid #333;">${Number(doc.totalAmt).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `;
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const exportDocToPDF = async (doc) => {
+    const loadingToast = toast.loading('กำลังสร้าง PDF...');
+    const el = buildInvoiceExportEl(doc);
+    try {
+      const canvas = await html2canvas(el, {
+        scale: 2, useCORS: true, backgroundColor: '#ffffff',
+        // Tailwind v4 กำหนดสีพื้นฐานของ body/html เป็น oklch() ซึ่ง html2canvas parse ไม่ได้ (throw error)
+        // บังคับตั้งเป็น hex สีธรรมดาในเอกสารที่ clone ไว้ก่อนแคปเจอร์ ป้องกัน error ตอน export
+        onclone: (clonedDoc) => {
+          clonedDoc.documentElement.style.setProperty('background-color', '#ffffff', 'important');
+          clonedDoc.body.style.setProperty('background-color', '#ffffff', 'important');
+          clonedDoc.body.style.setProperty('color', '#111111', 'important');
+        },
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'p', unit: 'pt', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const imgWidth = pageWidth - 40;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
+      pdf.save(`ใบเบิก_${doc.invNo || doc.docNo}.pdf`);
+      toast.success('บันทึก PDF สำเร็จ', { id: loadingToast });
+    } catch (err) {
+      console.error(err);
+      toast.error('สร้าง PDF ไม่สำเร็จ', { id: loadingToast });
+    } finally {
+      document.body.removeChild(el);
+    }
+  };
+
+  const exportDocToExcel = (doc) => {
+    try {
+      const rows = [
+        ['ใบสั่งของ / ใบเบิก'],
+        [`สาขา ${branchLabel}`],
+        [`เลขที่ใบเบิก: ${doc.invNo || doc.docNo}`, '', `วันที่: ${doc.docDate}`],
+        [],
+        ['รหัส', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่า'],
+        ...doc.items.map(it => [it.itemCode, it.itemName, Number(it.qty), it.unit, Number(it.unitPrice), Number(it.amount)]),
+        [],
+        ['', 'รวม', Number(doc.totalQty), '', '', Number(doc.totalAmt)],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols'] = [{ wch: 12 }, { wch: 32 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'ใบเบิก');
+      XLSX.writeFile(wb, `ใบเบิก_${doc.invNo || doc.docNo}.xlsx`);
+      toast.success('บันทึก Excel สำเร็จ');
+    } catch (err) {
+      console.error(err);
+      toast.error('สร้าง Excel ไม่สำเร็จ');
+    }
+  };
+
   const handleBranchChange = (branch) => {
     setSelectedBranch(branch);
     setItems([]);
@@ -966,6 +1074,19 @@ export default function StockList() {
         const data = await res.json();
         if (data.status === 'success') {
           results.push({ deldate: date, ok: true, no: data.orderNo, count: data.count });
+          // บันทึกสำเนาลงชีท "plan" ด้วย — ไม่บล็อกผลลัพธ์หลักถ้าเขียนชีทไม่สำเร็จ (SQL คือตัวจริงที่บันทึกไปแล้ว)
+          try {
+            await apiCall('savePlanOrderLog', {
+              branch: effectiveBranch,
+              outletId,
+              orderNo: data.orderNo,
+              deldate: date,
+              requester: user?.username || '',
+              items: rows.map(r => ({ itemId: r.itemId, itemCode: r.itemCode, itemName: r.itemName, qty: r.qty, unit: r.unit, price: r.price })),
+            });
+          } catch (logErr) {
+            console.error('บันทึกชีท plan ไม่สำเร็จ:', logErr);
+          }
         } else {
           results.push({ deldate: date, ok: false, message: data.message, missing: data.missing });
         }
@@ -2106,6 +2227,7 @@ export default function StockList() {
                       <th className="px-4 py-2 text-right text-sky-800 font-semibold">จำนวนรายการ</th>
                       <th className="px-4 py-2 text-right text-sky-800 font-semibold">ยอดรวม (จำนวน)</th>
                       <th className="px-4 py-2 text-right text-sky-800 font-semibold">มูลค่า (บาท)</th>
+                      <th className="px-4 py-2 text-center text-sky-800 font-semibold">Export</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -2122,10 +2244,28 @@ export default function StockList() {
                             <td className="px-4 py-3 text-right text-gray-700">{doc.itemCount}</td>
                             <td className="px-4 py-3 text-right font-semibold text-gray-800">{doc.totalQty}</td>
                             <td className="px-4 py-3 text-right font-semibold text-gray-800">{doc.totalAmt.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => exportDocToPDF(doc)}
+                                  title="ดาวน์โหลด PDF"
+                                  className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                                >
+                                  <FileDown className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => exportDocToExcel(doc)}
+                                  title="ดาวน์โหลด Excel"
+                                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                >
+                                  <FileSpreadsheet className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                           {isOpen && (
                             <tr className="bg-gray-50/70">
-                              <td colSpan="5" className="px-4 py-3">
+                              <td colSpan="6" className="px-4 py-3">
                                 <table className="w-full text-xs border-collapse">
                                   <thead className="bg-white border-b">
                                     <tr>
