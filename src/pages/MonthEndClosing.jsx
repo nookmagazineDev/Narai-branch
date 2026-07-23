@@ -1,13 +1,50 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { CalendarCheck, Search, Loader2, AlertCircle, Save } from 'lucide-react';
+import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const todayYMD = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
+
+// ป๊อปอัปแสดงประวัติการบันทึกของรายการเดียว — เรียงล่าสุดขึ้นก่อน
+function ClosingHistoryModal({ open, name, history, onClose }) {
+  if (!open) return null;
+  const rows = [...(history || [])].reverse();
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 py-4 bg-indigo-600 text-white flex items-center justify-between shrink-0">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold flex items-center gap-2"><History className="w-4 h-4" /> ประวัติการบันทึก</h3>
+            <p className="text-xs text-indigo-100 mt-0.5 truncate">{name}</p>
+          </div>
+          <button onClick={onClose} className="text-indigo-100 hover:text-white p-1"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="border border-gray-100 rounded-xl divide-y divide-gray-100">
+            {rows.map((h, i) => (
+              <div key={i} className={`px-4 py-2.5 ${i === 0 ? 'bg-indigo-50/50' : ''}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-800">
+                    {Number(h.qty).toLocaleString('th-TH', { maximumFractionDigits: 2 })}
+                    {i === 0 && <span className="ml-2 text-[10px] font-medium text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">ล่าสุด</span>}
+                  </span>
+                  <span className="text-sm font-mono text-emerald-700">
+                    {Number(h.amount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-0.5">{h.time || '-'} · {h.recorder || '-'}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ปิดยอดสิ้นเดือน — รายชื่อไอเทมเหมือนหน้านับสต๊อก แต่กรอกแค่ "ยอดคงเหลือสิ้นเดือน" ช่องเดียว
 // แสดงมูลค่า/หน่วย และมูลค่ารวมของแต่ละไอเทมให้ดูควบคู่กัน บันทึกลงชีท "ปิดรอบสิ้นเดือน"
@@ -21,6 +58,8 @@ export default function MonthEndClosing() {
   const [searchTerm, setSearchTerm] = useState('');
   const [closingDate, setClosingDate] = useState(todayYMD());
   const [qtyMap, setQtyMap] = useState({}); // productId -> ยอดคงเหลือสิ้นเดือนที่กรอก (string)
+  const [historyMap, setHistoryMap] = useState({}); // productId -> [{qty, price, amount, recorder, time}]
+  const [historyFor, setHistoryFor] = useState(null); // { name, history }
 
   useEffect(() => {
     if (branch) loadItems();
@@ -48,14 +87,18 @@ export default function MonthEndClosing() {
     }
   };
 
-  // ดึงยอดที่เคยบันทึกไว้ของวันที่นี้มาเติมให้ (แก้ไขต่อได้ ไม่ต้องกรอกใหม่ทั้งหมด)
+  // ดึงยอดที่เคยบันทึกไว้ของวันที่นี้มาเติมให้ (แก้ไขต่อได้ ไม่ต้องกรอกใหม่ทั้งหมด) + ประวัติการบันทึกทั้งหมด
   const loadExistingClosing = async () => {
     try {
       const res = await apiCall('getMonthEndClosing', { branch, date: closingDate });
       if (res.status === 'success') {
-        const map = {};
-        Object.entries(res.data || {}).forEach(([code, v]) => { map[code] = String(v.qty ?? ''); });
+        const map = {}, hist = {};
+        Object.entries(res.data || {}).forEach(([code, v]) => {
+          map[code] = String(v.qty ?? '');
+          hist[code] = v.history || [];
+        });
         setQtyMap(map);
+        setHistoryMap(hist);
       }
     } catch (err) { /* ไม่มีข้อมูลเดิมก็ไม่เป็นไร เริ่มกรอกใหม่ */ }
   };
@@ -112,6 +155,7 @@ export default function MonthEndClosing() {
       });
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกปิดยอดสิ้นเดือนเรียบร้อยแล้ว');
+        loadExistingClosing(); // รีเฟรชประวัติ + ยอดล่าสุดหลังบันทึก
       } else {
         toast.error(res.message || 'บันทึกไม่สำเร็จ');
       }
@@ -193,12 +237,13 @@ export default function MonthEndClosing() {
                   <th className="px-4 py-3 text-right text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">มูลค่า/หน่วย</th>
                   <th className="px-2 py-3 text-center text-xs font-semibold text-indigo-700 uppercase w-40 bg-indigo-50/80">ยอดคงเหลือสิ้นเดือน</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase w-36 bg-emerald-50/60">มูลค่ารวม</th>
+                  <th className="px-2 py-3 text-center text-xs font-semibold text-gray-400 uppercase w-14">ประวัติ</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
                 {filteredItems.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-gray-400">
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-400">
                       <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                       ไม่พบรายการสินค้า
                     </td>
@@ -228,6 +273,22 @@ export default function MonthEndClosing() {
                       <td className="px-4 py-2.5 text-right text-sm font-semibold text-emerald-700 bg-emerald-50/30 font-mono">
                         {rowTotal !== null ? rowTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
                       </td>
+                      <td className="px-2 py-2.5 text-center">
+                        {(historyMap[key]?.length > 0) && (
+                          <button
+                            onClick={() => setHistoryFor({ name: item.name, history: historyMap[key] })}
+                            title={`ดูประวัติการบันทึก (${historyMap[key].length} ครั้ง)`}
+                            className="text-gray-300 hover:text-indigo-600 transition-colors relative"
+                          >
+                            <History className="w-4 h-4" />
+                            {historyMap[key].length > 1 && (
+                              <span className="absolute -top-1.5 -right-1.5 bg-indigo-600 text-white text-[9px] font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center leading-none">
+                                {historyMap[key].length}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -236,6 +297,13 @@ export default function MonthEndClosing() {
           )}
         </div>
       </div>
+
+      <ClosingHistoryModal
+        open={!!historyFor}
+        name={historyFor?.name}
+        history={historyFor?.history}
+        onClose={() => setHistoryFor(null)}
+      />
     </div>
   );
 }
