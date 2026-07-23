@@ -162,7 +162,14 @@ export default function ScheduleWeekly() {
         width: tableEl.scrollWidth,
         height: tableEl.scrollHeight,
         windowWidth: tableEl.scrollWidth,
-        windowHeight: tableEl.scrollHeight
+        windowHeight: tableEl.scrollHeight,
+        // Tailwind v4 กำหนดสีพื้นฐานของ body/html เป็น oklch() ซึ่ง html2canvas parse ไม่ได้ (throw error)
+        // บังคับตั้งเป็น hex สีธรรมดาในเอกสารที่ clone ไว้ก่อนแคปเจอร์ ป้องกัน error ตอน export
+        onclone: (clonedDoc) => {
+          clonedDoc.documentElement.style.setProperty('background-color', '#ffffff', 'important');
+          clonedDoc.body.style.setProperty('background-color', '#ffffff', 'important');
+          clonedDoc.body.style.setProperty('color', '#111111', 'important');
+        },
       });
       
       tableEl.style.maxHeight = originalMaxHeight;
