@@ -1,6 +1,46 @@
 // --- ตั้งค่า ID ของ Spreadsheet ข้อมูลยอดขาย/เป้าหมาย ---
 var SALES_DATA_SPREADSHEET_ID = '1kxVqX_hp5B0YTNSPj7mhyFl1OLbnhN-dIWm9ywzHA60';
 
+// --- Cache: ชีท "ข้อมูลนับสตอค" มี 25,000+ แถวสะสมไม่มีวันหมด อ่านทั้งชีทกิน ~20 วินาทีทุกครั้ง
+//   แคชผลลัพธ์ getStockItems ไว้ต่อสาขา (90 วินาที) กันคนกดเข้าหน้านับสต๊อกซ้ำๆ ในช่วงเวลาใกล้กันต้องรอนาน
+//   CacheService จำกัดค่าละ 100KB จึงต้อง gzip+base64 ก่อนเก็บ แล้วยังตัดเป็นชิ้นๆ (chunk) เผื่อสาขาที่มีข้อมูลเยอะเกิน
+var STOCK_ITEMS_CACHE_TTL = 90; // วินาที
+function getStockItemsFromCache(reqBranch) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var metaKey = 'stockItems_' + reqBranch + '_meta';
+    var chunkCount = parseInt(cache.get(metaKey), 10);
+    if (!chunkCount) return null;
+    var parts = [];
+    for (var i = 0; i < chunkCount; i++) {
+      var part = cache.get('stockItems_' + reqBranch + '_' + i);
+      if (part === null) return null; // ชิ้นไหนหาย (หมดอายุไม่พร้อมกัน) ถือว่า cache miss ทั้งชุด
+      parts.push(part);
+    }
+    var compressedBytes = Utilities.base64Decode(parts.join(''));
+    var jsonStr = Utilities.ungzip(Utilities.newBlob(compressedBytes, 'application/x-gzip')).getDataAsString();
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    return null; // แคชอ่านพลาด ไม่เป็นไร ไปอ่านสดแทน
+  }
+}
+function putStockItemsToCache(reqBranch, itemsArray) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var jsonStr = JSON.stringify(itemsArray);
+    var gzipped = Utilities.gzip(Utilities.newBlob(jsonStr, 'application/json'));
+    var b64 = Utilities.base64Encode(gzipped.getBytes());
+    var CHUNK_SIZE = 90000; // ตัวอักษร — เผื่อขอบเขตให้ห่างจากลิมิต 100KB ของ CacheService
+    var chunkCount = Math.ceil(b64.length / CHUNK_SIZE) || 1;
+    for (var i = 0; i < chunkCount; i++) {
+      cache.put('stockItems_' + reqBranch + '_' + i, b64.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE), STOCK_ITEMS_CACHE_TTL);
+    }
+    cache.put('stockItems_' + reqBranch + '_meta', String(chunkCount), STOCK_ITEMS_CACHE_TTL);
+  } catch (e) {
+    // แคชเขียนพลาดไม่เป็นไร แค่รอบถัดไปจะไม่เร็วขึ้น ไม่กระทบผลลัพธ์หลัก
+  }
+}
+
 // --- Helper: เปรียบเทียบวันที่อย่างปลอดภัย ---
 function isSameDate(date1, date2) {
   if (!date1 || !date2) return false;
@@ -610,6 +650,13 @@ function doPost(e) {
       var _t0 = new Date().getTime();
       var _timing = {};
       var reqBranch = (data.branch || '').toLowerCase();
+      var cachedItems = data.debug ? null : getStockItemsFromCache(reqBranch); // debug:true ข้าม cache เสมอ กันเทสเวลาเพี้ยน
+      _timing.cacheHit = !!cachedItems;
+      if (cachedItems) {
+        response.status = 'success';
+        response.data = cachedItems;
+        if (_debug) response._timing = _timing;
+      } else {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
       _timing.openStockSs = new Date().getTime() - _t0;
 
@@ -774,7 +821,9 @@ function doPost(e) {
       _timing.buildItems = new Date().getTime() - _t0;
       response.status = 'success';
       response.data = items;
+      putStockItemsToCache(reqBranch, items);
       if (_debug) response._timing = _timing;
+      } // ปิด if (!cachedItems)
     } else if (action === 'getStockTotal') {
       var endDateStr = data.endDate || '';
       var endDateObj = null;
