@@ -604,33 +604,6 @@ function doPost(e) {
       response.data = branches.sort(function (a, b) {
         return a.name.localeCompare(b.name);
       });
-    } else if (action === 'trimEmptyRows') {
-      // ทำความสะอาดชีทที่ used range บวมเกินขอบเขตข้อมูลจริง (เช่น เคยแตะเซลล์/จัดฟอร์แมตไปไกลเกินจำเป็น)
-      // ทำให้ getDataRange().getValues() ช้ามาก เพราะต้องดึงข้อมูลแถวว่างจำนวนมากมาด้วยทุกครั้ง
-      // สแกนหาแถวสุดท้ายที่มีข้อมูลจริง แล้วลบแถวว่างส่วนเกินทิ้ง (ไม่แตะแถวที่มีข้อมูล)
-      var teSs = SpreadsheetApp.openById(data.fileId || '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
-      var teSheetName = data.sheetName || 'ข้อมูลนับสตอค';
-      var teSheet = teSs.getSheetByName(teSheetName);
-      if (!teSheet) throw new Error('ไม่พบชีท ' + teSheetName);
-
-      var teBefore = { lastRow: teSheet.getLastRow(), maxRows: teSheet.getMaxRows() };
-      var teValues = teSheet.getDataRange().getValues();
-      var teLastRealRow = 0; // 0 = ไม่มีข้อมูลเลย
-      for (var tr = teValues.length - 1; tr >= 0; tr--) {
-        var teHasData = teValues[tr].some(function (v) { return v !== '' && v !== null; });
-        if (teHasData) { teLastRealRow = tr + 1; break; } // แปลงเป็น row number แบบ 1-based
-      }
-
-      var teDeleted = 0;
-      if (teLastRealRow > 0 && teBefore.maxRows > teLastRealRow) {
-        teDeleted = teBefore.maxRows - teLastRealRow;
-        teSheet.deleteRows(teLastRealRow + 1, teDeleted);
-      }
-
-      response.status = 'success';
-      response.message = 'ตัดแถวว่างส่วนเกินออก ' + teDeleted + ' แถว (เหลือ ' + teLastRealRow + ' แถวที่มีข้อมูลจริง)';
-      response.data = { before: teBefore, lastRealRow: teLastRealRow, deleted: teDeleted, after: { lastRow: teSheet.getLastRow(), maxRows: teSheet.getMaxRows() } };
-
     } else if (action === 'getStockItems') {
       // ชั่วคราว: จับเวลาแต่ละขั้นตอนเพื่อหาสาเหตุที่หน้านับสต๊อกโหลดช้า (ลบออกได้เมื่อหาสาเหตุเจอแล้ว)
       var _debug = !!data.debug;
