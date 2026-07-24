@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X } from 'lucide-react';
+import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X, Calculator } from 'lucide-react';
 import toast from 'react-hot-toast';
+import CalcModal from '../components/CalcModal';
 
 const todayYMD = () => {
   const d = new Date();
@@ -60,6 +61,10 @@ export default function MonthEndClosing() {
   const [qtyMap, setQtyMap] = useState({}); // productId -> ยอดคงเหลือสิ้นเดือนที่กรอก (string)
   const [historyMap, setHistoryMap] = useState({}); // productId -> [{qty, price, amount, recorder, time}]
   const [historyFor, setHistoryFor] = useState(null); // { name, history }
+
+  // เครื่องคิดเลขสะสมของช่องยอดคงเหลือ (นับหลายจุด/หลายลังแล้วรวม) — เหมือนหน้านับสต๊อก
+  const [calcFor, setCalcFor] = useState(null);   // { productId, name }
+  const [calcParts, setCalcParts] = useState({}); // productId -> number[]
 
   useEffect(() => {
     if (branch) loadItems();
@@ -261,14 +266,21 @@ export default function MonthEndClosing() {
                       <td className="px-4 py-2.5 text-right text-sm text-sky-700 bg-sky-50/30 font-mono">
                         {unitPrice.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
-                      <td className="px-2 py-2 text-center bg-indigo-50/40">
-                        <input
-                          type="number" min="0" step="any" inputMode="decimal"
-                          value={qty}
-                          onChange={(e) => handleQtyChange(key, e.target.value)}
-                          placeholder="0"
-                          className="w-full px-2 py-2 border border-indigo-200 rounded-lg text-center text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
+                      <td className="px-2 py-2 bg-indigo-50/40">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number" min="0" step="any" inputMode="decimal"
+                            value={qty}
+                            onChange={(e) => handleQtyChange(key, e.target.value)}
+                            placeholder="0"
+                            className="w-full min-w-0 px-2 py-2 border border-indigo-200 rounded-lg text-center text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          />
+                          <button type="button" title="รวมยอดหลายจุด (เครื่องคิดเลข)"
+                            onClick={() => setCalcFor({ productId: key, name: item.name })}
+                            className={`shrink-0 p-2 rounded-lg border transition-colors ${(calcParts[key]?.length) ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-gray-200 text-purple-500 hover:bg-purple-50'}`}>
+                            <Calculator className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                       <td className="px-4 py-2.5 text-right text-sm font-semibold text-emerald-700 bg-emerald-50/30 font-mono">
                         {rowTotal !== null ? rowTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
@@ -303,6 +315,15 @@ export default function MonthEndClosing() {
         name={historyFor?.name}
         history={historyFor?.history}
         onClose={() => setHistoryFor(null)}
+      />
+
+      <CalcModal
+        open={!!calcFor}
+        name={calcFor?.name}
+        parts={calcFor ? (calcParts[calcFor.productId] || []) : []}
+        onChangeParts={(arr) => setCalcParts((p) => ({ ...p, [calcFor.productId]: arr }))}
+        onApply={(total) => { handleQtyChange(calcFor.productId, String(total)); setCalcFor(null); }}
+        onClose={() => setCalcFor(null)}
       />
     </div>
   );
