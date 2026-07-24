@@ -4,8 +4,14 @@ import { apiCall } from '../services/api';
 import { Trash2, Search, Loader2, AlertCircle, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const todayYMD = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 // WASTE — บันทึกของเสีย: แสดงรายชื่อไอเทมเหมือนหน้านับสต๊อก กรอกแค่ "จำนวนที่เสีย" ช่องเดียว
-// บันทึกลงชีท "waste" แบบเพิ่มแถวใหม่ทุกครั้ง (log ต่อเนื่อง ไม่ใช่ยอดสรุปรายวัน) แล้วเคลียร์ฟอร์มให้กรอกรอบใหม่ได้ทันที
+// เลือกวันที่ของเสียได้ (ค่าเริ่มต้นวันนี้ เผื่อบันทึกย้อนหลัง) — บันทึกลงชีท "waste" แบบเพิ่มแถวใหม่ทุกครั้ง
+// (log ต่อเนื่อง ไม่ใช่ยอดสรุปรายวัน) แล้วเคลียร์ฟอร์มให้กรอกรอบใหม่ได้ทันที
 export default function Waste() {
   const { user } = useAuth();
   const branch = user?.branch;
@@ -14,6 +20,7 @@ export default function Waste() {
   const [loading, setLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [wasteDate, setWasteDate] = useState(todayYMD());
   const [qtyMap, setQtyMap] = useState({}); // productId -> จำนวนที่เสียที่กรอก (string)
 
   useEffect(() => {
@@ -79,7 +86,7 @@ export default function Waste() {
     setIsSaving(true);
     try {
       const res = await apiCall('saveWaste', {
-        branch, recorder: user?.username || 'Unknown', items: payload,
+        branch, date: wasteDate, recorder: user?.username || 'Unknown', items: payload,
       });
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกของเสียเรียบร้อยแล้ว');
@@ -107,6 +114,12 @@ export default function Waste() {
               บันทึกจำนวนสินค้าที่เสีย/ทิ้ง · สาขา: <span className="font-semibold text-rose-600">{branch}</span>
             </p>
           </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-medium text-gray-700 whitespace-nowrap">วันที่ของเสีย :</label>
+          <input type="date" value={wasteDate} onChange={(e) => setWasteDate(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-rose-500 outline-none" />
         </div>
       </div>
 

@@ -1231,8 +1231,8 @@ function doPost(e) {
       }
       if (!wsSheet) throw new Error('ไม่พบชีท waste (gid=1493705916)');
 
-      var wsHeader = ['วันที่เวลาที่คีย์', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนที่เสีย', 'ผู้บันทึก'];
-      if (wsSheet.getLastRow() < 1 || String(wsSheet.getRange(1, 1).getValue() || '') === '') {
+      var wsHeader = ['วันที่ของเสีย', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนที่เสีย', 'ผู้บันทึก', 'เวลาที่คีย์'];
+      if (String(wsSheet.getRange(1, 1).getValue() || '') !== wsHeader[0]) {
         wsSheet.getRange(1, 1, 1, wsHeader.length).setValues([wsHeader]);
         wsSheet.getRange(1, 1, 1, wsHeader.length).setFontWeight('bold');
       }
@@ -1243,14 +1243,20 @@ function doPost(e) {
       if (!wsBranch) throw new Error('ไม่ระบุสาขา');
       if (!wsItems.length) throw new Error('ไม่มีรายการที่กรอกจำนวนที่เสีย');
 
-      var wsNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+      // วันที่ของเสีย: เลือกได้จากหน้าเว็บ (ค่าเริ่มต้นวันนี้) — เผื่อบันทึกย้อนหลัง แยกจากเวลาที่คีย์จริงซึ่งใช้เวลา ณ ตอนกดบันทึก
+      var wsDateStr = String(data.date || '').trim(); // YYYY-MM-DD
+      var wsDateDisp = wsDateStr;
+      var wsDm = wsDateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (wsDm) wsDateDisp = wsDm[3] + '/' + wsDm[2] + '/' + wsDm[1];
+      if (!wsDateDisp) wsDateDisp = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
+      var wsKeyedAt = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
       var wsNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
       var wsRows = [];
       wsItems.forEach(function (it) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
         var codeN = wsNorm(it.productId);
-        wsRows.push([wsNow, wsBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, wsRecorder]);
+        wsRows.push([wsDateDisp, wsBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, wsRecorder, wsKeyedAt]);
       });
       if (!wsRows.length) throw new Error('ไม่มีรายการที่กรอกจำนวนที่เสียถูกต้อง');
       wsSheet.getRange(wsSheet.getLastRow() + 1, 1, wsRows.length, wsHeader.length).setValues(wsRows);
