@@ -645,6 +645,13 @@ function doPost(e) {
       var previousStockMap = {}; // second-to-last = ยอดยกมา
       var stockHistoryMap = {}; // all entries sorted oldest-first
       var countSheetR = stockSs.getSheetByName('ข้อมูลนับสตอค');
+      if (_debug && countSheetR) {
+        _timing.countSheetDims = {
+          lastRow: countSheetR.getLastRow(), lastCol: countSheetR.getLastColumn(),
+          maxRows: countSheetR.getMaxRows(), maxCols: countSheetR.getMaxColumns()
+        };
+      }
+      _timing.beforeCountRead = new Date().getTime() - _t0;
       if (countSheetR && countSheetR.getLastRow() > 1) {
         var csValues = countSheetR.getDataRange().getValues();
         for (var cs = 1; cs < csValues.length; cs++) {
