@@ -1221,6 +1221,44 @@ function doPost(e) {
       response.status = 'success';
       response.data = { count: planRows.length };
 
+    } else if (action === 'saveWaste') {
+      // บันทึกของเสีย (WASTE) — ลงชีท "waste" (gid=1493705916) แบบเพิ่มแถวใหม่ทุกครั้ง (log ต่อเนื่อง ไม่ใช่ยอดสรุป)
+      var wsSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
+      var wsSheet = null;
+      var wsAllSheets = wsSs.getSheets();
+      for (var wsi = 0; wsi < wsAllSheets.length; wsi++) {
+        if (wsAllSheets[wsi].getSheetId() === 1493705916) { wsSheet = wsAllSheets[wsi]; break; }
+      }
+      if (!wsSheet) throw new Error('ไม่พบชีท waste (gid=1493705916)');
+
+      var wsHeader = ['วันที่เวลาที่คีย์', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนที่เสีย', 'ผู้บันทึก'];
+      if (wsSheet.getLastRow() < 1 || String(wsSheet.getRange(1, 1).getValue() || '') === '') {
+        wsSheet.getRange(1, 1, 1, wsHeader.length).setValues([wsHeader]);
+        wsSheet.getRange(1, 1, 1, wsHeader.length).setFontWeight('bold');
+      }
+
+      var wsBranch = data.branch || '';
+      var wsRecorder = data.recorder || 'Unknown';
+      var wsItems = data.items || [];
+      if (!wsBranch) throw new Error('ไม่ระบุสาขา');
+      if (!wsItems.length) throw new Error('ไม่มีรายการที่กรอกจำนวนที่เสีย');
+
+      var wsNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+      var wsNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
+      var wsRows = [];
+      wsItems.forEach(function (it) {
+        var q = parseFloat(it.qty);
+        if (isNaN(q) || q <= 0) return;
+        var codeN = wsNorm(it.productId);
+        wsRows.push([wsNow, wsBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, wsRecorder]);
+      });
+      if (!wsRows.length) throw new Error('ไม่มีรายการที่กรอกจำนวนที่เสียถูกต้อง');
+      wsSheet.getRange(wsSheet.getLastRow() + 1, 1, wsRows.length, wsHeader.length).setValues(wsRows);
+
+      response.status = 'success';
+      response.message = 'บันทึกของเสียแล้ว ' + wsRows.length + ' รายการ';
+      response.data = { count: wsRows.length };
+
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
 

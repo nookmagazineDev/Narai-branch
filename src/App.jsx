@@ -12,6 +12,7 @@ import ScheduleHistory from './pages/ScheduleHistory';
 import StockList from './pages/StockList';
 import StockTotalList from './pages/StockTotalList';
 import MonthEndClosing from './pages/MonthEndClosing';
+import Waste from './pages/Waste';
 import ExpenseEntry from './pages/ExpenseEntry';
 import SalesSearch from './pages/SalesSearch';
 
@@ -73,6 +74,7 @@ function App() {
             <Route path="stock/list" element={<StockList />} />
             <Route path="stock/total" element={<StockTotalList />} />
             <Route path="stock/month-end" element={<MonthEndClosing />} />
+            <Route path="stock/waste" element={<Waste />} />
             <Route path="expense" element={<ExpenseEntry />} />
             <Route path="sales-search" element={<SalesSearch />} />
           </Route>

@@ -59,7 +59,10 @@ export default function DashboardLayout() {
         { name: 'นับสต๊อกและขอเบิก', path: '/stock/list' },
         ...(String(user?.branch).toLowerCase() === 'all'
           ? [{ name: 'ดูยอดรวมทุกสาขา', path: '/stock/total' }]
-          : [{ name: 'ปิดยอดสิ้นเดือน', path: '/stock/month-end' }])
+          : [
+              { name: 'ปิดยอดสิ้นเดือน', path: '/stock/month-end' },
+              { name: 'WASTE', path: '/stock/waste' },
+            ])
       ]
     },
     { name: 'กรอกรายจ่าย', path: '/expense', icon: Wallet },
