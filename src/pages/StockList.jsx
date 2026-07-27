@@ -1072,6 +1072,9 @@ export default function StockList() {
           : `📦 ส่งใบเบิกสำเร็จ! เลขที่ ${okResults[0].no} • ${okResults[0].count} รายการ`,
         { duration: 8000 }
       );
+      // สำเร็จครบทุกใบ — ปิดหน้าต่างทันที ไม่ต้องค้างให้กดปิดเอง (เลขที่ใบเบิกโชว์ผ่าน toast ด้านบนแล้ว)
+      setShowOrderModal(false);
+      setOrderResult(null);
     } else {
       toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางใบมีปัญหา ดูรายละเอียดด้านล่าง`);
     }
