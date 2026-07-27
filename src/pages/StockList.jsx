@@ -189,6 +189,9 @@ export default function StockList() {
   const [expandedDoc, setExpandedDoc] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
   const [pendingOrders, setPendingOrders] = useState([]);
+  const [expandedPendingNo, setExpandedPendingNo] = useState(null); // เลขที่ใบเบิกที่กำลังกางดูรายการอยู่
+  const [pendingItemsCache, setPendingItemsCache] = useState({});   // เลขที่ใบเบิก -> รายการสินค้า (กันยิงซ้ำ)
+  const [isLoadingPendingItems, setIsLoadingPendingItems] = useState(false);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
@@ -748,6 +751,24 @@ export default function StockList() {
     } catch (err) {
       console.error(err);
       toast.error(err.message || 'สร้าง Excel ไม่สำเร็จ');
+    }
+  };
+
+  // กางดูรายการสินค้าในใบเบิกค้าง (pendingOrders มีแค่สรุปยอด ไม่มีรายการติดมาด้วย) — ดึงตอนกางครั้งแรกแล้วเก็บแคชไว้
+  const togglePendingExpand = async (order) => {
+    const no = order.no;
+    if (expandedPendingNo === no) { setExpandedPendingNo(null); return; }
+    setExpandedPendingNo(no);
+    if (pendingItemsCache[no]) return;
+    setIsLoadingPendingItems(true);
+    try {
+      const doc = await buildDocFromPendingOrder(order);
+      setPendingItemsCache(prev => ({ ...prev, [no]: doc.items }));
+    } catch (err) {
+      toast.error(err.message || 'ดึงรายการสินค้าไม่สำเร็จ');
+      setExpandedPendingNo(null);
+    } finally {
+      setIsLoadingPendingItems(false);
     }
   };
 
@@ -2272,36 +2293,77 @@ export default function StockList() {
                       const ordDate = order.orderDate || '-';
                       const date = order.deldate || order.DelDate || order.Ord_DelDate || order.date || '-';
                       const status = order.status || order.Status || order.Ord_Status || 'รอรับของ';
+                      const isOpen = expandedPendingNo === no;
                       return (
-                        <tr key={idx} className="hover:bg-amber-50/50 transition-colors">
-                          <td className="px-4 py-3 font-mono font-semibold text-amber-700">{no}</td>
-                          <td className="px-4 py-3 text-gray-600">{String(ordDate).split('T')[0]}</td>
-                          <td className="px-4 py-3 text-gray-600">{String(date).split('T')[0]}</td>
-                          <td className="px-4 py-3 text-right text-gray-600">
-                            {order.itemCount != null ? `${order.itemCount} รายการ` : '-'}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => exportPendingOrderToPDF(order)}
-                                title="ดาวน์โหลด PDF"
-                                className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
-                              >
-                                <FileDown className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => exportPendingOrderToExcel(order)}
-                                title="ดาวน์โหลด Excel"
-                                className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
-                              >
-                                <FileSpreadsheet className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                        <React.Fragment key={idx}>
+                          <tr className="hover:bg-amber-50/50 cursor-pointer transition-colors" onClick={() => togglePendingExpand(order)}>
+                            <td className="px-4 py-3 font-mono font-semibold text-amber-700">
+                              <span className="inline-block w-3 text-amber-400">{isOpen ? '▾' : '▸'}</span> {no}
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{String(ordDate).split('T')[0]}</td>
+                            <td className="px-4 py-3 text-gray-600">{String(date).split('T')[0]}</td>
+                            <td className="px-4 py-3 text-right text-gray-600">
+                              {order.itemCount != null ? `${order.itemCount} รายการ` : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => exportPendingOrderToPDF(order)}
+                                  title="ดาวน์โหลด PDF"
+                                  className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                                >
+                                  <FileDown className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => exportPendingOrderToExcel(order)}
+                                  title="ดาวน์โหลด Excel"
+                                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                                >
+                                  <FileSpreadsheet className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-gray-50/70">
+                              <td colSpan="6" className="px-4 py-3">
+                                {isLoadingPendingItems && !pendingItemsCache[no] ? (
+                                  <div className="flex items-center justify-center py-4 text-amber-600">
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                  </div>
+                                ) : (
+                                  <table className="w-full text-xs border-collapse">
+                                    <thead className="bg-white border-b">
+                                      <tr>
+                                        <th className="px-3 py-2 text-left text-gray-500 font-semibold">รหัส</th>
+                                        <th className="px-3 py-2 text-left text-gray-500 font-semibold">ชื่อสินค้า</th>
+                                        <th className="px-3 py-2 text-right text-gray-500 font-semibold">จำนวน</th>
+                                        <th className="px-3 py-2 text-left text-gray-500 font-semibold">หน่วย</th>
+                                        <th className="px-3 py-2 text-right text-gray-500 font-semibold">ราคา/หน่วย</th>
+                                        <th className="px-3 py-2 text-right text-gray-500 font-semibold">มูลค่า</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y">
+                                      {(pendingItemsCache[no] || []).map((it, i) => (
+                                        <tr key={i} className="hover:bg-amber-50/40">
+                                          <td className="px-3 py-2 font-mono text-gray-500">{it.itemCode}</td>
+                                          <td className="px-3 py-2 text-gray-800">{it.itemName}</td>
+                                          <td className="px-3 py-2 text-right font-semibold text-amber-700">{it.qty}</td>
+                                          <td className="px-3 py-2 text-gray-500">{it.unit}</td>
+                                          <td className="px-3 py-2 text-right text-gray-600">{it.unitPrice}</td>
+                                          <td className="px-3 py-2 text-right text-gray-700">{it.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
