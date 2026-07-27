@@ -153,6 +153,8 @@ export default function StockList() {
   const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
   const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
   const [pctInputMap, setPctInputMap] = useState({});
+  const [pct259InputMap, setPct259InputMap] = useState({}); // สาขาหัว 2 ราคาเท่านั้น — date -> จำนวนลูกค้าราคา 259 ที่กรอก
+  const [pct359InputMap, setPct359InputMap] = useState({}); // สาขาหัว 2 ราคาเท่านั้น — date -> จำนวนลูกค้าราคา 359 ที่กรอก
   const [isSavingAllPcts, setIsSavingAllPcts] = useState(false);
   const [coverBuckets, setCoverBuckets] = useState(null);
   const [coverBucketsLabel, setCoverBucketsLabel] = useState('');
@@ -265,11 +267,15 @@ export default function StockList() {
   }, [effectiveBranch]);
 
   useEffect(() => {
-    const newMap = {};
+    const newMap = {}, new259 = {}, new359 = {};
     specialPcts.forEach(item => {
       newMap[item.date] = item.percent;
+      if (item.percent259 !== undefined) new259[item.date] = item.percent259;
+      if (item.percent359 !== undefined) new359[item.date] = item.percent359;
     });
     setPctInputMap(newMap);
+    setPct259InputMap(new259);
+    setPct359InputMap(new359);
   }, [specialPcts]);
 
   const handlePrevMonth = () => {
@@ -293,29 +299,56 @@ export default function StockList() {
   const handleTempPctChange = (ymdStr, val) => {
     setPctInputMap(prev => ({ ...prev, [ymdStr]: val }));
   };
+  const handleTemp259Change = (ymdStr, val) => {
+    setPct259InputMap(prev => ({ ...prev, [ymdStr]: val }));
+  };
+  const handleTemp359Change = (ymdStr, val) => {
+    setPct359InputMap(prev => ({ ...prev, [ymdStr]: val }));
+  };
 
   const handleSaveAllPcts = async () => {
     if (!effectiveBranch) return;
+    const isTwoTier = !!coverBuckets?.hasTwoTier;
 
     const updates = [];
-    const allDates = new Set([
-      ...Object.keys(pctInputMap),
-      ...specialPcts.map(p => p.date)
-    ]);
+    if (isTwoTier) {
+      // สาขาหัว 2 ราคา — เทียบทั้งจำนวน 259 และ 359 แยกกัน เปลี่ยนตัวใดตัวหนึ่งก็ถือว่าต้องบันทึก
+      const allDates = new Set([
+        ...Object.keys(pct259InputMap), ...Object.keys(pct359InputMap),
+        ...specialPcts.map(p => p.date),
+      ]);
+      allDates.forEach(date => {
+        const orig = specialPcts.find(p => p.date === date);
+        const orig259 = Number(orig?.percent259) || 0;
+        const orig359 = Number(orig?.percent359) || 0;
+        const cur259Str = pct259InputMap[date];
+        const cur359Str = pct359InputMap[date];
+        const cur259 = cur259Str === '' || cur259Str === undefined || cur259Str === null ? 0 : Number(cur259Str);
+        const cur359 = cur359Str === '' || cur359Str === undefined || cur359Str === null ? 0 : Number(cur359Str);
+        if (cur259 !== orig259 || cur359 !== orig359) {
+          updates.push({ date, percent259: cur259, percent359: cur359 });
+        }
+      });
+    } else {
+      const allDates = new Set([
+        ...Object.keys(pctInputMap),
+        ...specialPcts.map(p => p.date)
+      ]);
 
-    allDates.forEach(date => {
-      const originalVal = specialPcts.find(p => p.date === date)?.percent;
-      const currentValStr = pctInputMap[date];
-      const currentVal = currentValStr === '' || currentValStr === undefined || currentValStr === null ? 0 : Number(currentValStr);
-      const originalValNum = originalVal === undefined || originalVal === null ? 0 : Number(originalVal);
+      allDates.forEach(date => {
+        const originalVal = specialPcts.find(p => p.date === date)?.percent;
+        const currentValStr = pctInputMap[date];
+        const currentVal = currentValStr === '' || currentValStr === undefined || currentValStr === null ? 0 : Number(currentValStr);
+        const originalValNum = originalVal === undefined || originalVal === null ? 0 : Number(originalVal);
 
-      if (currentVal !== originalValNum) {
-        updates.push({
-          date,
-          percent: currentVal
-        });
-      }
-    });
+        if (currentVal !== originalValNum) {
+          updates.push({
+            date,
+            percent: currentVal
+          });
+        }
+      });
+    }
 
     if (updates.length === 0) {
       toast('ไม่มีข้อมูลเปอร์เซ็นต์พิเศษที่เปลี่ยนแปลง', { icon: 'ℹ️' });
@@ -834,8 +867,12 @@ export default function StockList() {
       ]);
 
       const savedCoversMap = {};
+      const savedCovers359Map = {};
       if (pctRes.status === 'success') {
-        (pctRes.data || []).forEach(item => { savedCoversMap[item.date] = Number(item.percent) || 0; });
+        (pctRes.data || []).forEach(item => {
+          savedCoversMap[item.date] = Number(item.percent) || 0;
+          if (item.percent359 !== undefined) savedCovers359Map[item.date] = Number(item.percent359) || 0;
+        });
       }
       const realCoversMap = {};
       const realCovers359Map = {};
@@ -851,10 +888,11 @@ export default function StockList() {
         return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
       };
       // สำหรับสินค้าพรีเมียม (PREMIUM_359_ONLY_CODES) ในสาขาที่มี 2 ราคา — ใช้หัวลูกค้า 359 ล้วนๆ แทนยอดรวม
-      // (ไม่มีค่าที่บันทึกเองแยกราคาในปฏิทิน จึงใช้ยอดขายจริง(ถ้ามี) หรือค่าเฉลี่ย 359 จากเดือนที่แล้วเท่านั้น)
+      // ลำดับความสำคัญ: ยอดขายจริง (วันที่ผ่านไปแล้ว) > ค่าที่กรอกเองแยกราคาในปฏิทิน > ค่าเฉลี่ย 359 จากเดือนที่แล้ว
       const covers359ForDate = (d) => {
         const ymdStr = toYMD(d);
         if (realCovers359Map[ymdStr] !== undefined) return realCovers359Map[ymdStr];
+        if (savedCovers359Map[ymdStr] !== undefined) return savedCovers359Map[ymdStr];
         return coverBucketFor(d, bucketInfo.buckets359);
       };
 
@@ -1551,22 +1589,34 @@ export default function StockList() {
                           {getCalendarDays().map((dayObj) => {
                             const ymdStr = dateToYMD(dayObj.date);
                             const isToday = dateToYMD(new Date()) === ymdStr;
+                            const isTwoTier = !!coverBuckets?.hasTwoTier;
                             const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
                             const suggestedVal = coverBucketFor(dayObj.date, coverBuckets?.buckets);
-                            // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) แสดงแยกให้เห็นใต้ตัวเลขรวม (แสดงผลอย่างเดียว
-                            // ไม่กระทบค่าที่ใช้จริง/บันทึก ซึ่งยังเป็นยอดรวมเหมือนเดิม)
-                            const suggested259 = coverBuckets?.hasTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets259) : null;
-                            const suggested359 = coverBuckets?.hasTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets359) : null;
+                            // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) — กรอกแยกได้จริง (มีผลกับสูตรคำนวณยอดเบิก
+                            // ของสินค้าพรีเมียม 359 โดยตรง) ไม่ใช่แค่แสดงผลเฉยๆ เหมือนก่อนหน้านี้
+                            const suggested259 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets259) : null;
+                            const suggested359 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets359) : null;
+                            const val259 = pct259InputMap[ymdStr] !== undefined ? pct259InputMap[ymdStr] : '';
+                            const val359 = pct359InputMap[ymdStr] !== undefined ? pct359InputMap[ymdStr] : '';
 
-                            const originalVal = specialPcts.find(p => p.date === ymdStr)?.percent;
-                            const currentValNum = val === '' ? 0 : Number(val);
-                            const originalValNum = originalVal === undefined ? 0 : Number(originalVal);
-                            const isModified = dayObj.isCurrentMonth && (currentValNum !== originalValNum);
+                            const orig = specialPcts.find(p => p.date === ymdStr);
+                            let isModified;
+                            if (isTwoTier) {
+                              const cur259Num = val259 === '' ? 0 : Number(val259);
+                              const cur359Num = val359 === '' ? 0 : Number(val359);
+                              const orig259Num = Number(orig?.percent259) || 0;
+                              const orig359Num = Number(orig?.percent359) || 0;
+                              isModified = dayObj.isCurrentMonth && (cur259Num !== orig259Num || cur359Num !== orig359Num);
+                            } else {
+                              const currentValNum = val === '' ? 0 : Number(val);
+                              const originalValNum = orig?.percent === undefined ? 0 : Number(orig.percent);
+                              isModified = dayObj.isCurrentMonth && (currentValNum !== originalValNum);
+                            }
 
                             return (
                               <div
                                 key={dayObj.key}
-                                className={`p-1.5 border rounded-lg flex flex-col justify-between ${coverBuckets?.hasTwoTier ? 'min-h-[76px]' : 'min-h-[64px]'} transition-colors ${
+                                className={`p-1.5 border rounded-lg flex flex-col justify-between ${isTwoTier ? 'min-h-[92px]' : 'min-h-[64px]'} transition-colors ${
                                   dayObj.isCurrentMonth
                                     ? isModified
                                       ? 'border-amber-400 bg-amber-50/50 shadow-sm'
@@ -1591,34 +1641,62 @@ export default function StockList() {
                                   )}
                                 </div>
 
-                                <div className={`mt-1 flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
-                                  isModified 
-                                    ? 'border-amber-300 focus-within:ring-amber-500 focus-within:border-amber-500' 
-                                    : 'border-gray-200 focus-within:ring-purple-500 focus-within:border-purple-500'
-                                }`}>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="1"
-                                    placeholder={String(suggestedVal)}
-                                    value={val}
-                                    onChange={(e) => handleTempPctChange(ymdStr, e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.target.blur();
-                                      }
-                                    }}
-                                    disabled={isSavingAllPcts}
-                                    title={val === '' ? `ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)` : undefined}
-                                    className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                  />
-                                  <span className="text-[9px] text-gray-400 font-semibold shrink-0">คน</span>
-                                </div>
-                                {suggested259 !== null && (
-                                  <div className="mt-0.5 text-[8px] leading-tight text-center whitespace-nowrap">
-                                    <span className="text-sky-600 font-semibold">259:{suggested259}</span>
-                                    <span className="text-gray-300"> · </span>
-                                    <span className="text-rose-600 font-semibold">359:{suggested359}</span>
+                                {isTwoTier ? (
+                                  <div className="mt-1 space-y-0.5">
+                                    <div className={`flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
+                                      isModified ? 'border-amber-300 focus-within:ring-amber-500' : 'border-sky-200 focus-within:ring-sky-500'
+                                    }`}>
+                                      <span className="text-[8px] text-sky-600 font-bold shrink-0 mr-0.5">259</span>
+                                      <input
+                                        type="number" min="0" step="1"
+                                        placeholder={String(suggested259)}
+                                        value={val259}
+                                        onChange={(e) => handleTemp259Change(ymdStr, e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                        disabled={isSavingAllPcts}
+                                        title={val259 === '' ? 'ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)' : undefined}
+                                        className="w-full text-right text-[11px] bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      />
+                                    </div>
+                                    <div className={`flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
+                                      isModified ? 'border-amber-300 focus-within:ring-amber-500' : 'border-rose-200 focus-within:ring-rose-500'
+                                    }`}>
+                                      <span className="text-[8px] text-rose-600 font-bold shrink-0 mr-0.5">359</span>
+                                      <input
+                                        type="number" min="0" step="1"
+                                        placeholder={String(suggested359)}
+                                        value={val359}
+                                        onChange={(e) => handleTemp359Change(ymdStr, e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                        disabled={isSavingAllPcts}
+                                        title={val359 === '' ? 'ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)' : undefined}
+                                        className="w-full text-right text-[11px] bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className={`mt-1 flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
+                                    isModified
+                                      ? 'border-amber-300 focus-within:ring-amber-500 focus-within:border-amber-500'
+                                      : 'border-gray-200 focus-within:ring-purple-500 focus-within:border-purple-500'
+                                  }`}>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      placeholder={String(suggestedVal)}
+                                      value={val}
+                                      onChange={(e) => handleTempPctChange(ymdStr, e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.target.blur();
+                                        }
+                                      }}
+                                      disabled={isSavingAllPcts}
+                                      title={val === '' ? `ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)` : undefined}
+                                      className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    />
+                                    <span className="text-[9px] text-gray-400 font-semibold shrink-0">คน</span>
                                   </div>
                                 )}
                               </div>

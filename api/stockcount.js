@@ -139,7 +139,10 @@ export default async function handler(req, res) {
         const branchName = String((c[1] && c[1].v) || '').toLowerCase().trim();
         if (!aliases.has(branchName)) continue;
         const percent = parseFloat(c[2] && c[2].v) || 0;
-        data.push({ date: dateVal, percent });
+        // คอลัมน์ D/E (จำนวน259/จำนวน359) — มีเฉพาะสาขาที่มีหัว 2 ราคาและเคยบันทึกแยกไว้ ไม่มีก็เป็น undefined
+        const p259 = c[3] && c[3].v !== null && c[3].v !== '' ? parseFloat(c[3].v) : undefined;
+        const p359 = c[4] && c[4].v !== null && c[4].v !== '' ? parseFloat(c[4].v) : undefined;
+        data.push({ date: dateVal, percent, percent259: p259, percent359: p359 });
       }
       return res.status(200).json({ status: 'success', branch: brA, data });
     } catch (error) {

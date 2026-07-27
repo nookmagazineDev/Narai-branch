@@ -1421,12 +1421,16 @@ function doPost(e) {
       var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');
       if (!sheet) {
         sheet = supSs.insertSheet('เปอร์เซ็นการเบิกของแต่ละสาขา');
-        sheet.appendRow(['วันที่', 'ชื่อสาขา', 'เปอร์เซ็น']);
-        sheet.getRange('A1:C1').setFontWeight('bold');
+        sheet.appendRow(['วันที่', 'ชื่อสาขา', 'เปอร์เซ็น', 'จำนวน259', 'จำนวน359']);
+        sheet.getRange('A1:E1').setFontWeight('bold');
+      } else if (String(sheet.getRange(1, 4).getValue() || '') === '') {
+        // ชีทเดิมมีแค่ 3 คอลัมน์ (วันที่/สาขา/เปอร์เซ็น) — เพิ่มคอลัมน์แยกราคา 259/359 โดยไม่กระทบข้อมูลเดิม
+        sheet.getRange(1, 4, 1, 2).setValues([['จำนวน259', 'จำนวน359']]);
+        sheet.getRange(1, 4, 1, 2).setFontWeight('bold');
       }
 
       var pBranch = String(data.branch || '').toLowerCase().trim();
-      var updates = data.updates || []; // array of { date: 'YYYY-MM-DD', percent: number }
+      var updates = data.updates || []; // array of { date, percent, percent259?, percent359? }
 
       if (!pBranch) throw new Error('ไม่ระบุสาขา');
 
@@ -1452,13 +1456,18 @@ function doPost(e) {
       }
 
       var rowsToDelete = [];
-      var rowsToUpdate = []; // Array of { row: number, percent: number }
-      var rowsToAppend = []; // Array of { date: Date, percent: number }
+      var rowsToUpdate = []; // Array of { row, percent, p259, p359 }
+      var rowsToAppend = []; // Array of { date, percent, p259, p359 }
 
       updates.forEach(function (upd) {
         var pDate = upd.date;
-        var pPercent = parseFloat(upd.percent) || 0;
         if (!pDate) return;
+        // สาขามีหัว 2 ราคา ส่ง percent259/percent359 มาแยก — รวมเป็นยอดรวม (percent) ให้อัตโนมัติ
+        // สาขาราคาเดียวส่งแค่ percent เหมือนเดิม (p259/p359 เป็น null ไม่เขียนทับคอลัมน์นั้น)
+        var has259or359 = upd.percent259 !== undefined || upd.percent359 !== undefined;
+        var p259 = has259or359 ? (parseFloat(upd.percent259) || 0) : null;
+        var p359 = has259or359 ? (parseFloat(upd.percent359) || 0) : null;
+        var pPercent = has259or359 ? (p259 + p359) : (parseFloat(upd.percent) || 0);
 
         if (pPercent <= 0) {
           if (dateRowMap[pDate]) {
@@ -1466,11 +1475,11 @@ function doPost(e) {
           }
         } else {
           if (dateRowMap[pDate]) {
-            rowsToUpdate.push({ row: dateRowMap[pDate], percent: pPercent });
+            rowsToUpdate.push({ row: dateRowMap[pDate], percent: pPercent, p259: p259, p359: p359 });
           } else {
             var parts = pDate.split('-');
             var dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-            rowsToAppend.push({ date: dateObj, percent: pPercent });
+            rowsToAppend.push({ date: dateObj, percent: pPercent, p259: p259, p359: p359 });
           }
         }
       });
@@ -1478,11 +1487,12 @@ function doPost(e) {
       // 1. Update existing rows
       rowsToUpdate.forEach(function (upd) {
         sheet.getRange(upd.row, 3).setValue(upd.percent);
+        if (upd.p259 !== null) sheet.getRange(upd.row, 4, 1, 2).setValues([[upd.p259, upd.p359]]);
       });
 
       // 2. Append new rows
       rowsToAppend.forEach(function (app) {
-        sheet.appendRow([app.date, pBranch, app.percent]);
+        sheet.appendRow([app.date, pBranch, app.percent, app.p259 !== null ? app.p259 : '', app.p359 !== null ? app.p359 : '']);
       });
 
       // 3. Delete rows in descending order
