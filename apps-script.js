@@ -1265,6 +1265,72 @@ function doPost(e) {
       response.message = 'บันทึกของเสียแล้ว ' + wsRows.length + ' รายการ';
       response.data = { count: wsRows.length };
 
+    } else if (action === 'cancelPendingOrder') {
+      // ยกเลิกใบเบิกค้าง — แค่บันทึก log ลงชีท "ยกเลิกใบเบิก" (gid=1431574396) เพื่อให้ทีมที่เกี่ยวข้องไปดำเนินการต่อ
+      // ไม่ได้ไปลบ/แก้ข้อมูลใบสั่งจริงใน MySQL (POS) เลย
+      var cpoSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
+      var cpoSheet = null;
+      var cpoAllSheets = cpoSs.getSheets();
+      for (var cpoi = 0; cpoi < cpoAllSheets.length; cpoi++) {
+        if (cpoAllSheets[cpoi].getSheetId() === 1431574396) { cpoSheet = cpoAllSheets[cpoi]; break; }
+      }
+      if (!cpoSheet) throw new Error('ไม่พบชีท ยกเลิกใบเบิก (gid=1431574396)');
+
+      var cpoHeader = ['วันที่สั่ง', 'สาขา', 'เลขที่ใบเบิก', 'วันที่รับ', 'จำนวนรายการ', 'ผู้บันทึก', 'เวลาที่ยกเลิก'];
+      if (String(cpoSheet.getRange(1, 1).getValue() || '') !== cpoHeader[0]) {
+        cpoSheet.getRange(1, 1, 1, cpoHeader.length).setValues([cpoHeader]);
+        cpoSheet.getRange(1, 1, 1, cpoHeader.length).setFontWeight('bold');
+      }
+
+      var cpoBranch = String(data.branch || '').trim();
+      var cpoOrderNo = data.orderNo;
+      if (!cpoBranch) throw new Error('ไม่ระบุสาขา');
+      if (!cpoOrderNo) throw new Error('ไม่ระบุเลขที่ใบเบิก');
+
+      cpoSheet.appendRow([
+        data.orderDate || '', cpoBranch, cpoOrderNo, data.deldate || '',
+        data.itemCount != null ? data.itemCount : '', data.recorder || 'Unknown',
+        Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss')
+      ]);
+
+      response.status = 'success';
+      response.message = 'บันทึกยกเลิกใบเบิกเลขที่ ' + cpoOrderNo + ' เรียบร้อยแล้ว';
+
+    } else if (action === 'getPendingOrderStatus') {
+      // เช็คสถานะพิเศษของใบเบิกค้าง: "ดึงข้อมูลแล้ว" (จากชีท ดึงข้อมูลใบเบิก ของทีมอื่น) และ "ยกเลิกแล้ว" (จากชีท ยกเลิกใบเบิก ด้านบน)
+      // คืนเป็น key แบบ "สาขา-เลขที่ใบเบิก" (ตัวพิมพ์เล็ก) ให้ฝั่งเว็บเช็คแบบ Set ได้เลย
+      var posSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
+      var posSheets = posSs.getSheets();
+      var pulledSheet = null, cancelledSheet = null;
+      for (var posi = 0; posi < posSheets.length; posi++) {
+        var posId = posSheets[posi].getSheetId();
+        if (posId === 2045386486) pulledSheet = posSheets[posi];
+        if (posId === 1431574396) cancelledSheet = posSheets[posi];
+      }
+
+      var pulled = [];
+      if (pulledSheet && pulledSheet.getLastRow() > 1) {
+        // คอลัมน์ C = เลขที่ใบเบิก รูปแบบ "HRS-4889" (สาขา-เลขที่) มาจากทีมอื่น ไม่ใช่ตัวเลขล้วน
+        var pulledValues = pulledSheet.getRange(2, 3, pulledSheet.getLastRow() - 1, 1).getValues();
+        for (var pv = 0; pv < pulledValues.length; pv++) {
+          var pvStr = String(pulledValues[pv][0] || '').trim();
+          if (pvStr) pulled.push(pvStr.toLowerCase());
+        }
+      }
+
+      var cancelled = [];
+      if (cancelledSheet && cancelledSheet.getLastRow() > 1) {
+        var cnValues = cancelledSheet.getRange(2, 1, cancelledSheet.getLastRow() - 1, 3).getValues(); // A=วันที่สั่ง B=สาขา C=เลขที่ใบเบิก
+        for (var cv = 0; cv < cnValues.length; cv++) {
+          var cvBranch = String(cnValues[cv][1] || '').trim();
+          var cvNo = String(cnValues[cv][2] || '').trim();
+          if (cvBranch && cvNo) cancelled.push((cvBranch + '-' + cvNo).toLowerCase());
+        }
+      }
+
+      response.status = 'success';
+      response.data = { pulled: pulled, cancelled: cancelled };
+
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
 

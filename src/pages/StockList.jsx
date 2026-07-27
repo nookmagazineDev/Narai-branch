@@ -195,6 +195,9 @@ export default function StockList() {
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [pulledOrderKeys, setPulledOrderKeys] = useState(new Set());       // "สาขา-เลขที่ใบเบิก" ที่ทีมอื่นดึงข้อมูลไปแล้ว
+  const [cancelledOrderKeys, setCancelledOrderKeys] = useState(new Set()); // "สาขา-เลขที่ใบเบิก" ที่กดยกเลิกไปแล้ว
+  const [cancellingKey, setCancellingKey] = useState(null); // กันกดยกเลิกซ้ำระหว่างรอผลลัพธ์
 
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
@@ -1205,6 +1208,18 @@ export default function StockList() {
     } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
   };
 
+  // เช็คสถานะพิเศษของใบเบิกค้าง — "ดึงข้อมูลแล้ว" (ชีทของทีมอื่น) / "ยกเลิกแล้ว" (ชีทที่กดยกเลิกเอง)
+  const loadPendingOrderStatus = async () => {
+    try {
+      const res = await apiCall('getPendingOrderStatus', {});
+      if (res.status === 'success') {
+        setPulledOrderKeys(new Set(res.data?.pulled || []));
+        setCancelledOrderKeys(new Set(res.data?.cancelled || []));
+      }
+    } catch (e) { /* เช็คสถานะพิเศษไม่ได้ก็ไม่เป็นไร แสดงแค่ "รอรับของ" ตามปกติ */ }
+  };
+  const orderStatusKey = (order, branchOverride) => `${(order.branchName || branchOverride || '').toLowerCase()}-${order.no}`;
+
   const fetchPendingOrders = async () => {
     // user สาขา 'all' ดูใบเบิกค้างของ "ทุกสาขา" รวมกันเลย (ไม่ผูกกับ selectedBranch) — ยิงพร้อมกันทีละสาขา
     if (isAll) {
@@ -1228,6 +1243,7 @@ export default function StockList() {
         });
         setPendingOrders(merged);
         setShowPendingModal(true);
+        loadPendingOrderStatus();
       } finally {
         setIsLoadingPending(false);
       }
@@ -1243,6 +1259,7 @@ export default function StockList() {
       if (data.status === 'success') {
         setPendingOrders(data.data || []);
         setShowPendingModal(true);
+        loadPendingOrderStatus();
       } else {
         toast.error(data.message || 'ไม่สามารถดึงข้อมูลใบเบิกค้างได้');
       }
@@ -1250,6 +1267,34 @@ export default function StockList() {
       toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
     } finally {
       setIsLoadingPending(false);
+    }
+  };
+
+  const cancelPendingOrder = async (order) => {
+    const branchName = order.branchName || effectiveBranch;
+    const key = orderStatusKey(order, branchName);
+    if (cancelledOrderKeys.has(key)) return;
+    if (!window.confirm(`ยืนยันยกเลิกใบเบิกเลขที่ ${order.no} (สาขา ${branchName})?\nระบบจะบันทึกการยกเลิกไว้ให้ทีมที่เกี่ยวข้องไปดำเนินการต่อ ไม่ได้ลบข้อมูลใบสั่งจริงออกจากระบบ POS`)) return;
+    setCancellingKey(key);
+    try {
+      const res = await apiCall('cancelPendingOrder', {
+        branch: branchName,
+        orderNo: order.no,
+        orderDate: order.orderDate,
+        deldate: order.deldate,
+        itemCount: order.itemCount,
+        recorder: user?.username || 'Unknown',
+      });
+      if (res.status === 'success') {
+        toast.success(res.message || 'บันทึกยกเลิกใบเบิกเรียบร้อยแล้ว');
+        setCancelledOrderKeys(prev => new Set(prev).add(key));
+      } else {
+        toast.error(res.message || 'บันทึกยกเลิกไม่สำเร็จ');
+      }
+    } catch (err) {
+      toast.error(err.message || 'เกิดข้อผิดพลาดในการบันทึก');
+    } finally {
+      setCancellingKey(null);
     }
   };
 
@@ -2329,13 +2374,21 @@ export default function StockList() {
                       const no = order.no || order.No || order.Ord_No || '-';
                       const ordDate = order.orderDate || '-';
                       const date = order.deldate || order.DelDate || order.Ord_DelDate || order.date || '-';
-                      const status = order.status || order.Status || order.Ord_Status || 'รอรับของ';
                       const key = pendingKey(order);
                       const isOpen = expandedPendingNo === key;
                       const colCount = isAll ? 7 : 6;
+                      const statusKey = orderStatusKey(order, effectiveBranch);
+                      const isCancelled = cancelledOrderKeys.has(statusKey);
+                      const isPulled = pulledOrderKeys.has(statusKey);
+                      const status = isCancelled ? 'ยกเลิกแล้ว' : isPulled ? 'ดึงข้อมูลแล้ว' : (order.status || order.Status || order.Ord_Status || 'รอรับของ');
+                      const statusClass = isCancelled
+                        ? 'bg-gray-200 text-gray-600 line-through'
+                        : isPulled
+                          ? 'bg-sky-100 text-sky-700'
+                          : 'bg-amber-100 text-amber-700';
                       return (
                         <React.Fragment key={idx}>
-                          <tr className="hover:bg-amber-50/50 cursor-pointer transition-colors" onClick={() => togglePendingExpand(order)}>
+                          <tr className={`hover:bg-amber-50/50 cursor-pointer transition-colors ${isCancelled ? 'opacity-50' : ''}`} onClick={() => togglePendingExpand(order)}>
                             {isAll && <td className="px-4 py-3 text-gray-700 font-medium">{order.branchName || '-'}</td>}
                             <td className="px-4 py-3 font-mono font-semibold text-amber-700">
                               <span className="inline-block w-3 text-amber-400">{isOpen ? '▾' : '▸'}</span> {no}
@@ -2346,7 +2399,7 @@ export default function StockList() {
                               {order.itemCount != null ? `${order.itemCount} รายการ` : '-'}
                             </td>
                             <td className="px-4 py-3 text-center">
-                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">{status}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClass}`}>{status}</span>
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
@@ -2364,6 +2417,16 @@ export default function StockList() {
                                 >
                                   <FileSpreadsheet className="w-4 h-4" />
                                 </button>
+                                {!isCancelled && (
+                                  <button
+                                    onClick={() => cancelPendingOrder(order)}
+                                    disabled={cancellingKey === statusKey}
+                                    title="ยกเลิกใบเบิกนี้"
+                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-40"
+                                  >
+                                    {cancellingKey === statusKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
