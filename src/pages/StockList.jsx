@@ -714,9 +714,10 @@ export default function StockList() {
   // ใบเบิกที่ยังไม่ได้รับของ (pendingOrders) มีแค่สรุปยอด ไม่มีรายการสินค้าติดมาด้วย
   // ต้องดึงรายละเอียดจาก /api/pending_orders?no=... ก่อน แล้วแปลงเป็นรูปแบบเดียวกับ doc ของ withdrawalDocs
   const buildDocFromPendingOrder = async (order) => {
-    const outletId = isAll
+    // order.outletId มีติดมาด้วยแล้วตอนดึงแบบ "ทุกสาขา" (isAll) — ถ้าไม่มีค่อย fallback ไปหาแบบสาขาเดียว
+    const outletId = order.outletId || (isAll
       ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
-      : (user?.outletId || '');
+      : (user?.outletId || ''));
     if (!outletId) throw new Error('ไม่พบรหัสสาขา (outletId)');
     const res = await fetch(`/api/pending_orders?no=${encodeURIComponent(order.no)}&outletId=${encodeURIComponent(outletId)}`);
     const data = await res.json();
@@ -755,15 +756,17 @@ export default function StockList() {
   };
 
   // กางดูรายการสินค้าในใบเบิกค้าง (pendingOrders มีแค่สรุปยอด ไม่มีรายการติดมาด้วย) — ดึงตอนกางครั้งแรกแล้วเก็บแคชไว้
+  // ใช้ outletId+เลขที่ใบเบิก เป็น key (โหมดดูทุกสาขา เลขที่ใบเบิกอาจซ้ำกันข้ามสาขาได้ เพราะนับแยกต่อสาขา)
+  const pendingKey = (order) => `${order.outletId || ''}-${order.no}`;
   const togglePendingExpand = async (order) => {
-    const no = order.no;
-    if (expandedPendingNo === no) { setExpandedPendingNo(null); return; }
-    setExpandedPendingNo(no);
-    if (pendingItemsCache[no]) return;
+    const key = pendingKey(order);
+    if (expandedPendingNo === key) { setExpandedPendingNo(null); return; }
+    setExpandedPendingNo(key);
+    if (pendingItemsCache[key]) return;
     setIsLoadingPendingItems(true);
     try {
       const doc = await buildDocFromPendingOrder(order);
-      setPendingItemsCache(prev => ({ ...prev, [no]: doc.items }));
+      setPendingItemsCache(prev => ({ ...prev, [key]: doc.items }));
     } catch (err) {
       toast.error(err.message || 'ดึงรายการสินค้าไม่สำเร็จ');
       setExpandedPendingNo(null);
@@ -1200,9 +1203,35 @@ export default function StockList() {
   };
 
   const fetchPendingOrders = async () => {
-    const outletId = isAll
-      ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
-      : (user?.outletId || '');
+    // user สาขา 'all' ดูใบเบิกค้างของ "ทุกสาขา" รวมกันเลย (ไม่ผูกกับ selectedBranch) — ยิงพร้อมกันทีละสาขา
+    if (isAll) {
+      const targets = branches.filter(b => b.outletId);
+      if (!targets.length) { toast.error('ไม่พบรายชื่อสาขา'); return; }
+      setIsLoadingPending(true);
+      try {
+        const results = await Promise.all(targets.map(async (b) => {
+          try {
+            const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(b.outletId)}`);
+            const data = await res.json();
+            if (data.status === 'success') {
+              return (data.data || []).map(o => ({ ...o, branchName: b.name, outletId: b.outletId }));
+            }
+          } catch (e) { /* สาขานี้ดึงไม่ได้ ข้ามไปสาขาอื่นต่อ */ }
+          return [];
+        }));
+        const merged = results.flat().sort((a, b) => {
+          const byDate = String(b.orderDate || '').localeCompare(String(a.orderDate || ''));
+          return byDate !== 0 ? byDate : Number(b.no || 0) - Number(a.no || 0);
+        });
+        setPendingOrders(merged);
+        setShowPendingModal(true);
+      } finally {
+        setIsLoadingPending(false);
+      }
+      return;
+    }
+
+    const outletId = user?.outletId || '';
     if (!outletId) { toast.error('ไม่พบรหัสสาขา'); return; }
     setIsLoadingPending(true);
     try {
@@ -1384,33 +1413,37 @@ export default function StockList() {
           </div>
         </div>
 
-        {/* Save + Pending Orders buttons — hidden for 'all' */}
-        {!isAll && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => { setOrderResult(null); setShowOrderModal(true); }}
-              disabled={!effectiveBranch}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl font-medium hover:bg-sky-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-sky-200"
-            >
-              <FileText className="w-4 h-4" />
-              <span className="text-sm">สั่งของ</span>
-            </button>
-            <button
-              onClick={() => { setManualOrderResults(null); setManualConfirmStep(false); setShowManualOrderModal(true); }}
-              disabled={!effectiveBranch}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-teal-200"
-            >
-              <ClipboardList className="w-4 h-4" />
-              <span className="text-sm">สั่งสินค้าแพลน/สั่งเพิ่มเติม</span>
-            </button>
-            <button
-              onClick={fetchPendingOrders}
-              disabled={isLoadingPending}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-amber-200"
-            >
-              {isLoadingPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
-              <span className="text-sm">ใบเบิกค้าง</span>
-            </button>
+        {/* ใบเบิกค้าง: ดูได้ทั้งสาขาปกติและ 'all' (ทุกสาขารวมกัน) — ปุ่มอื่น (สั่งของ/บันทึก) เป็น write action ซ่อนไว้เฉพาะ 'all' */}
+        <div className="flex gap-2">
+          {!isAll && (
+            <>
+              <button
+                onClick={() => { setOrderResult(null); setShowOrderModal(true); }}
+                disabled={!effectiveBranch}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl font-medium hover:bg-sky-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-sky-200"
+              >
+                <FileText className="w-4 h-4" />
+                <span className="text-sm">สั่งของ</span>
+              </button>
+              <button
+                onClick={() => { setManualOrderResults(null); setManualConfirmStep(false); setShowManualOrderModal(true); }}
+                disabled={!effectiveBranch}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 text-white rounded-xl font-medium hover:bg-teal-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-teal-200"
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span className="text-sm">สั่งสินค้าแพลน/สั่งเพิ่มเติม</span>
+              </button>
+            </>
+          )}
+          <button
+            onClick={fetchPendingOrders}
+            disabled={isLoadingPending}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-amber-200"
+          >
+            {isLoadingPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardList className="w-4 h-4" />}
+            <span className="text-sm">ใบเบิกค้าง{isAll ? ' (ทุกสาขา)' : ''}</span>
+          </button>
+          {!isAll && (
             <button
               onClick={handleSave}
               disabled={isSaving || isSubmittingOrder || !effectiveBranch}
@@ -1419,8 +1452,8 @@ export default function StockList() {
               {(isSaving || isSubmittingOrder) ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
               <span>{isSubmittingOrder ? 'กำลังส่งใบเบิก...' : isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
       </div>
 
@@ -2261,11 +2294,11 @@ export default function StockList() {
       {/* Pending Orders Modal */}
       {showPendingModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowPendingModal(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className={`bg-white rounded-xl shadow-2xl w-full ${isAll ? 'max-w-3xl' : 'max-w-2xl'} overflow-hidden`} onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b bg-amber-50 flex justify-between items-center">
               <h3 className="font-bold text-amber-800 flex items-center gap-2">
                 <FileText className="w-5 h-5" />
-                ใบเบิกที่ยังไม่ได้รับของ
+                ใบเบิกที่ยังไม่ได้รับของ{isAll ? ' · ทุกสาขา' : ''}
               </h3>
               <button onClick={() => setShowPendingModal(false)} className="text-amber-400 hover:text-amber-700 font-bold text-xl leading-none">&times;</button>
             </div>
@@ -2279,6 +2312,7 @@ export default function StockList() {
                 <table className="w-full text-sm border-collapse">
                   <thead className="bg-amber-50 border-b">
                     <tr>
+                      {isAll && <th className="px-4 py-2 text-left text-amber-800 font-semibold">สาขา</th>}
                       <th className="px-4 py-2 text-left text-amber-800 font-semibold">เลขที่ใบเบิก</th>
                       <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่สั่ง</th>
                       <th className="px-4 py-2 text-left text-amber-800 font-semibold">วันที่รับ</th>
@@ -2293,10 +2327,13 @@ export default function StockList() {
                       const ordDate = order.orderDate || '-';
                       const date = order.deldate || order.DelDate || order.Ord_DelDate || order.date || '-';
                       const status = order.status || order.Status || order.Ord_Status || 'รอรับของ';
-                      const isOpen = expandedPendingNo === no;
+                      const key = pendingKey(order);
+                      const isOpen = expandedPendingNo === key;
+                      const colCount = isAll ? 7 : 6;
                       return (
                         <React.Fragment key={idx}>
                           <tr className="hover:bg-amber-50/50 cursor-pointer transition-colors" onClick={() => togglePendingExpand(order)}>
+                            {isAll && <td className="px-4 py-3 text-gray-700 font-medium">{order.branchName || '-'}</td>}
                             <td className="px-4 py-3 font-mono font-semibold text-amber-700">
                               <span className="inline-block w-3 text-amber-400">{isOpen ? '▾' : '▸'}</span> {no}
                             </td>
@@ -2329,8 +2366,8 @@ export default function StockList() {
                           </tr>
                           {isOpen && (
                             <tr className="bg-gray-50/70">
-                              <td colSpan="6" className="px-4 py-3">
-                                {isLoadingPendingItems && !pendingItemsCache[no] ? (
+                              <td colSpan={colCount} className="px-4 py-3">
+                                {isLoadingPendingItems && !pendingItemsCache[key] ? (
                                   <div className="flex items-center justify-center py-4 text-amber-600">
                                     <Loader2 className="w-5 h-5 animate-spin" />
                                   </div>
@@ -2347,7 +2384,7 @@ export default function StockList() {
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y">
-                                      {(pendingItemsCache[no] || []).map((it, i) => (
+                                      {(pendingItemsCache[key] || []).map((it, i) => (
                                         <tr key={i} className="hover:bg-amber-50/40">
                                           <td className="px-3 py-2 font-mono text-gray-500">{it.itemCode}</td>
                                           <td className="px-3 py-2 text-gray-800">{it.itemName}</td>
