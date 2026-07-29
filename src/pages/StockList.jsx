@@ -197,6 +197,8 @@ export default function StockList() {
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [pulledOrderKeys, setPulledOrderKeys] = useState(new Set());       // "สาขา-เลขที่ใบเบิก" ที่ทีมอื่นดึงข้อมูลไปแล้ว
   const [cancelledOrderKeys, setCancelledOrderKeys] = useState(new Set()); // "สาขา-เลขที่ใบเบิก" ที่กดยกเลิกไปแล้ว
+  const [preparingOrderKeys, setPreparingOrderKeys] = useState(new Set()); // ชีท จัดของ — โกดังกำลังจัดของ/จัดส่งแล้ว
+  const [receivedOrderKeys, setReceivedOrderKeys] = useState(new Set());   // ชีท รับของ — สาขายืนยันรับของแล้ว
   const [cancellingKey, setCancellingKey] = useState(null); // กันกดยกเลิกซ้ำระหว่างรอผลลัพธ์
 
   // Effective branch used for data loading
@@ -1208,17 +1210,26 @@ export default function StockList() {
     } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
   };
 
-  // เช็คสถานะพิเศษของใบเบิกค้าง — "ดึงข้อมูลแล้ว" (ชีทของทีมอื่น) / "ยกเลิกแล้ว" (ชีทที่กดยกเลิกเอง)
+  // เช็คสถานะพิเศษของใบเบิกค้าง — "ดึงข้อมูลแล้ว"/"ยกเลิกแล้ว" (ชีทของเราเอง คีย์ "สาขา-เลขที่" ชัดเจน)
+  // และ "กำลังจัดส่ง"/"รับของสำเร็จ" (ชีท จัดของ/รับของ ของทีมอื่น บางแถวไม่มีสาขานำหน้า จึงต้องเช็คทั้งแบบมี/ไม่มีสาขาด้วย)
   const loadPendingOrderStatus = async () => {
     try {
       const res = await apiCall('getPendingOrderStatus', {});
       if (res.status === 'success') {
         setPulledOrderKeys(new Set(res.data?.pulled || []));
         setCancelledOrderKeys(new Set(res.data?.cancelled || []));
+        setPreparingOrderKeys(new Set(res.data?.preparing || []));
+        setReceivedOrderKeys(new Set(res.data?.received || []));
       }
     } catch (e) { /* เช็คสถานะพิเศษไม่ได้ก็ไม่เป็นไร แสดงแค่ "รอรับของ" ตามปกติ */ }
   };
   const orderStatusKey = (order, branchOverride) => `${(order.branchName || branchOverride || '').toLowerCase()}-${order.no}`;
+  // จัดของ/รับของ บางแถวเก็บแค่เลขที่ใบเบิกเปล่าๆ ไม่มีสาขานำหน้า (ข้อมูลจากทีมอื่น ไม่ได้มาตรฐานเดียวกันทั้งหมด)
+  // เช็คทั้ง "สาขา-เลขที่" และเลขที่เปล่าๆ กันพลาด
+  const matchesOrderKey = (set, order, branchOverride) => {
+    if (set.has(orderStatusKey(order, branchOverride))) return true;
+    return set.has(String(order.no).toLowerCase());
+  };
 
   const fetchPendingOrders = async () => {
     // user สาขา 'all' ดูใบเบิกค้างของ "ทุกสาขา" รวมกันเลย (ไม่ผูกกับ selectedBranch) — ยิงพร้อมกันทีละสาขา
@@ -2379,13 +2390,24 @@ export default function StockList() {
                       const colCount = isAll ? 7 : 6;
                       const statusKey = orderStatusKey(order, effectiveBranch);
                       const isCancelled = cancelledOrderKeys.has(statusKey);
+                      const isReceived = matchesOrderKey(receivedOrderKeys, order, effectiveBranch);
+                      const isPreparing = matchesOrderKey(preparingOrderKeys, order, effectiveBranch);
                       const isPulled = pulledOrderKeys.has(statusKey);
-                      const status = isCancelled ? 'ยกเลิกแล้ว' : isPulled ? 'ดึงข้อมูลแล้ว' : (order.status || order.Status || order.Ord_Status || 'รอรับของ');
+                      // ลำดับความสำคัญ: ยกเลิก > รับของสำเร็จ > กำลังจัดส่ง > ดึงข้อมูลแล้ว > รอรับของ (ค่าเริ่มต้น)
+                      const status = isCancelled ? 'ยกเลิกแล้ว'
+                        : isReceived ? 'รับของสำเร็จ'
+                        : isPreparing ? 'กำลังจัดส่ง'
+                        : isPulled ? 'ดึงข้อมูลแล้ว'
+                        : (order.status || order.Status || order.Ord_Status || 'รอรับของ');
                       const statusClass = isCancelled
                         ? 'bg-gray-200 text-gray-600 line-through'
-                        : isPulled
-                          ? 'bg-sky-100 text-sky-700'
-                          : 'bg-amber-100 text-amber-700';
+                        : isReceived
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : isPreparing
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : isPulled
+                              ? 'bg-sky-100 text-sky-700'
+                              : 'bg-amber-100 text-amber-700';
                       return (
                         <React.Fragment key={idx}>
                           <tr className={`hover:bg-amber-50/50 cursor-pointer transition-colors ${isCancelled ? 'opacity-50' : ''}`} onClick={() => togglePendingExpand(order)}>

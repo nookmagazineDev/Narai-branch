@@ -1297,15 +1297,22 @@ function doPost(e) {
       response.message = 'บันทึกยกเลิกใบเบิกเลขที่ ' + cpoOrderNo + ' เรียบร้อยแล้ว';
 
     } else if (action === 'getPendingOrderStatus') {
-      // เช็คสถานะพิเศษของใบเบิกค้าง: "ดึงข้อมูลแล้ว" (จากชีท ดึงข้อมูลใบเบิก ของทีมอื่น) และ "ยกเลิกแล้ว" (จากชีท ยกเลิกใบเบิก ด้านบน)
+      // เช็คสถานะพิเศษของใบเบิกค้าง 4 อย่าง จาก 4 ชีทในไฟล์เดียวกัน:
+      //   pulled    = ดึงข้อมูลใบเบิก (ทีมอื่นดึงข้อมูลไปแล้ว)
+      //   cancelled = ยกเลิกใบเบิก (กดยกเลิกจากหน้าเว็บ)
+      //   preparing = จัดของ (โกดังกำลังจัดของ/จัดส่งแล้ว)
+      //   received  = รับของ (สาขายืนยันรับของแล้ว จากหน้า "รับสินค้า")
       // คืนเป็น key แบบ "สาขา-เลขที่ใบเบิก" (ตัวพิมพ์เล็ก) ให้ฝั่งเว็บเช็คแบบ Set ได้เลย
+      // (จัดของ/รับของ บางแถวไม่มีสาขานำหน้าเลขที่ใบเบิก จึงคืนค่าดิบของคอลัมน์นั้นไปด้วย เผื่อต้องเทียบแบบเลขอย่างเดียว)
       var posSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
       var posSheets = posSs.getSheets();
-      var pulledSheet = null, cancelledSheet = null;
+      var pulledSheet = null, cancelledSheet = null, preparingSheet = null, receivedSheet = null;
       for (var posi = 0; posi < posSheets.length; posi++) {
         var posId = posSheets[posi].getSheetId();
         if (posId === 2045386486) pulledSheet = posSheets[posi];
         if (posId === 1431574396) cancelledSheet = posSheets[posi];
+        if (posId === 0) preparingSheet = posSheets[posi];
+        if (posId === 1358423318) receivedSheet = posSheets[posi];
       }
 
       var pulled = [];
@@ -1328,8 +1335,129 @@ function doPost(e) {
         }
       }
 
+      var preparing = [];
+      if (preparingSheet && preparingSheet.getLastRow() > 1) {
+        var jdVals = preparingSheet.getRange(2, 7, preparingSheet.getLastRow() - 1, 1).getValues(); // G = เลขที่ใบเบิก
+        for (var jdv = 0; jdv < jdVals.length; jdv++) {
+          var jdStr = String(jdVals[jdv][0] || '').trim();
+          if (jdStr) preparing.push(jdStr.toLowerCase());
+        }
+      }
+
+      var received = [];
+      if (receivedSheet && receivedSheet.getLastRow() > 1) {
+        var rcVals = receivedSheet.getRange(2, 3, receivedSheet.getLastRow() - 1, 1).getValues(); // C = เลขที่ใบเบิก
+        for (var rcv = 0; rcv < rcVals.length; rcv++) {
+          var rcStr = String(rcVals[rcv][0] || '').trim();
+          if (rcStr) received.push(rcStr.toLowerCase());
+        }
+      }
+
       response.status = 'success';
-      response.data = { pulled: pulled, cancelled: cancelled };
+      response.data = { pulled: pulled, cancelled: cancelled, preparing: preparing, received: received };
+
+    } else if (action === 'getGoodsToReceive') {
+      // หน้า "รับสินค้า" — ดึงรายการจากชีท จัดของ (gid=0) เฉพาะสาขาที่ขอมา จัดกลุ่มตามเลขที่ใบเบิก
+      var gtrSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
+      var gtrSheets = gtrSs.getSheets();
+      var jadongSheet = null, rabkongSheet = null;
+      for (var gtri = 0; gtri < gtrSheets.length; gtri++) {
+        var gtrId = gtrSheets[gtri].getSheetId();
+        if (gtrId === 0) jadongSheet = gtrSheets[gtri];
+        if (gtrId === 1358423318) rabkongSheet = gtrSheets[gtri];
+      }
+      if (!jadongSheet) throw new Error('ไม่พบชีท จัดของ');
+
+      var gtrBranch = String(data.branch || '').toLowerCase().trim();
+      var groups = {}; // เลขที่ใบเบิก -> { orderNo, date, items:[] }
+      if (jadongSheet.getLastRow() > 1) {
+        // A=วันที่ B=สาขา C=รหัส D=ชื่อ E=จำนวนเบิก F=จำนวนส่ง G=เลขที่ใบเบิก H=สถานะฝั่งstore I=เวลาบันทึก
+        var jdAll = jadongSheet.getRange(2, 1, jadongSheet.getLastRow() - 1, 9).getValues();
+        for (var ja = 0; ja < jdAll.length; ja++) {
+          var jRow = jdAll[ja];
+          var jBranch = String(jRow[1] || '').toLowerCase().trim();
+          if (gtrBranch && jBranch !== gtrBranch) continue;
+          var jOrderNo = String(jRow[6] || '').trim();
+          if (!jOrderNo) continue;
+          if (!groups[jOrderNo]) {
+            groups[jOrderNo] = {
+              orderNo: jOrderNo,
+              branch: jRow[1] || '',
+              date: jRow[0] instanceof Date ? Utilities.formatDate(jRow[0], 'Asia/Bangkok', 'yyyy-MM-dd') : String(jRow[0] || ''),
+              items: []
+            };
+          }
+          groups[jOrderNo].items.push({
+            code: jRow[2] || '',
+            name: jRow[3] || '',
+            qtyRequested: jRow[4],
+            qtySent: jRow[5],
+            storeStatus: jRow[7] || ''
+          });
+        }
+      }
+
+      // เช็คว่าใบไหนสาขายืนยันรับของแล้ว (มีข้อมูลอยู่ในชีท รับของ)
+      var receivedNos = {};
+      if (rabkongSheet && rabkongSheet.getLastRow() > 1) {
+        var rbVals = rabkongSheet.getRange(2, 3, rabkongSheet.getLastRow() - 1, 1).getValues(); // C = เลขที่ใบเบิก
+        for (var rb = 0; rb < rbVals.length; rb++) {
+          var rbNo = String(rbVals[rb][0] || '').trim();
+          if (rbNo) receivedNos[rbNo] = true;
+        }
+      }
+
+      var orders = [];
+      for (var key in groups) {
+        var g = groups[key];
+        g.received = !!receivedNos[key];
+        orders.push(g);
+      }
+      orders.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+
+      response.status = 'success';
+      response.data = orders;
+
+    } else if (action === 'saveGoodsReceived') {
+      // บันทึกผลรับของจากหน้า "รับสินค้า" ลงชีท รับของ (gid=1358423316) แบบ 1 แถวต่อ 1 รายการสินค้า
+      // เก็บทั้งจำนวนที่ส่งมา (อ้างอิง) และจำนวนที่รับจริง + สถานะ (ยืนยัน/แก้ไข) ต่อรายการ
+      var sgSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
+      var sgSheet = null;
+      var sgAllSheets = sgSs.getSheets();
+      for (var sgi = 0; sgi < sgAllSheets.length; sgi++) {
+        if (sgAllSheets[sgi].getSheetId() === 1358423318) { sgSheet = sgAllSheets[sgi]; break; }
+      }
+      if (!sgSheet) throw new Error('ไม่พบชีท รับของ (gid=1358423318)');
+
+      var sgHeader = ['วันที่รับ', 'สาขา', 'เลขที่ใบเบิก', 'รหัส', 'ชื่อ', 'จำนวนเบิก', 'จำนวนส่ง', 'จำนวนที่รับจริง', 'สถานะ', 'ผู้บันทึก', 'เวลาบันทึก'];
+      if (String(sgSheet.getRange(1, 1).getValue() || '') !== sgHeader[0]) {
+        sgSheet.getRange(1, 1, 1, sgHeader.length).setValues([sgHeader]);
+        sgSheet.getRange(1, 1, 1, sgHeader.length).setFontWeight('bold');
+      }
+
+      var sgBranch = String(data.branch || '').trim();
+      var sgOrderNo = String(data.orderNo || '').trim();
+      var sgItems = data.items || [];
+      var sgRecorder = data.recorder || 'Unknown';
+      if (!sgBranch) throw new Error('ไม่ระบุสาขา');
+      if (!sgOrderNo) throw new Error('ไม่ระบุเลขที่ใบเบิก');
+      if (!sgItems.length) throw new Error('ไม่มีรายการที่รับของ');
+
+      var sgNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+      var sgToday = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+      var sgRows = sgItems.map(function (it) {
+        return [
+          sgToday, sgBranch, sgOrderNo, it.code || '', it.name || '',
+          it.qtyRequested != null ? it.qtyRequested : '', it.qtySent != null ? it.qtySent : '',
+          it.qtyReceived != null ? it.qtyReceived : '', it.status || 'ยืนยัน',
+          sgRecorder, sgNow
+        ];
+      });
+      sgSheet.getRange(sgSheet.getLastRow() + 1, 1, sgRows.length, sgHeader.length).setValues(sgRows);
+
+      response.status = 'success';
+      response.message = 'บันทึกรับของใบเบิกเลขที่ ' + sgOrderNo + ' เรียบร้อยแล้ว (' + sgRows.length + ' รายการ)';
+      response.data = { count: sgRows.length };
 
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');

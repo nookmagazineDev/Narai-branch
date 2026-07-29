@@ -62,6 +62,7 @@ export default function DashboardLayout() {
           : [
               { name: 'ปิดยอดสิ้นเดือน', path: '/stock/month-end' },
               { name: 'WASTE', path: '/stock/waste' },
+              { name: 'รับสินค้า', path: '/stock/receive' },
             ])
       ]
     },
