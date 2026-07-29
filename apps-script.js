@@ -1421,6 +1421,7 @@ function doPost(e) {
     } else if (action === 'saveGoodsReceived') {
       // บันทึกผลรับของจากหน้า "รับสินค้า" ลงชีท รับของ (gid=1358423316) แบบ 1 แถวต่อ 1 รายการสินค้า
       // เก็บทั้งจำนวนที่ส่งมา (อ้างอิง) และจำนวนที่รับจริง + สถานะ (ยืนยัน/แก้ไข) ต่อรายการ
+      // รายการที่สถานะ "แก้ไข" บังคับมีหมายเหตุ + รูปภาพแนบเสมอ (เช็คซ้ำฝั่ง server กันข้าม validation ฝั่งเว็บ)
       var sgSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
       var sgSheet = null;
       var sgAllSheets = sgSs.getSheets();
@@ -1429,7 +1430,7 @@ function doPost(e) {
       }
       if (!sgSheet) throw new Error('ไม่พบชีท รับของ (gid=1358423318)');
 
-      var sgHeader = ['วันที่รับ', 'สาขา', 'เลขที่ใบเบิก', 'รหัส', 'ชื่อ', 'จำนวนเบิก', 'จำนวนส่ง', 'จำนวนที่รับจริง', 'สถานะ', 'ผู้บันทึก', 'เวลาบันทึก'];
+      var sgHeader = ['วันที่รับ', 'สาขา', 'เลขที่ใบเบิก', 'รหัส', 'ชื่อ', 'จำนวนเบิก', 'จำนวนส่ง', 'จำนวนที่รับจริง', 'สถานะ', 'หมายเหตุ', 'รูปภาพ', 'ผู้บันทึก', 'เวลาบันทึก'];
       if (String(sgSheet.getRange(1, 1).getValue() || '') !== sgHeader[0]) {
         sgSheet.getRange(1, 1, 1, sgHeader.length).setValues([sgHeader]);
         sgSheet.getRange(1, 1, 1, sgHeader.length).setFontWeight('bold');
@@ -1443,13 +1444,48 @@ function doPost(e) {
       if (!sgOrderNo) throw new Error('ไม่ระบุเลขที่ใบเบิก');
       if (!sgItems.length) throw new Error('ไม่มีรายการที่รับของ');
 
+      // เช็คก่อนบันทึกจริง: รายการที่แก้ไขต้องมีหมายเหตุ + รูปภาพครบทุกตัว
+      for (var sgc = 0; sgc < sgItems.length; sgc++) {
+        var sgCheck = sgItems[sgc];
+        if (sgCheck.status === 'แก้ไข') {
+          if (!String(sgCheck.note || '').trim()) throw new Error('รายการ "' + (sgCheck.name || sgCheck.code) + '" แก้ไขจำนวนแล้วต้องใส่หมายเหตุด้วย');
+          if (!sgCheck.photoBase64) throw new Error('รายการ "' + (sgCheck.name || sgCheck.code) + '" แก้ไขจำนวนแล้วต้องแนบรูปภาพด้วย');
+        }
+      }
+
+      // โฟลเดอร์เก็บรูปหลักฐานการแก้ไข — หาโฟลเดอร์เดิมในไดรฟ์เดียวกับไฟล์ชีทนี้ ถ้าไม่มีค่อยสร้างใหม่
+      var sgPhotoFolder = null;
+      var sgNeedFolder = sgItems.some(function (it) { return it.status === 'แก้ไข' && it.photoBase64; });
+      if (sgNeedFolder) {
+        var sgParents = DriveApp.getFileById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI').getParents();
+        var sgParentFolder = (sgParents && sgParents.hasNext()) ? sgParents.next() : DriveApp.getRootFolder();
+        var sgExistingFolders = sgParentFolder.getFoldersByName('รูปแก้ไขรับของ');
+        sgPhotoFolder = sgExistingFolders.hasNext() ? sgExistingFolders.next() : sgParentFolder.createFolder('รูปแก้ไขรับของ');
+      }
+
       var sgNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
       var sgToday = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
       var sgRows = sgItems.map(function (it) {
+        var sgPhotoUrl = '';
+        if (it.status === 'แก้ไข' && it.photoBase64 && sgPhotoFolder) {
+          try {
+            var sgBase64Data = it.photoBase64.split(',')[1] || it.photoBase64;
+            var sgDecoded = Utilities.base64Decode(sgBase64Data);
+            var sgExt = (it.photoMimeType && it.photoMimeType.indexOf('png') !== -1) ? 'png' : 'jpg';
+            var sgFileName = sgOrderNo + '_' + (it.code || 'item') + '_' + new Date().getTime() + '.' + sgExt;
+            var sgBlob = Utilities.newBlob(sgDecoded, it.photoMimeType || 'image/jpeg', sgFileName);
+            var sgDriveFile = sgPhotoFolder.createFile(sgBlob);
+            sgDriveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+            sgPhotoUrl = sgDriveFile.getUrl();
+          } catch (sgErr) {
+            sgPhotoUrl = 'อัปโหลดรูปไม่สำเร็จ: ' + sgErr.message;
+          }
+        }
         return [
           sgToday, sgBranch, sgOrderNo, it.code || '', it.name || '',
           it.qtyRequested != null ? it.qtyRequested : '', it.qtySent != null ? it.qtySent : '',
           it.qtyReceived != null ? it.qtyReceived : '', it.status || 'ยืนยัน',
+          it.note || '', sgPhotoUrl,
           sgRecorder, sgNow
         ];
       });
