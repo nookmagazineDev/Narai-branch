@@ -1397,13 +1397,16 @@ function doPost(e) {
         }
       }
 
-      // เช็คว่าใบไหนสาขายืนยันรับของแล้ว (มีข้อมูลอยู่ในชีท รับของ)
+      // เช็คว่าใบไหน/รายการไหนสาขายืนยันรับของแล้ว (มีข้อมูลอยู่ในชีท รับของ)
       var receivedNos = {};
+      var receivedItemKeys = {};
       if (rabkongSheet && rabkongSheet.getLastRow() > 1) {
-        var rbVals = rabkongSheet.getRange(2, 3, rabkongSheet.getLastRow() - 1, 1).getValues(); // C = เลขที่ใบเบิก
+        var rbVals = rabkongSheet.getRange(2, 1, rabkongSheet.getLastRow() - 1, 4).getValues(); // A..D: วันที่รับ,สาขา,เลขที่ใบเบิก,รหัส
         for (var rb = 0; rb < rbVals.length; rb++) {
-          var rbNo = String(rbVals[rb][0] || '').trim();
+          var rbNo = String(rbVals[rb][2] || '').trim();   // C = เลขที่ใบเบิก
+          var rbCode = String(rbVals[rb][3] || '').trim(); // D = รหัส
           if (rbNo) receivedNos[rbNo] = true;
+          if (rbNo && rbCode) receivedItemKeys[rbNo + '|' + rbCode] = true;
         }
       }
 
@@ -1411,6 +1414,12 @@ function doPost(e) {
       for (var key in groups) {
         var g = groups[key];
         g.received = !!receivedNos[key];
+        for (var gi = 0; gi < g.items.length; gi++) {
+          var giItem = g.items[gi];
+          // true if this specific item already has a row in ชีท รับของ — either from a full
+          // order save, or from a previous per-item "ยืนยันแก้ไข" confirm
+          giItem.alreadyReceived = !!receivedItemKeys[key + '|' + String(giItem.code || '').trim()];
+        }
         orders.push(g);
       }
       orders.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
@@ -1494,6 +1503,49 @@ function doPost(e) {
       response.status = 'success';
       response.message = 'บันทึกรับของใบเบิกเลขที่ ' + sgOrderNo + ' เรียบร้อยแล้ว (' + sgRows.length + ' รายการ)';
       response.data = { count: sgRows.length };
+
+    } else if (action === 'confirmReceivedItem') {
+      // ยืนยันรายการเดียวที่โกดังแก้ไขจำนวน (storeStatus = แก้ไข ในชีทจัดของ, จำนวนส่ง != จำนวนเบิก)
+      // สาขากดรับทราบ/ยอมรับจำนวนที่โกดังส่งมาจริง โดยไม่ต้องกรอกจำนวนรับเอง — บันทึก 1 แถวลงชีท รับของ
+      // จำนวนที่รับจริง = จำนวนส่ง (ยอมรับตามที่โกดังส่งมา) และสถานะบันทึกเป็น "ยืนยัน" เสมอ (ไม่ใช่ "แก้ไข")
+      var criSs = SpreadsheetApp.openById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI');
+      var criSheet = null;
+      var criAllSheets = criSs.getSheets();
+      for (var crii = 0; crii < criAllSheets.length; crii++) {
+        if (criAllSheets[crii].getSheetId() === 1358423318) { criSheet = criAllSheets[crii]; break; }
+      }
+      if (!criSheet) throw new Error('ไม่พบชีท รับของ (gid=1358423318)');
+
+      var criHeader = ['วันที่รับ', 'สาขา', 'เลขที่ใบเบิก', 'รหัส', 'ชื่อ', 'จำนวนเบิก', 'จำนวนส่ง', 'จำนวนที่รับจริง', 'สถานะ', 'หมายเหตุ', 'รูปภาพ', 'ผู้บันทึก', 'เวลาบันทึก'];
+      if (String(criSheet.getRange(1, 1).getValue() || '') !== criHeader[0]) {
+        criSheet.getRange(1, 1, 1, criHeader.length).setValues([criHeader]);
+        criSheet.getRange(1, 1, 1, criHeader.length).setFontWeight('bold');
+      }
+
+      var criBranch = String(data.branch || '').trim();
+      var criOrderNo = String(data.orderNo || '').trim();
+      var criCode = String(data.code || '').trim();
+      var criName = data.name || '';
+      var criQtyRequested = data.qtyRequested != null ? data.qtyRequested : '';
+      var criQtySent = data.qtySent != null ? data.qtySent : '';
+      var criRecorder = data.recorder || 'Unknown';
+      if (!criBranch) throw new Error('ไม่ระบุสาขา');
+      if (!criOrderNo) throw new Error('ไม่ระบุเลขที่ใบเบิก');
+      if (!criCode) throw new Error('ไม่ระบุรหัสสินค้า');
+
+      var criToday = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+      var criNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+
+      criSheet.getRange(criSheet.getLastRow() + 1, 1, 1, criHeader.length).setValues([[
+        criToday, criBranch, criOrderNo, criCode, criName,
+        criQtyRequested, criQtySent, criQtySent,
+        'ยืนยัน',
+        'ยืนยันรับตามที่โกดังจัดของส่งมา (โกดังแก้ไขจำนวนจากที่เบิก)',
+        '', criRecorder, criNow
+      ]]);
+
+      response.status = 'success';
+      response.message = 'ยืนยันรับรายการ "' + criName + '" เรียบร้อยแล้ว';
 
     } else if (action === 'saveStock') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');

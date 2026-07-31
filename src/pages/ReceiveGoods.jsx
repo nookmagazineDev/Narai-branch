@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { PackageCheck, Loader2, AlertCircle, Save, ChevronLeft, CheckCircle2, Pencil, Camera, X } from 'lucide-react';
+import { PackageCheck, Loader2, AlertCircle, AlertTriangle, Save, ChevronLeft, CheckCircle2, Pencil, Camera, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 // อ่านไฟล์รูปแล้วย่อขนาด/บีบอัดก่อนแปลงเป็น base64 (กันไฟล์รูปจากมือถือใหญ่เกินไปตอนส่งขึ้น Apps Script)
@@ -44,6 +44,8 @@ export default function ReceiveGoods() {
   const [noteMap, setNoteMap] = useState({}); // index -> หมายเหตุ (บังคับกรอกถ้าแก้ไขจำนวน)
   const [photoMap, setPhotoMap] = useState({}); // index -> { base64, mimeType, fileName } (บังคับแนบถ้าแก้ไขจำนวน)
   const [isSaving, setIsSaving] = useState(false);
+  const [confirmingIdx, setConfirmingIdx] = useState(null); // index ที่กำลังกด "ยืนยันแก้ไข" อยู่
+  const [justConfirmed, setJustConfirmed] = useState({}); // index -> true เมื่อกด "ยืนยันแก้ไข" สำเร็จในรอบนี้
 
   useEffect(() => {
     if (branch) loadOrders();
@@ -78,6 +80,7 @@ export default function ReceiveGoods() {
     setQtyMap({});
     setNoteMap({});
     setPhotoMap({});
+    setJustConfirmed({});
   };
 
   const rowStatus = (item, idx) => {
@@ -87,6 +90,13 @@ export default function ReceiveGoods() {
     return cur === sent ? 'ยืนยัน' : 'แก้ไข';
   };
 
+  // โกดัง "จัดของ" ส่งจำนวนไม่ตรงกับที่สาขาเบิก (storeStatus = แก้ไข ในชีทจัดของ) —
+  // ต้องให้สาขากดยืนยันรับทราบทีละรายการ แยกจากการกรอกจำนวนรับจริงของสาขาเอง (rowStatus ด้านบน)
+  const isWarehouseEdited = (item) => item.storeStatus === 'แก้ไข';
+  const needsAck = (item, idx) => isWarehouseEdited(item) && !item.alreadyReceived && !justConfirmed[idx];
+  const orderHasUnresolvedEdit = (order) =>
+    (order.items || []).some((it) => isWarehouseEdited(it) && !it.alreadyReceived);
+
   const handlePhotoChange = async (idx, file) => {
     if (!file) return;
     try {
@@ -94,6 +104,25 @@ export default function ReceiveGoods() {
       setPhotoMap(prev => ({ ...prev, [idx]: { base64, mimeType, fileName: file.name } }));
     } catch (err) {
       toast.error(err.message || 'อ่านไฟล์รูปภาพไม่สำเร็จ');
+    }
+  };
+
+  // สาขากด "ยืนยันแก้ไข" ทีละรายการ — ยอมรับจำนวนที่โกดังส่งมาจริง (qtySent) โดยไม่ต้องกรอกจำนวนรับเอง
+  // บันทึกลงชีท รับของ ทันที (1 แถว) ด้วยสถานะ "ยืนยัน" แทนที่จะปล่อยค้างเป็น "แก้ไข"
+  const handleConfirmEdit = async (idx, item) => {
+    setConfirmingIdx(idx);
+    try {
+      await apiCall('confirmReceivedItem', {
+        branch, orderNo: selectedOrder.orderNo, code: item.code, name: item.name,
+        qtyRequested: item.qtyRequested, qtySent: item.qtySent,
+        recorder: user?.username || 'Unknown',
+      });
+      setJustConfirmed(prev => ({ ...prev, [idx]: true }));
+      toast.success(`ยืนยันรับ "${item.name}" เรียบร้อยแล้ว`);
+    } catch (err) {
+      toast.error(err.message || 'ยืนยันไม่สำเร็จ');
+    } finally {
+      setConfirmingIdx(null);
     }
   };
 
@@ -106,9 +135,13 @@ export default function ReceiveGoods() {
   const handleSave = async () => {
     if (!selectedOrder) return;
 
+    // รายการที่ยืนยันแก้ไขไปแล้วทีละรายการ (หรือเคยบันทึกไว้ก่อนหน้านี้) ไม่ต้องส่งซ้ำในการบันทึกรวมนี้
+    const isHandled = (idx) => selectedOrder.items[idx].alreadyReceived || justConfirmed[idx];
+
     // รายการที่แก้ไขจำนวน (ไม่ตรงกับที่ส่งมา) บังคับต้องมีหมายเหตุ + รูปภาพแนบเสมอ
     const missing = [];
     selectedOrder.items.forEach((it, idx) => {
+      if (isHandled(idx)) return;
       if (rowStatus(it, idx) !== 'แก้ไข') return;
       if (!String(noteMap[idx] || '').trim()) missing.push(`${it.name} — ยังไม่ได้ใส่หมายเหตุ`);
       if (!photoMap[idx]) missing.push(`${it.name} — ยังไม่ได้แนบรูปภาพ`);
@@ -118,20 +151,28 @@ export default function ReceiveGoods() {
       return;
     }
 
-    const payloadItems = selectedOrder.items.map((it, idx) => {
-      const val = qtyMap[idx];
-      const qtyReceived = val === '' || val === undefined ? 0 : Number(val);
-      const status = rowStatus(it, idx);
-      const photo = photoMap[idx];
-      return {
-        code: it.code, name: it.name,
-        qtyRequested: it.qtyRequested, qtySent: it.qtySent,
-        qtyReceived, status,
-        note: status === 'แก้ไข' ? (noteMap[idx] || '') : '',
-        photoBase64: status === 'แก้ไข' && photo ? photo.base64 : '',
-        photoMimeType: status === 'แก้ไข' && photo ? photo.mimeType : '',
-      };
-    });
+    const payloadItems = selectedOrder.items
+      .map((it, idx) => {
+        if (isHandled(idx)) return null;
+        const val = qtyMap[idx];
+        const qtyReceived = val === '' || val === undefined ? 0 : Number(val);
+        const status = rowStatus(it, idx);
+        const photo = photoMap[idx];
+        return {
+          code: it.code, name: it.name,
+          qtyRequested: it.qtyRequested, qtySent: it.qtySent,
+          qtyReceived, status,
+          note: status === 'แก้ไข' ? (noteMap[idx] || '') : '',
+          photoBase64: status === 'แก้ไข' && photo ? photo.base64 : '',
+          photoMimeType: status === 'แก้ไข' && photo ? photo.mimeType : '',
+        };
+      })
+      .filter(Boolean);
+
+    if (payloadItems.length === 0) {
+      toast.error('ทุกรายการยืนยันรับไปแล้ว ไม่มีอะไรต้องบันทึกเพิ่ม');
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -193,7 +234,14 @@ export default function ReceiveGoods() {
               <tbody className="divide-y">
                 {orders.map((order) => (
                   <tr key={order.orderNo} className="hover:bg-teal-50/50 cursor-pointer transition-colors" onClick={() => openOrder(order)}>
-                    <td className="px-4 py-3 font-mono font-semibold text-teal-700">{order.orderNo}</td>
+                    <td className="px-4 py-3 font-mono font-semibold text-teal-700">
+                      <span className="inline-flex items-center gap-1.5">
+                        {order.orderNo}
+                        {orderHasUnresolvedEdit(order) && (
+                          <AlertTriangle className="w-4 h-4 text-amber-500" title="โกดังแก้ไขจำนวนบางรายการ — ต้องยืนยัน" />
+                        )}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-gray-600">{order.date}</td>
                     <td className="px-4 py-3 text-right text-gray-600">{(order.items || []).length} รายการ</td>
                     <td className="px-4 py-3 text-center">
@@ -248,10 +296,17 @@ export default function ReceiveGoods() {
                   const status = rowStatus(it, idx);
                   const isEdited = status === 'แก้ไข';
                   const photo = photoMap[idx];
+                  const handled = it.alreadyReceived || justConfirmed[idx];
+                  const showAckBanner = needsAck(it, idx);
                   return (
                     <Fragment key={idx}>
-                      <tr className={`hover:bg-gray-50/50 transition-colors ${isEdited ? 'bg-amber-50/40' : ''}`}>
-                        <td className="px-4 py-2.5 whitespace-nowrap text-xs font-mono text-gray-600">{it.code}</td>
+                      <tr className={`hover:bg-gray-50/50 transition-colors ${isEdited ? 'bg-amber-50/40' : ''} ${handled ? 'opacity-60' : ''}`}>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-xs font-mono text-gray-600">
+                          <span className="inline-flex items-center gap-1.5">
+                            {it.code}
+                            {showAckBanner && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" title="โกดังแก้ไขจำนวน รอยืนยัน" />}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 text-sm text-gray-800 font-medium">{it.name}</td>
                         <td className="px-4 py-2.5 text-right text-sm text-gray-500">{it.qtyRequested}</td>
                         <td className="px-4 py-2.5 text-right text-sm text-sky-700 bg-sky-50/30 font-mono">{it.qtySent}</td>
@@ -260,13 +315,18 @@ export default function ReceiveGoods() {
                             type="number" min="0" step="any" inputMode="decimal"
                             value={qtyMap[idx] !== undefined ? qtyMap[idx] : ''}
                             onChange={(e) => setQtyMap(prev => ({ ...prev, [idx]: e.target.value }))}
-                            className={`w-full px-2 py-1.5 border rounded-lg text-center text-sm bg-white focus:ring-2 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                            disabled={handled}
+                            className={`w-full px-2 py-1.5 border rounded-lg text-center text-sm bg-white focus:ring-2 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                               isEdited ? 'border-amber-300 focus:ring-amber-500' : 'border-teal-200 focus:ring-teal-500'
                             }`}
                           />
                         </td>
                         <td className="px-4 py-2.5 text-center">
-                          {isEdited ? (
+                          {handled ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                              <CheckCircle2 className="w-3 h-3" /> ยืนยันรับแล้ว
+                            </span>
+                          ) : isEdited ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                               <Pencil className="w-3 h-3" /> แก้ไข
                             </span>
@@ -277,7 +337,28 @@ export default function ReceiveGoods() {
                           )}
                         </td>
                       </tr>
-                      {isEdited && (
+                      {showAckBanner && (
+                        <tr className="bg-amber-50/60">
+                          <td colSpan={6} className="px-4 pb-3 pt-0">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-white border border-amber-300 rounded-xl p-3">
+                              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                              <p className="flex-1 text-xs text-amber-800">
+                                โกดังจัดของแก้ไขจำนวนสินค้านี้จากที่เบิก (เบิก <strong>{it.qtyRequested}</strong> ส่งจริง <strong>{it.qtySent}</strong>)
+                                — กดยืนยันเพื่อรับทราบและรับตามจำนวนที่ส่งมา
+                              </p>
+                              <button
+                                onClick={() => handleConfirmEdit(idx, it)}
+                                disabled={confirmingIdx === idx}
+                                className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+                              >
+                                {confirmingIdx === idx ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                                ยืนยันแก้ไข
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {isEdited && !handled && (
                         <tr className="bg-amber-50/40">
                           <td colSpan={6} className="px-4 pb-3 pt-0">
                             <div className="flex flex-col sm:flex-row gap-3 bg-white border border-amber-200 rounded-xl p-3">
