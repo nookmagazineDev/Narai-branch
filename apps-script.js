@@ -1698,6 +1698,56 @@ function doPost(e) {
 
       response.status = 'success';
       response.message = 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว';
+    } else if (action === 'saveAvgPerHead') {
+      // แก้ไข/เพิ่ม "ค่าเฉลี่ยยอดใช้ต่อหัว" ของสาขา+รหัส ลงชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' (ไฟล์ BOM)
+      // คอลัมน์: A=สาขา B=รหัส C=ชื่อ D=ค่าเฉลี่ยต่อหัว — ถ้ายังไม่มีแถวให้ append ใหม่
+      var aphSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
+      var aphSheet = null;
+      var aphAll = aphSs.getSheets();
+      for (var aphSi = 0; aphSi < aphAll.length; aphSi++) {
+        if (aphAll[aphSi].getSheetId() === 1722427042) { aphSheet = aphAll[aphSi]; break; }
+      }
+      if (!aphSheet) aphSheet = aphSs.getSheetByName('ค่าเฉลี่ยยอดใช้ต่อหัว');
+      if (!aphSheet) throw new Error('ไม่พบชีทค่าเฉลี่ยยอดใช้ต่อหัว');
+
+      var aphBranch = String(data.branch || '').toLowerCase().trim();
+      var aphCode = data.code;
+      var aphName = data.name || '';
+      var aphValue = parseFloat(data.value);
+      if (!aphBranch) throw new Error('ไม่ระบุสาขา');
+      if (aphCode === undefined || aphCode === null || String(aphCode).trim() === '') throw new Error('ไม่ระบุรหัสสินค้า');
+      if (isNaN(aphValue) || aphValue < 0) throw new Error('ค่าเฉลี่ยต่อหัวไม่ถูกต้อง');
+
+      var aphNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').toLowerCase().trim(); };
+      // เว็บใช้ zjp แทน sjp ในบางชีท — เทียบทั้งสอง alias เวลาหาแถวเดิม
+      var aphAliases = {};
+      aphAliases[aphBranch] = true;
+      if (aphBranch === 'zjp') aphAliases['sjp'] = true;
+      if (aphBranch === 'sjp') aphAliases['zjp'] = true;
+      var aphCodeNorm = aphNorm(aphCode);
+
+      var aphVals = aphSheet.getDataRange().getValues();
+      var aphFound = -1;
+      for (var ai = 1; ai < aphVals.length; ai++) {
+        var rBranch = String(aphVals[ai][0] || '').toLowerCase().trim();
+        var rCode = aphNorm(aphVals[ai][1]);
+        if (aphAliases[rBranch] && rCode === aphCodeNorm) { aphFound = ai + 1; break; }
+      }
+
+      var aphCreated = false;
+      if (aphFound !== -1) {
+        aphSheet.getRange(aphFound, 4).setValue(aphValue);
+        // เติมชื่อให้ถ้าช่องว่างและ client ส่งชื่อมา
+        if (aphName && !String(aphVals[aphFound - 1][2] || '').trim()) aphSheet.getRange(aphFound, 3).setValue(aphName);
+      } else {
+        var aphCodeCell = /^\d+$/.test(String(aphCode)) ? Number(aphCode) : aphCode;
+        aphSheet.appendRow([aphBranch, aphCodeCell, aphName, aphValue]);
+        aphCreated = true;
+      }
+
+      response.status = 'success';
+      response.message = aphCreated ? 'บันทึกค่าเฉลี่ยต่อหัวใหม่ลงชีทแล้ว' : 'อัปเดตค่าเฉลี่ยต่อหัวในชีทแล้ว';
+      response.data = { branch: aphBranch, code: String(aphCode), value: aphValue, created: aphCreated };
     } else if (action === 'saveBranchPercentagesBulk') {
       var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
       var sheet = supSs.getSheetByName('เปอร์เซ็นการเบิกของแต่ละสาขา');

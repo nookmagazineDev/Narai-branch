@@ -143,6 +143,8 @@ export default function StockList() {
   const [sortBy, setSortBy] = useState('storageCat');
   const [isSaving, setIsSaving] = useState(false);
   const [isEditingCat, setIsEditingCat] = useState(false);
+  const [avgDraft, setAvgDraft] = useState({});   // productId -> ค่าที่กำลังพิมพ์ในช่องค่าเฉลี่ย/หัว (string)
+  const [savingAvg, setSavingAvg] = useState({}); // productId -> กำลังบันทึกค่าเฉลี่ย/หัว
   const [requestDate, setRequestDate] = useState('');
   const [requesterName, setRequesterName] = useState('');
   const [counterName, setCounterName] = useState('');
@@ -1409,6 +1411,41 @@ export default function StockList() {
     }
   };
 
+  // แก้ไข "ค่าเฉลี่ย/หัว" ในตาราง แล้วบันทึกลงชีทอัตโนมัติ (ไม่มีค่าเดิม = เพิ่มแถวใหม่ในชีท)
+  const saveAvgPerHead = async (item) => {
+    const pid = item.productId;
+    const raw = avgDraft[pid];
+    const clearDraft = () => setAvgDraft(d => { const n = { ...d }; delete n[pid]; return n; });
+    if (raw === undefined) return;                 // ไม่ได้แก้อะไร
+    const trimmed = String(raw).trim();
+    if (trimmed === '') { clearDraft(); return; }  // ปล่อยว่าง = ยกเลิก คืนค่าเดิม
+    const num = Number(trimmed);
+    if (!Number.isFinite(num) || num < 0) { toast.error('ค่าเฉลี่ยต่อหัวไม่ถูกต้อง'); clearDraft(); return; }
+    if (item.avgPerHead !== undefined && num === item.avgPerHead) { clearDraft(); return; } // ไม่เปลี่ยน
+    if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
+
+    setSavingAvg(s => ({ ...s, [pid]: true }));
+    try {
+      const res = await apiCall('saveAvgPerHead', {
+        branch: String(effectiveBranch).toLowerCase(),
+        code: pid,
+        name: item.name || '',
+        value: num,
+      });
+      if (res.status === 'success') {
+        setItems(prev => prev.map(it => it.productId === pid ? { ...it, avgPerHead: num } : it));
+        clearDraft();
+        toast.success(res.message || 'บันทึกค่าเฉลี่ยต่อหัวแล้ว');
+      } else {
+        toast.error(res.message || 'บันทึกค่าเฉลี่ยต่อหัวไม่สำเร็จ');
+      }
+    } catch (e) {
+      toast.error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ');
+    } finally {
+      setSavingAvg(s => { const n = { ...s }; delete n[pid]; return n; });
+    }
+  };
+
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
@@ -1928,11 +1965,23 @@ export default function StockList() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว ใช้ตอนคำนวณยอดเบิกอัตโนมัติ */}
+                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้ บันทึกลงชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' อัตโนมัติ (ไม่มีค่าเดิม = เพิ่มใหม่) */}
                           <td className="px-4 py-3 text-center bg-fuchsia-50/30">
-                            <span className="text-sm font-semibold text-fuchsia-700">
-                              {item.avgPerHead !== undefined ? item.avgPerHead.toLocaleString('th-TH', { maximumFractionDigits: 4 }) : '-'}
-                            </span>
+                            <div className="flex items-center justify-center gap-1">
+                              <input
+                                type="number" min="0" step="any" inputMode="decimal"
+                                disabled={savingAvg[item.productId] || !effectiveBranch}
+                                value={avgDraft[item.productId] !== undefined ? avgDraft[item.productId] : (item.avgPerHead === undefined ? '' : item.avgPerHead)}
+                                onChange={(e) => setAvgDraft(d => ({ ...d, [item.productId]: e.target.value }))}
+                                onFocus={(e) => e.target.select()}
+                                onBlur={() => saveAvgPerHead(item)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                placeholder="-"
+                                title={item.avgPerHead === undefined ? 'ยังไม่มีค่าในชีท — กรอกแล้วบันทึกใหม่อัตโนมัติ' : 'ค่าเฉลี่ยต่อหัว (แก้ไขแล้วบันทึกลงชีทอัตโนมัติ)'}
+                                className="w-20 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
+                              />
+                              {savingAvg[item.productId] && <Loader2 className="w-3 h-3 animate-spin text-fuchsia-400 shrink-0" />}
+                            </div>
                           </td>
 
                           {/* ยอดยกมาเดือนที่แล้ว (นับสิ้นเดือนก่อน จาก stockcount.previous) */}
