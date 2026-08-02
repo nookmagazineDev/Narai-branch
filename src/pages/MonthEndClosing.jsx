@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X, Calculator } from 'lucide-react';
+import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X, Calculator, Store } from 'lucide-react';
 import toast from 'react-hot-toast';
 import CalcModal from '../components/CalcModal';
 
@@ -51,7 +51,11 @@ function ClosingHistoryModal({ open, name, history, onClose }) {
 // แสดงมูลค่า/หน่วย และมูลค่ารวมของแต่ละไอเทมให้ดูควบคู่กัน บันทึกลงชีท "ปิดรอบสิ้นเดือน"
 export default function MonthEndClosing() {
   const { user } = useAuth();
-  const branch = user?.branch;
+  // ผู้ใช้ 'all' (แอดมิน) เลือกสาขาได้ — ผู้ใช้สาขาใช้ของตัวเอง (ไม่งั้นแอดมินจะดูข้อมูลปิดยอดที่บันทึกไว้รายสาขาไม่ได้เลย)
+  const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+  const [branchList, setBranchList] = useState([]);
+  const [selBranch, setSelBranch] = useState('');
+  const branch = isAdmin ? selBranch : (user?.branch || '');
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -65,6 +69,23 @@ export default function MonthEndClosing() {
   // เครื่องคิดเลขสะสมของช่องยอดคงเหลือ (นับหลายจุด/หลายลังแล้วรวม) — เหมือนหน้านับสต๊อก
   const [calcFor, setCalcFor] = useState(null);   // { productId, name }
   const [calcParts, setCalcParts] = useState({}); // productId -> number[]
+
+  // แอดมิน ('all'): โหลดรายชื่อสาขาไว้ใน dropdown แล้วตั้งค่าเริ่มต้นเป็นสาขาแรก
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiCall('getBranches', {})
+      .then((res) => {
+        if (res?.status === 'success' && Array.isArray(res.data)) {
+          const list = res.data
+            .map((b) => String(b.name || '').toLowerCase().trim())
+            .filter((n) => n && n !== 'all' && n !== 'ชื่อสาขา');
+          setBranchList(list);
+          setSelBranch((prev) => prev || list[0] || '');
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   useEffect(() => {
     if (branch) loadItems();
@@ -181,12 +202,25 @@ export default function MonthEndClosing() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">ปิดยอดสิ้นเดือน</h1>
             <p className="text-gray-500 mt-0.5 text-sm">
-              กรอกยอดคงเหลือ ณ วันปิดยอด · สาขา: <span className="font-semibold text-indigo-600">{branch}</span>
+              กรอกยอดคงเหลือ ณ วันปิดยอด · สาขา: <span className="font-semibold text-indigo-600">{branch || '—'}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {isAdmin && (
+            <div className="flex items-center gap-1.5 pl-3 pr-1 py-1 bg-indigo-100 rounded-full">
+              <Store className="w-4 h-4 text-indigo-600 shrink-0" />
+              <select
+                value={selBranch}
+                onChange={(e) => setSelBranch(e.target.value)}
+                className="bg-transparent text-indigo-800 text-sm font-medium pr-2 py-0.5 focus:outline-none cursor-pointer"
+              >
+                {branchList.length === 0 && <option value="">กำลังโหลดสาขา…</option>}
+                {branchList.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          )}
           <label className="text-sm font-medium text-gray-700 whitespace-nowrap">วันที่ปิดยอด :</label>
           <input type="date" value={closingDate} onChange={(e) => setClosingDate(e.target.value)}
             className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
