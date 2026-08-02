@@ -391,7 +391,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   // รายจ่ายจากชีท "ต้นทุนจากsup" (Supplier) ในช่วงวันที่เดียวกัน
   const supCostValue = Number(supCost?.total || 0);
 
-  // Total Food Cost (COGS) = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + สต๊อกต้นเดือน − สต๊อกปลายเดือน
+  // Total Food Cost (COGS) = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + ยอดยกมาเดือนที่แล้ว − ยอดมูลค่าสตอคปัจจุบัน
   const totalFoodCost = withdrawCost + supCostValue + prevStockValue - curStockValue;
 
   // รายรับ
@@ -421,7 +421,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl"><PieChart className="w-5 h-5" /></div>
           <div>
             <h2 className="text-lg font-bold text-gray-800">สรุปกำไร / ขาดทุน</h2>
-            <p className="text-xs text-gray-400">รายรับจากการขาย • Total Food Cost = ใบเบิก + Supplier + สต๊อกต้นเดือน − ปลายเดือน • ค่าใช้จ่าย (กรอกเอง)</p>
+            <p className="text-xs text-gray-400">รายรับจากการขาย • Total Food Cost = ใบเบิก + Supplier + ยอดยกมาเดือนที่แล้ว − ยอดมูลค่าสตอคปัจจุบัน • ค่าใช้จ่าย (กรอกเอง)</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -476,7 +476,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
               />
               <p className="px-3 py-2 text-[11px] text-gray-400">
-                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — เข้าสูตร Total Food Cost (ต้นเดือน + / ปลายเดือน −)
+                * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — เข้าสูตร Total Food Cost (ยอดยกมาเดือนที่แล้ว + / ยอดมูลค่าสตอคปัจจุบัน −)
                 {curUnpriced ? ` • เดือนนี้ ${curUnpriced} รายการไม่มีราคาในชีท 8.2` : ''}
               </p>
             </>
@@ -506,19 +506,19 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 onClick={supCost?.items?.length ? () => setSupModal(true) : undefined}
               />
               <Row
-                label={`+ สต๊อกต้นเดือน${stock?.previous?.countDate ? ` (นับ ${stock.previous.countDate})` : ''}`}
+                label={`+ ยอดยกมาเดือนที่แล้ว${stock?.previous?.countDate ? ` (นับ ${stock.previous.countDate})` : ''}`}
                 value={prevStockValue} percent={pct(prevStockValue, netSale)} indent accent="text-rose-500"
-                onClick={prevStock.length ? () => setStockModal({ title: 'สต๊อกต้นเดือน (เดือนที่แล้ว)', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
+                onClick={prevStock.length ? () => setStockModal({ title: 'ยอดยกมาเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
               />
               <Row
-                label={`− สต๊อกปลายเดือน${stock?.current?.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
+                label={`− ยอดมูลค่าสตอคปัจจุบัน${stock?.current?.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
                 value={-curStockValue} percent={pct(curStockValue, netSale)} indent accent="text-emerald-600"
-                onClick={curStock.length ? () => setStockModal({ title: 'สต๊อกปลายเดือน (เดือนนี้)', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
+                onClick={curStock.length ? () => setStockModal({ title: 'ยอดมูลค่าสตอคปัจจุบัน', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
               />
               <Row label="Total Food Cost" value={totalFoodCost} percent={pct(totalFoodCost, netSale)} bold accent="text-rose-700" />
               <p className="px-3 py-1.5 text-[11px] text-gray-400">
-                * Total Food Cost = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + สต๊อกต้นเดือน − สต๊อกปลายเดือน
-                {stock && !stock.current.countDate ? ' • เดือนนี้ยังไม่นับสต๊อก (สต๊อกปลายเดือน = 0)' : ''}
+                * Total Food Cost = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + ยอดยกมาเดือนที่แล้ว − ยอดมูลค่าสตอคปัจจุบัน
+                {stock && !stock.current.countDate ? ' • เดือนนี้ยังไม่นับสต๊อก (ยอดมูลค่าสตอคปัจจุบัน = 0)' : ''}
               </p>
               {EXPENSES.map((e) => (
                 <Row
