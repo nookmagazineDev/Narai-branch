@@ -1144,12 +1144,13 @@ function doPost(e) {
       response.data = { count: mecCount, total: Math.round(mecTotal * 100) / 100 };
 
     } else if (action === 'getMonthEndClosing') {
-      // ดึงยอดปิดสิ้นเดือนที่บันทึกไว้ของ (สาขา+วันที่) มาแสดง/แก้ไขต่อ
-      // คืนทั้งค่าปัจจุบัน (บันทึกล่าสุด) และประวัติการบันทึกทั้งหมดของแต่ละรหัสสินค้า
+      // ดึงยอดปิดสิ้นเดือนของสาขานี้มาแสดง — โชว์ "ค่าล่าสุดที่มีบันทึกไว้เสมอ" ไม่ว่าจะเลือกวันที่ไหนอยู่ในหน้าเว็บ
+      // (ไม่กรองตามวันที่ที่ส่งมาแล้ว เพราะอยากให้เห็นตัวเลขอ้างอิงล่าสุดตลอด ไม่ใช่ต้องตรงวันที่เป๊ะถึงจะเห็น)
+      // วันที่ที่ส่งมา (data.date) ยังใช้ตอนบันทึกใหม่ (saveMonthEndClosing) อยู่ตามเดิม แค่ไม่ใช้กรองตอนดึงมาโชว์แล้ว
+      // คืนทั้งค่าล่าสุด (พร้อมวันที่ของค่านั้น) และประวัติการบันทึกทั้งหมดทุกวันที่ของแต่ละรหัสสินค้า
       var gmeSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
       var gmeSheet = gmeSs.getSheetByName('ปิดรอบสิ้นเดือน');
       var gmeBranch = (data.branch || '').toLowerCase().trim();
-      var gmeDate = String(data.date || '').trim();
       var gmeNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
       var gmeToYmd = function (v) {
         if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Bangkok', 'yyyy-MM-dd');
@@ -1161,20 +1162,21 @@ function doPost(e) {
         return s;
       };
       var gmeOut = {};
-      if (gmeSheet && gmeSheet.getLastRow() > 1 && gmeBranch && gmeDate) {
+      if (gmeSheet && gmeSheet.getLastRow() > 1 && gmeBranch) {
         var gmeVals = gmeSheet.getDataRange().getValues();
         for (var gm = 1; gm < gmeVals.length; gm++) {
           var gmr = gmeVals[gm];
           if (String(gmr[1] || '').toLowerCase().trim() !== gmeBranch) continue;
-          if (gmeToYmd(gmr[0]) !== gmeDate) continue;
           var gmeCode = gmeNorm(gmr[2]);
-          if (!gmeOut[gmeCode]) gmeOut[gmeCode] = { qty: gmr[5], price: gmr[6], amount: gmr[7], history: [] };
-          // เจอแถวใหม่ที่ตำแหน่งหลังกว่า (แถวถัดลงมา) ถือเป็นค่าล่าสุด แทนที่ qty/price/amount ปัจจุบัน
+          var gmeRowDate = gmeToYmd(gmr[0]);
+          if (!gmeOut[gmeCode]) gmeOut[gmeCode] = { qty: gmr[5], price: gmr[6], amount: gmr[7], date: gmeRowDate, history: [] };
+          // เจอแถวใหม่ที่ตำแหน่งหลังกว่า (แถวถัดลงมา) ถือเป็นค่าล่าสุด แทนที่ qty/price/amount/date ปัจจุบันเสมอ (ไม่สนวันที่)
           gmeOut[gmeCode].qty = gmr[5];
           gmeOut[gmeCode].price = gmr[6];
           gmeOut[gmeCode].amount = gmr[7];
+          gmeOut[gmeCode].date = gmeRowDate;
           gmeOut[gmeCode].history.push({
-            qty: gmr[5], price: gmr[6], amount: gmr[7],
+            date: gmeRowDate, qty: gmr[5], price: gmr[6], amount: gmr[7],
             recorder: gmr[8] || '', time: gmr[9] || ''
           });
         }

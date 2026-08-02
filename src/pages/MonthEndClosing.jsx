@@ -37,7 +37,7 @@ function ClosingHistoryModal({ open, name, history, onClose }) {
                     {Number(h.amount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
                   </span>
                 </div>
-                <p className="text-[11px] text-gray-400 mt-0.5">{h.time || '-'} · {h.recorder || '-'}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">{h.date ? `วันที่ ${h.date} · ` : ''}{h.time || '-'} · {h.recorder || '-'}</p>
               </div>
             ))}
           </div>
@@ -63,7 +63,8 @@ export default function MonthEndClosing() {
   const [searchTerm, setSearchTerm] = useState('');
   const [closingDate, setClosingDate] = useState(todayYMD());
   const [qtyMap, setQtyMap] = useState({}); // productId -> ยอดคงเหลือสิ้นเดือนที่กรอก (string)
-  const [historyMap, setHistoryMap] = useState({}); // productId -> [{qty, price, amount, recorder, time}]
+  const [historyMap, setHistoryMap] = useState({}); // productId -> [{date, qty, price, amount, recorder, time}]
+  const [lastDateMap, setLastDateMap] = useState({}); // productId -> วันที่ของค่าล่าสุดที่โชว์ (อาจไม่ตรงกับ closingDate ที่เลือกอยู่)
   const [historyFor, setHistoryFor] = useState(null); // { name, history }
 
   // เครื่องคิดเลขสะสมของช่องยอดคงเหลือ (นับหลายจุด/หลายลังแล้วรวม) — เหมือนหน้านับสต๊อก
@@ -93,9 +94,10 @@ export default function MonthEndClosing() {
   }, [branch]);
 
   useEffect(() => {
-    if (branch && closingDate) loadExistingClosing();
+    // ค่าที่โชว์เป็นค่าล่าสุดของสาขาเสมอ ไม่ผูกกับ closingDate ที่เลือกอยู่แล้ว จึงโหลดครั้งเดียวตอนเปลี่ยนสาขาก็พอ
+    if (branch) loadExistingClosing();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branch, closingDate]);
+  }, [branch]);
 
   const loadItems = async () => {
     setLoading(true);
@@ -113,18 +115,20 @@ export default function MonthEndClosing() {
     }
   };
 
-  // ดึงยอดที่เคยบันทึกไว้ของวันที่นี้มาเติมให้ (แก้ไขต่อได้ ไม่ต้องกรอกใหม่ทั้งหมด) + ประวัติการบันทึกทั้งหมด
+  // ดึงยอดล่าสุดที่เคยบันทึกไว้ของสาขานี้มาเติมให้ (โชว์ค่าล่าสุดเสมอไม่ว่าจะเลือกวันที่ไหน) + ประวัติการบันทึกทั้งหมด
   const loadExistingClosing = async () => {
     try {
-      const res = await apiCall('getMonthEndClosing', { branch, date: closingDate });
+      const res = await apiCall('getMonthEndClosing', { branch });
       if (res.status === 'success') {
-        const map = {}, hist = {};
+        const map = {}, hist = {}, dateMap = {};
         Object.entries(res.data || {}).forEach(([code, v]) => {
           map[code] = String(v.qty ?? '');
           hist[code] = v.history || [];
+          dateMap[code] = v.date || '';
         });
         setQtyMap(map);
         setHistoryMap(hist);
+        setLastDateMap(dateMap);
       }
     } catch (err) { /* ไม่มีข้อมูลเดิมก็ไม่เป็นไร เริ่มกรอกใหม่ */ }
   };
@@ -315,6 +319,11 @@ export default function MonthEndClosing() {
                             <Calculator className="w-4 h-4" />
                           </button>
                         </div>
+                        {lastDateMap[key] && (
+                          <p className={`text-[10px] mt-1 text-center ${lastDateMap[key] === closingDate ? 'text-indigo-400' : 'text-amber-500 font-medium'}`}>
+                            ล่าสุดจากวันที่ {lastDateMap[key]}{lastDateMap[key] !== closingDate ? ' (คนละวันที่เลือก)' : ''}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-right text-sm font-semibold text-emerald-700 bg-emerald-50/30 font-mono">
                         {rowTotal !== null ? rowTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
