@@ -2442,12 +2442,15 @@ export default function StockList() {
                       const isReceived = matchesOrderKey(receivedOrderKeys, order, effectiveBranch);
                       const isPreparing = matchesOrderKey(preparingOrderKeys, order, effectiveBranch);
                       const isPulled = pulledOrderKeys.has(statusKey);
-                      // ลำดับความสำคัญ: ยกเลิก > รับของสำเร็จ > กำลังจัดส่ง > ดึงข้อมูลแล้ว > รอรับของ (ค่าเริ่มต้น)
+                      // ลำดับความสำคัญ: ยกเลิก > รับของสำเร็จ > กำลังจัดส่ง > ดึงข้อมูลแล้ว > ส่งใบเบิกแล้ว (ขั้นแรก)
+                      const rawStatus = order.status || order.Status || order.Ord_Status || '';
                       const status = isCancelled ? 'ยกเลิกแล้ว'
                         : isReceived ? 'รับของสำเร็จ'
                         : isPreparing ? 'กำลังจัดส่ง'
                         : isPulled ? 'ดึงข้อมูลแล้ว'
-                        : (order.status || order.Status || order.Ord_Status || 'รอรับของ');
+                        : (rawStatus && rawStatus !== 'รอรับของ' ? rawStatus : 'ส่งใบเบิกแล้ว');
+                      // ยกเลิกได้เฉพาะใบที่ยัง "ส่งใบเบิกแล้ว" (ขั้นแรก) เท่านั้น — ถ้ามีการอัปเดตสถานะอื่นแล้วยกเลิกไม่ได้
+                      const canCancel = status === 'ส่งใบเบิกแล้ว';
                       const statusClass = isCancelled
                         ? 'bg-gray-200 text-gray-600 line-through'
                         : isReceived
@@ -2489,14 +2492,24 @@ export default function StockList() {
                                   <FileSpreadsheet className="w-4 h-4" />
                                 </button>
                                 {!isCancelled && (
-                                  <button
-                                    onClick={() => cancelPendingOrder(order)}
-                                    disabled={cancellingKey === statusKey}
-                                    title="ยกเลิกใบเบิกนี้"
-                                    className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-40"
-                                  >
-                                    {cancellingKey === statusKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                                  </button>
+                                  canCancel ? (
+                                    <button
+                                      onClick={() => cancelPendingOrder(order)}
+                                      disabled={cancellingKey === statusKey}
+                                      title="ยกเลิกใบเบิกนี้"
+                                      className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-40"
+                                    >
+                                      {cancellingKey === statusKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      disabled
+                                      title={`ยกเลิกไม่ได้ — ใบเบิกมีการอัปเดตสถานะแล้ว (${status})`}
+                                      className="p-1.5 rounded-lg text-gray-300 opacity-40 cursor-not-allowed"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  )
                                 )}
                               </div>
                             </td>
