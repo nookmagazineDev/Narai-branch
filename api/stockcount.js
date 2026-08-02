@@ -50,6 +50,18 @@ function prevMonth(ym) {
   return `${py}-${String(pm).padStart(2, '0')}`;
 }
 
+// วันที่ 1-5 ของเดือนไหน ถือว่าเป็นยอดปิดของ "เดือนก่อนหน้า" เสมอ (พนักงานมักปิดยอดช้าไม่กี่วัน
+// แล้วใช้วันที่ปัจจุบันตอนบันทึกแทนที่จะย้อนวันที่กลับไปเป็นวันสิ้นเดือนจริง) — ไม่มีใครปิดยอด "เดือนนี้" ตั้งแต่วันที่ 1-5 ได้จริงอยู่แล้ว
+function closingMonthOf(ds) {
+  const [y, m, d] = ds.split('-').map(Number);
+  if (d >= 1 && d <= 5) {
+    const py = m > 1 ? y : y - 1;
+    const pm = m > 1 ? m - 1 : 12;
+    return `${py}-${String(pm).padStart(2, '0')}`;
+  }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
 // ยอดปิดรอบสิ้นเดือนอย่างเป็นทางการของสาขา+เดือนเป้าหมาย จากชีท "ปิดรอบสิ้นเดือน"
 // รหัสสินค้าซ้ำกันหลายแถว (บันทึกซ้ำ/แก้ไข) เอา "แถวหลังสุด" ใน sheet order เป็นค่าล่าสุดเสมอ (append-only log)
 async function fetchClosingMonthValue(closingJson, branchKey, targetMonth) {
@@ -59,7 +71,7 @@ async function fetchClosingMonthValue(closingJson, branchKey, targetMonth) {
     const c = rw.c || [];
     if (String(c[1]?.v ?? '').toLowerCase().trim() !== branchKey) continue;
     const ds = cellYmd(c[0]);
-    if (!ds.startsWith(targetMonth)) continue;
+    if (!ds || closingMonthOf(ds) !== targetMonth) continue;
     const code = normCode(c[2]?.v);
     if (!code) continue;
     const qty = Number(c[5]?.v) || 0;
