@@ -5,10 +5,13 @@
 //   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data} }
 //      data = [{itemCode,itemName,unit,qty,unitPrice,value,priced}]
 //   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
-//   previous = ยอดนับล่าสุด "ภายในเดือนก่อนหน้า"
+//   previous = ยอดปิดรอบสิ้นเดือนที่บันทึกไว้อย่างเป็นทางการ (ชีท "ปิดรอบสิ้นเดือน") ของเดือนก่อนหน้า
+//     ถ้าเดือนนั้นยังไม่มีใครกดปิดยอดเลย (เช่น ต้นเดือนใหม่ ยังไม่ทันบันทึก) fallback ไปใช้ยอดนับสต๊อกล่าสุดในเดือนนั้นแทน
+//     กันหน้า dashboard โชว์ 0 เปล่าๆ ระหว่างรอทีมงานกดปิดยอด (ปกติบันทึกกันภายในต้นเดือนถัดไป ไม่เกินวันที่ 5)
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
 const GID_STOCK = '923363118'; // ชีท "ข้อมูลนับสตอค"
 const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา
+const CLOSING_SHEET = 'ปิดรอบสิ้นเดือน'; // A=วันที่ปิดยอด B=สาขา C=รหัส D=ชื่อ E=หน่วย F=ยอดคงเหลือ G=มูลค่า/หน่วย H=มูลค่ารวม
 // ชีทรายจ่ายจาก Supplier (คนละสเปรดชีต) — [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
 const SUP_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
 const SUP_SHEET = 'ต้นทุนจากsup';
@@ -45,6 +48,32 @@ function prevMonth(ym) {
   const py = m > 1 ? y : y - 1;
   const pm = m > 1 ? m - 1 : 12;
   return `${py}-${String(pm).padStart(2, '0')}`;
+}
+
+// ยอดปิดรอบสิ้นเดือนอย่างเป็นทางการของสาขา+เดือนเป้าหมาย จากชีท "ปิดรอบสิ้นเดือน"
+// รหัสสินค้าซ้ำกันหลายแถว (บันทึกซ้ำ/แก้ไข) เอา "แถวหลังสุด" ใน sheet order เป็นค่าล่าสุดเสมอ (append-only log)
+async function fetchClosingMonthValue(closingJson, branchKey, targetMonth) {
+  const map = {}; // code -> { itemCode, itemName, unit, qty, unitPrice, value, priced }
+  let latestDate = '';
+  for (const rw of (closingJson.table.rows || [])) {
+    const c = rw.c || [];
+    if (String(c[1]?.v ?? '').toLowerCase().trim() !== branchKey) continue;
+    const ds = cellYmd(c[0]);
+    if (!ds.startsWith(targetMonth)) continue;
+    const code = normCode(c[2]?.v);
+    if (!code) continue;
+    const qty = Number(c[5]?.v) || 0;
+    const unitPrice = Number(c[6]?.v) || 0;
+    const value = c[7]?.v != null ? Number(c[7].v) : qty * unitPrice;
+    map[code] = {
+      itemCode: code, itemName: c[3]?.v != null ? String(c[3].v).trim() : '-',
+      unit: c[4]?.v || '', qty, unitPrice, value, priced: true,
+    };
+    if (ds > latestDate) latestDate = ds;
+  }
+  const data = Object.values(map).sort((a, b) => b.value - a.value);
+  const total = data.reduce((s, it) => s + it.value, 0);
+  return { countDate: latestDate, total, data };
 }
 
 async function fetchGviz(url) {
@@ -197,7 +226,7 @@ export default async function handler(req, res) {
   const supBase = `https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    const [stockJ, priceJ, masterJ, supJ] = await Promise.all([
+    const [stockJ, priceJ, masterJ, supJ, closingJ] = await Promise.all([
       fetchGviz(`${base}&gid=${GID_STOCK}`),
       fetchGviz(`${base}&sheet=${encodeURIComponent(PRICE_SHEET)}`),
       // ชีทรายการสินค้า (A=รหัส B=ชื่อ) — ใช้เทียบชื่อหารหัส กรณีแถวนับสต๊อกรหัสอ่านไม่ได้
@@ -205,6 +234,8 @@ export default async function handler(req, res) {
       fetchGviz(`${base}&sheet=${encodeURIComponent('รายการสินค้า')}`).catch(() => null),
       // ชีทรายจ่ายจาก Supplier "ต้นทุนจากsup" (คนละไฟล์) — ไม่มี/อ่านไม่ได้ก็คิดเป็น 0
       fetchGviz(`${supBase}&sheet=${encodeURIComponent(SUP_SHEET)}`).catch(() => null),
+      // ชีท "ปิดรอบสิ้นเดือน" — ใช้เป็นแหล่งข้อมูลหลักของ "เดือนที่แล้ว" (อ่านไม่ได้ก็ fallback เป็น null กลับไปใช้ยอดนับสต๊อกแทน)
+      fetchGviz(`${base}&sheet=${encodeURIComponent(CLOSING_SHEET)}`).catch(() => null),
     ]);
 
     // name (trim) -> code จากชีทรายการสินค้า
@@ -263,8 +294,11 @@ export default async function handler(req, res) {
       return { countDate: latestDate, total, data };
     };
 
-    const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end)
-    const previous = pick(preMonth, null);      // เดือนที่แล้ว (ทั้งเดือน)
+    const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end) — ยังใช้ยอดนับสต๊อกตามเดิม (เดือนนี้ยังไม่ปิดยอด)
+
+    // เดือนที่แล้ว: ใช้ยอดปิดรอบสิ้นเดือนอย่างเป็นทางการก่อนเสมอ ถ้ายังไม่มีข้อมูล (ยังไม่กดปิดยอด) ค่อย fallback ไปยอดนับสต๊อก
+    const closingPrev = closingJ ? await fetchClosingMonthValue(closingJ, branchKey, preMonth) : { data: [] };
+    const previous = closingPrev.data.length ? closingPrev : pick(preMonth, null);
 
     // รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ของสาขานี้ ในช่วง [start, end]
     // คอลัมน์: [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
