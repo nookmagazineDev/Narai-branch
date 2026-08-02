@@ -1,13 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X, Calculator, Store } from 'lucide-react';
+import { CalendarCheck, Search, Loader2, AlertCircle, Save, History, X, Calculator, Store, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import CalcModal from '../components/CalcModal';
 
 const todayYMD = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// ── ช่วงเวลาที่เปิดให้ปิดยอดสิ้นเดือน: วันที่ 25 ของเดือน ถึงวันที่ 5 ของเดือนถัดไป ──
+// นอกช่วงนี้ล็อกไม่ให้กรอก/บันทึก กันบันทึกยอดผิดรอบ (กลางเดือนไม่ใช่เวลาปิดยอด)
+const WINDOW_START_DAY = 25; // เริ่มเปิดวันที่ 25
+const WINDOW_END_DAY = 5;    // ปิดหลังวันที่ 5 ของเดือนถัดไป
+const isWithinClosingWindow = (d = new Date()) => {
+  const day = d.getDate();
+  return day >= WINDOW_START_DAY || day <= WINDOW_END_DAY;
 };
 
 // ป๊อปอัปแสดงประวัติการบันทึกของรายการเดียว — เรียงล่าสุดขึ้นก่อน
@@ -70,6 +79,10 @@ export default function MonthEndClosing() {
   // เครื่องคิดเลขสะสมของช่องยอดคงเหลือ (นับหลายจุด/หลายลังแล้วรวม) — เหมือนหน้านับสต๊อก
   const [calcFor, setCalcFor] = useState(null);   // { productId, name }
   const [calcParts, setCalcParts] = useState({}); // productId -> number[]
+
+  // นอกช่วงวันที่ 25-5 ล็อกไม่ให้สาขากรอก/บันทึก — แอดมิน ('all') ยังเข้าได้ตลอด เผื่อต้องตรวจ/แก้ย้อนหลัง
+  const windowOpen = isWithinClosingWindow();
+  const canEdit = windowOpen || isAdmin;
 
   // แอดมิน ('all'): โหลดรายชื่อสาขาไว้ใน dropdown แล้วตั้งค่าเริ่มต้นเป็นสาขาแรก
   useEffect(() => {
@@ -160,6 +173,10 @@ export default function MonthEndClosing() {
   }, [items, qtyMap]);
 
   const handleSave = async () => {
+    if (!canEdit) {
+      toast.error(`ปิดยอดสิ้นเดือนได้เฉพาะวันที่ ${WINDOW_START_DAY} ถึงวันที่ ${WINDOW_END_DAY} ของเดือนถัดไปเท่านั้น`);
+      return;
+    }
     const payload = items
       .filter(it => {
         const q = qtyMap[normId(it.productId)];
@@ -230,6 +247,29 @@ export default function MonthEndClosing() {
             className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
         </div>
       </div>
+
+      {!canEdit ? (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-10 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h2 className="text-lg font-bold text-gray-800">ยังไม่ถึงช่วงปิดยอดสิ้นเดือน</h2>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            เมนูนี้เปิดให้บันทึกเฉพาะ <span className="font-semibold text-amber-600">วันที่ {WINDOW_START_DAY} ของเดือน ถึงวันที่ {WINDOW_END_DAY} ของเดือนถัดไป</span> เท่านั้น
+            <br />กรุณากลับมาบันทึกอีกครั้งในช่วงเวลาดังกล่าว
+          </p>
+          <p className="text-xs text-gray-400 mt-4">วันนี้ {new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+        </div>
+      ) : (
+      <>
+      {isAdmin && !windowOpen && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-start gap-2">
+          <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800">
+            ตอนนี้อยู่นอกช่วงปิดยอด (วันที่ {WINDOW_START_DAY}–{WINDOW_END_DAY}) — สาขาจะบันทึกไม่ได้ แต่แอดมินยังแก้ไขย้อนหลังได้
+          </p>
+        </div>
+      )}
 
       <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm text-indigo-800">
@@ -352,6 +392,8 @@ export default function MonthEndClosing() {
           )}
         </div>
       </div>
+      </>
+      )}
 
       <ClosingHistoryModal
         open={!!historyFor}
