@@ -79,7 +79,7 @@ async function fetchClosingMonthValue(closingJson, branchKey, targetMonth) {
     const value = c[7]?.v != null ? Number(c[7].v) : qty * unitPrice;
     map[code] = {
       itemCode: code, itemName: c[3]?.v != null ? String(c[3].v).trim() : '-',
-      unit: c[4]?.v || '', qty, unitPrice, value, priced: true,
+      unit: c[4]?.v || '', qty, unitPrice, value, priced: true, date: ds,
     };
     if (ds > latestDate) latestDate = ds;
   }
@@ -186,6 +186,27 @@ export default async function handler(req, res) {
         data.push({ date: dateVal, percent, percent259: p259, percent359: p359 });
       }
       return res.status(200).json({ status: 'success', branch: brA, data });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: error.message });
+    }
+  }
+
+  // โหมด "ยอดยกมาเดือนที่แล้ว" (?closingprev=1&branch=xxx[&end=YYYY-MM-DD]) — ใช้ในหน้านับสต๊อก
+  // ดึงยอดปิดรอบสิ้นเดือนของ "เดือนก่อนหน้า" จากชีท ปิดรอบสิ้นเดือน (ยอดปิดบัญชีจริง ไม่ใช่ยอดนับที่บังเอิญนับไว้)
+  // คืน { code: {qty, unitPrice, value, date} } ให้ฝั่งเว็บ merge เข้าตารางได้เลย
+  if (req.query.closingprev) {
+    const brC = String(req.query.branch || '').toLowerCase().trim();
+    if (!brC) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
+    try {
+      const refDate = String(req.query.end || '').match(/^\d{4}-\d{2}-\d{2}$/)
+        ? String(req.query.end)
+        : new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }); // 'YYYY-MM-DD' เวลาไทย
+      const targetMonth = prevMonth(refDate.slice(0, 7));
+      const closingJ = await fetchGviz(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CLOSING_SHEET)}`);
+      const { data: rows } = await fetchClosingMonthValue(closingJ, brC, targetMonth);
+      const data = {};
+      for (const it of rows) data[it.itemCode] = { qty: it.qty, unitPrice: it.unitPrice, value: it.value, date: it.date };
+      return res.status(200).json({ status: 'success', branch: brC, month: targetMonth, count: rows.length, data });
     } catch (error) {
       return res.status(500).json({ status: 'error', message: error.message });
     }

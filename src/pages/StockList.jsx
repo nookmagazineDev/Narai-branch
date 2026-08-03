@@ -460,25 +460,32 @@ export default function StockList() {
         ? (branches.find(b => b.name === branch)?.outletId || '')
         : (user?.outletId || '');
 
-      const [itemsRes, empRes, incomingRes, avgRes] = await Promise.all([
+      const [itemsRes, empRes, incomingRes, avgRes, closingRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
         apiCall('getScheduleEmployees', { branch }),
         outletId
           ? fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`).then(r => r.json()).catch(() => null)
           : Promise.resolve(null),
         fetch(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`).then(r => r.json()).catch(() => null),
+        // ยอดยกมาเดือนที่แล้ว = ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน) — ยอดปิดบัญชีจริง
+        fetch(`/api/stockcount?closingprev=1&branch=${encodeURIComponent(branch)}`).then(r => r.json()).catch(() => null),
       ]);
 
       if (itemsRes.status === 'success') {
         const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
         const avgMap = (avgRes?.status === 'success') ? avgRes.data : {};
-        // ยอดยกมาเดือนที่แล้ว คำนวณจาก stockHistory ที่ได้มาแล้ว (ไม่ยิง API เพิ่ม)
+        const closingMap = (closingRes?.status === 'success') ? closingRes.data : {};
         setItems(itemsRes.data.map(item => {
-          const pm = prevMonthFromHistory(item.stockHistory);
           const nid = String(item.productId).replace(/^0+/, '');
+          // ใช้ยอดปิดรอบสิ้นเดือนก่อน ถ้าเดือนนั้นยังไม่เคยปิดยอด ค่อย fallback ไปยอดนับล่าสุดของเดือนก่อน (วิธีเดิม)
+          const closing = closingMap[nid];
+          const pm = closing ? null : prevMonthFromHistory(item.stockHistory);
           const incoming = incomingMap[nid];
           return {
-            ...item, remaining: '', requested: '', prevMonthQty: pm ? pm.qty : undefined, prevMonthDate: pm ? pm.date : '',
+            ...item, remaining: '', requested: '',
+            prevMonthQty: closing ? closing.qty : (pm ? pm.qty : undefined),
+            prevMonthDate: closing ? closing.date : (pm ? pm.date : ''),
+            prevMonthFromClosing: !!closing,
             incomingQty: incoming ? incoming.qty : undefined,
             incomingDate: incoming ? incoming.deldate : '',
             incomingOrderNo: incoming ? incoming.orderNo : '',
@@ -1984,13 +1991,17 @@ export default function StockList() {
                             </div>
                           </td>
 
-                          {/* ยอดยกมาเดือนที่แล้ว (นับสิ้นเดือนก่อน จาก stockcount.previous) */}
+                          {/* ยอดยกมาเดือนที่แล้ว — ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน)
+                              ถ้าเดือนนั้นยังไม่เคยปิดยอด จะ fallback เป็นยอดนับล่าสุดของเดือนก่อนแทน */}
                           <td className="px-4 py-3 text-center bg-teal-50/30">
                             <div className="font-semibold text-teal-700 text-sm">
                               {item.prevMonthQty !== undefined && item.prevMonthQty !== null ? item.prevMonthQty : '-'}
                             </div>
                             {item.prevMonthDate && item.prevMonthQty !== undefined && (
-                              <div className="text-[10px] text-gray-400 mt-0.5">{item.prevMonthDate}</div>
+                              <div className="text-[10px] text-gray-400 mt-0.5">
+                                {item.prevMonthDate}
+                                {!item.prevMonthFromClosing && <span className="text-amber-500"> (ยอดนับ)</span>}
+                              </div>
                             )}
                           </td>
 
