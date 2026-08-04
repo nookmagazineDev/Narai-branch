@@ -131,6 +131,19 @@ const PREMIUM_359_ONLY_CODES = new Set([
   '11050030', '11050069',
 ]);
 
+// สาขาที่ขายหัว 2 ราคา (Buffet 259 + Premium 359) แบบระบุตรงๆ — การตรวจจากยอดขายเดือนที่แล้วอย่างเดียวไม่พอ
+// เพราะสาขาที่เพิ่งเริ่มใช้ 2 ราคา เดือนที่แล้วยังไม่มียอด 359 เลย ระบบจะมองว่าเป็นราคาเดียวและไม่แสดงช่องแยกราคา
+// เพิ่มรหัสสาขา (ตัวเล็ก) ในนี้ได้เลยเมื่อมีสาขาเปลี่ยนมาใช้ 2 ราคาเพิ่ม
+const TWO_TIER_BRANCHES = new Set(['crm']);
+
+// สาขานี้เป็นสาขาหัว 2 ราคาหรือไม่ — ดูจาก 3 แหล่งประกอบกัน แหล่งใดเข้าเงื่อนไขก็ถือว่าใช่:
+// 1) ระบุตรงๆ ใน TWO_TIER_BRANCHES  2) เดือนที่แล้วมียอดขายทั้ง 259 และ 359 จริง
+// 3) เคยบันทึกจำนวนหัวแยกราคาไว้ในปฏิทิน (กันเคสข้อมูลยอดขายดึงไม่ได้/office-server ล่ม)
+const isTwoTierBranchOf = (branch, bucketInfo, savedPcts) =>
+  TWO_TIER_BRANCHES.has(String(branch || '').toLowerCase().trim())
+  || !!bucketInfo?.hasTwoTier
+  || (savedPcts || []).some(p => (Number(p.percent259) || 0) > 0 || (Number(p.percent359) || 0) > 0);
+
 export default function StockList() {
   const { user } = useAuth();
   const isAll = user?.branch?.toLowerCase() === 'all';
@@ -208,6 +221,13 @@ export default function StockList() {
   // Effective branch used for data loading
   const effectiveBranch = isAll ? selectedBranch : user?.branch;
 
+  // สาขาหัว 2 ราคา — ใช้ตัวเดียวกันทั้งปฏิทินกรอกจำนวนหัวและปุ่มบันทึก (สูตรคำนวณยอดเบิกคำนวณของมันเองตอนกด
+  // เพราะต้องใช้ข้อมูลที่ดึงสดในจังหวะนั้น ดู calcRequested)
+  const isTwoTierBranch = useMemo(
+    () => isTwoTierBranchOf(effectiveBranch, coverBuckets, specialPcts),
+    [effectiveBranch, coverBuckets, specialPcts]
+  );
+
   const loadSpecialPcts = async (branch) => {
     if (!branch) {
       setSpecialPcts([]);
@@ -227,8 +247,9 @@ export default function StockList() {
   };
 
   // ดึงจำนวนหัวลูกค้ารายวันของ "เดือนที่แล้ว" (เดือนปฏิทินก่อนหน้าวันนี้) มาสรุปเป็นค่าเฉลี่ย 9 กลุ่ม
-  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก" (ยังใช้ยอดรวม ไม่แยกราคา)
-  // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) จะได้ buckets259/buckets359 มาแสดงแยกเพิ่มด้วย (informational)
+  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก"
+  // สาขาหัว 2 ราคาได้ buckets259/buckets359 แยกด้วย — ใช้เป็นค่าเริ่มต้นของช่องแยกราคา และเป็น fallback
+  // ของสูตรคำนวณสินค้ากลุ่ม 359 (hasTwoTier ที่คืนไปเป็นแค่หนึ่งในเกณฑ์ ดู isTwoTierBranchOf)
   const fetchCoverBuckets = async (branch) => {
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -320,7 +341,7 @@ export default function StockList() {
 
   const handleSaveAllPcts = async () => {
     if (!effectiveBranch) return;
-    const isTwoTier = !!coverBuckets?.hasTwoTier;
+    const isTwoTier = isTwoTierBranch;
 
     const updates = [];
     if (isTwoTier) {
@@ -918,6 +939,9 @@ export default function StockList() {
           if (item.percent359 !== undefined) savedCovers359Map[item.date] = Number(item.percent359) || 0;
         });
       }
+      // สาขาหัว 2 ราคาหรือไม่ — เกณฑ์เดียวกับปฏิทินกรอกจำนวนหัว (ระบุตรงๆ / ยอดขายเดือนก่อน / เคยบันทึกแยกราคา)
+      // ใช้ข้อมูลที่เพิ่งดึงสดในรอบคำนวณนี้ ไม่พึ่ง state ของหน้าจอ กันกรณีกดคำนวณก่อนหน้าจอโหลดเสร็จ
+      const isTwoTierCalc = isTwoTierBranchOf(effectiveBranch, bucketInfo, pctRes.status === 'success' ? pctRes.data : []);
       const realCoversMap = {};
       const realCovers359Map = {};
       if (realRes && realRes.status === 'success') {
@@ -949,8 +973,9 @@ export default function StockList() {
         const startForecast = new Date(j.lastD);
         startForecast.setDate(startForecast.getDate() + 1);
 
-        // สินค้าพรีเมียม 359 อย่างเดียว + สาขามี 2 ราคาจริง → ใช้หัวลูกค้า 359 ล้วนๆ แทนยอดรวมทุกราคา
-        const usePremiumOnly = j.isPremium359Only && bucketInfo.hasTwoTier;
+        // ไอเทมในกลุ่มราคา 359 (PREMIUM_359_ONLY_CODES) + สาขามี 2 ราคา → ใช้หัวลูกค้า 359 ล้วนๆ
+        // ไอเทมที่ไม่ได้ระบุกลุ่มราคา → ใช้ยอดรวมทั้ง 2 ราคา (percent = 259+359 ที่ระบบรวมให้ตอนบันทึก)
+        const usePremiumOnly = j.isPremium359Only && isTwoTierCalc;
         const getDayCovers = usePremiumOnly ? covers359ForDate : coversForDate;
 
         let totalForecastCovers = 0;
@@ -1706,7 +1731,7 @@ export default function StockList() {
                             {' | '}วันศุกร์ {fmtBucketLine(coverBuckets.buckets.friday)}
                             {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets.weekend)}
                           </div>
-                          {coverBuckets.hasTwoTier && (
+                          {isTwoTierBranch && (
                             <>
                               <div className="pt-1 border-t border-gray-200">
                                 <span className="font-semibold text-sky-700">แยกราคา 259:</span>{' '}
@@ -1750,17 +1775,28 @@ export default function StockList() {
                           {getCalendarDays().map((dayObj) => {
                             const ymdStr = dateToYMD(dayObj.date);
                             const isToday = dateToYMD(new Date()) === ymdStr;
-                            const isTwoTier = !!coverBuckets?.hasTwoTier;
+                            const isTwoTier = isTwoTierBranch;
                             const val = pctInputMap[ymdStr] !== undefined ? pctInputMap[ymdStr] : '';
                             const suggestedVal = coverBucketFor(dayObj.date, coverBuckets?.buckets);
                             // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359) — กรอกแยกได้จริง (มีผลกับสูตรคำนวณยอดเบิก
                             // ของสินค้าพรีเมียม 359 โดยตรง) ไม่ใช่แค่แสดงผลเฉยๆ เหมือนก่อนหน้านี้
-                            const suggested259 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets259) : null;
-                            const suggested359 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets.buckets359) : null;
+                            const suggested259 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets?.buckets259) : null;
+                            const suggested359 = isTwoTier ? coverBucketFor(dayObj.date, coverBuckets?.buckets359) : null;
                             const val259 = pct259InputMap[ymdStr] !== undefined ? pct259InputMap[ymdStr] : '';
                             const val359 = pct359InputMap[ymdStr] !== undefined ? pct359InputMap[ymdStr] : '';
 
                             const orig = specialPcts.find(p => p.date === ymdStr);
+                            // ยอดรวมของวัน (โชว์ใต้ช่องกรอกในโหมด 2 ราคา):
+                            // มีตัวเลขแยกราคา (กรอกอยู่/บันทึกไว้) → รวม 259+359 · ไม่มีแต่มียอดรวมเดิมที่บันทึกก่อนแยกราคา → ใช้ยอดนั้น
+                            // ไม่มีทั้งคู่ → รวมค่าเฉลี่ยคาดการณ์ของทั้ง 2 ราคา
+                            const hasSplitInfo = val259 !== '' || val359 !== '';
+                            const legacyTotal = orig?.percent259 === undefined && orig?.percent359 === undefined && orig?.percent !== undefined
+                              ? Number(orig.percent) || 0 : null;
+                            const cellTotal = isTwoTier
+                              ? (hasSplitInfo
+                                ? (Number(val259) || 0) + (Number(val359) || 0)
+                                : (legacyTotal !== null ? legacyTotal : (suggested259 || 0) + (suggested359 || 0)))
+                              : null;
                             let isModified;
                             if (isTwoTier) {
                               const cur259Num = val259 === '' ? 0 : Number(val259);
@@ -1777,7 +1813,7 @@ export default function StockList() {
                             return (
                               <div
                                 key={dayObj.key}
-                                className={`p-1.5 border rounded-lg flex flex-col justify-between ${isTwoTier ? 'min-h-[92px]' : 'min-h-[64px]'} transition-colors ${
+                                className={`p-1.5 border rounded-lg flex flex-col justify-between ${isTwoTier ? 'min-h-[104px]' : 'min-h-[64px]'} transition-colors ${
                                   dayObj.isCurrentMonth
                                     ? isModified
                                       ? 'border-amber-400 bg-amber-50/50 shadow-sm'
@@ -1833,6 +1869,14 @@ export default function StockList() {
                                         title={val359 === '' ? 'ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)' : undefined}
                                         className="w-full text-right text-[11px] bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       />
+                                    </div>
+                                    <div
+                                      className={`text-[9px] text-center font-semibold ${legacyTotal !== null && !hasSplitInfo ? 'text-amber-600' : 'text-gray-500'}`}
+                                      title={legacyTotal !== null && !hasSplitInfo
+                                        ? 'ยอดรวมที่บันทึกไว้ก่อนแยกราคา — กรอกช่อง 259/359 เพื่อแยกราคาให้วันนี้'
+                                        : 'ยอดรวมทั้ง 2 ราคา (ใช้กับสินค้าทั่วไปที่ไม่ได้จำกัดเฉพาะลูกค้า 359)'}
+                                    >
+                                      รวม {Number(cellTotal).toLocaleString('th-TH')} คน{legacyTotal !== null && !hasSplitInfo ? ' (ยังไม่แยก)' : ''}
                                     </div>
                                   </div>
                                 ) : (
