@@ -246,40 +246,65 @@ export default function StockList() {
     }
   };
 
-  // ดึงจำนวนหัวลูกค้ารายวันของ "เดือนที่แล้ว" (เดือนปฏิทินก่อนหน้าวันนี้) มาสรุปเป็นค่าเฉลี่ย 9 กลุ่ม
-  // ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทิน และใน "คำนวณยอดเบิก"
-  // สาขาหัว 2 ราคาได้ buckets259/buckets359 แยกด้วย — ใช้เป็นค่าเริ่มต้นของช่องแยกราคา และเป็น fallback
-  // ของสูตรคำนวณสินค้ากลุ่ม 359 (hasTwoTier ที่คืนไปเป็นแค่หนึ่งในเกณฑ์ ดู isTwoTierBranchOf)
+  // ดึงจำนวนหัวลูกค้ารายวันมาสรุปเป็นค่าเฉลี่ย 9 กลุ่ม ใช้เป็นค่าคาดการณ์เริ่มต้นในปฏิทินและ "คำนวณยอดเบิก"
+  // หลักใช้ "เดือนที่แล้ว" ทั้งเดือน — แต่ดึง "เดือนนี้เท่าที่มีข้อมูล" มาคู่กันด้วย เพื่อ:
+  // 1) ตรวจสาขาหัว 2 ราคาให้เจอเอง แม้เพิ่งเริ่มขาย 2 ราคาเดือนนี้ (เดือนที่แล้วยังไม่มียอด 359 เลย)
+  // 2) fallback: เดือนที่แล้วไม่มีข้อมูลเลย (สาขาเพิ่งเปิด/ระบบยอดขายล่มช่วงนั้น) ใช้ค่าเฉลี่ยเดือนนี้แทน 0 ล้วน
+  // 3) ค่าเฉลี่ยแยกราคา 259/359 เลือกจากเดือนที่ "มียอดทั้ง 2 ราคาจริง" (เดือนที่แล้วก่อน แล้วค่อยเดือนนี้)
   const fetchCoverBuckets = async (branch) => {
     const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const end = new Date(now.getFullYear(), now.getMonth(), 0);
+    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    const curStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    const label = `${thaiMonths[start.getMonth()]} ${start.getFullYear() + 543}`;
-    try {
-      const res = await tryGetJson(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(start)}&endDate=${ymd(end)}`);
+    const monthLabel = (d) => `${thaiMonths[d.getMonth()]} ${d.getFullYear() + 543}`;
+
+    // สรุปคำตอบจาก /api/dashboard หนึ่งช่วงเวลา เป็นชุดค่าเฉลี่ย 9 กลุ่ม + ยอดรวมไว้ตัดสินใจว่ามีข้อมูลไหม
+    const summarize = (res) => {
       const coversByDate = {}, covers259ByDate = {}, covers359ByDate = {};
-      let total259 = 0, total359 = 0;
-      if (res.status === 'success') {
+      let total = 0, total259 = 0, total359 = 0;
+      if (res?.status === 'success') {
         (res.data?.daily || []).forEach(d => {
-          coversByDate[d.date] = Number(d.covers) || 0;
+          const q = Number(d.covers) || 0;
           const q259 = Number(d.buffet259) || 0;
           const q359 = Number(d.buffet359) || 0;
+          coversByDate[d.date] = q;
           covers259ByDate[d.date] = q259;
           covers359ByDate[d.date] = q359;
-          total259 += q259;
-          total359 += q359;
+          total += q; total259 += q259; total359 += q359;
         });
       }
       return {
         buckets: buildCoverBuckets(coversByDate),
         buckets259: buildCoverBuckets(covers259ByDate),
         buckets359: buildCoverBuckets(covers359ByDate),
-        hasTwoTier: total259 > 0 && total359 > 0,
-        label,
+        total,
+        twoTier: total259 > 0 && total359 > 0,
+      };
+    };
+
+    try {
+      const [prevRes, curRes] = await Promise.all([
+        tryGetJson(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(prevStart)}&endDate=${ymd(prevEnd)}`).catch(() => null),
+        tryGetJson(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(curStart)}&endDate=${ymd(now)}`).catch(() => null),
+      ]);
+      const prev = summarize(prevRes);
+      const cur = summarize(curRes);
+
+      const base = prev.total > 0 ? prev : cur;
+      const baseLabel = prev.total > 0 ? monthLabel(prevStart) : `${monthLabel(curStart)} — เดือนนี้เท่าที่มีข้อมูล`;
+      const tier = prev.twoTier ? prev : (cur.twoTier ? cur : base);
+      const tierLabel = prev.total > 0 && !prev.twoTier && cur.twoTier ? ' · แยกราคาเฉลี่ยจากเดือนนี้' : '';
+      return {
+        buckets: base.buckets,
+        buckets259: tier.buckets259,
+        buckets359: tier.buckets359,
+        hasTwoTier: prev.twoTier || cur.twoTier,
+        label: baseLabel + tierLabel,
       };
     } catch (e) {
-      return { buckets: buildCoverBuckets({}), buckets259: buildCoverBuckets({}), buckets359: buildCoverBuckets({}), hasTwoTier: false, label };
+      const empty = buildCoverBuckets({});
+      return { buckets: empty, buckets259: empty, buckets359: empty, hasTwoTier: false, label: monthLabel(prevStart) };
     }
   };
 
