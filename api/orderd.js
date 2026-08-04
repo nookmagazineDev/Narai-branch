@@ -1,25 +1,8 @@
-import mysql from 'mysql2/promise';
+import { queryRead, replyDbError } from '../lib/mysql.js';
 
 // ใบรับ (ยอดรับเข้าสาขา) — ดึงตรงจาก MySQL: inventory.dyndns.tv / myfbdata.trans
 // ของที่รับเข้าสาขาถูกบันทึกเป็น Trn_Type IN ('TRF','RCV') โดยปลายทาง Trn_To = เลขสาขา
 // (ต้องกรอง type เพราะ SLS = การขาย ก็มี Trn_To = สาขาเช่นกัน)
-
-let pool;
-function getPool() {
-  if (!pool) {
-    pool = mysql.createPool({
-      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'myfbdata',
-      waitForConnections: true,
-      connectionLimit: 5,
-      connectTimeout: 15000,
-    });
-  }
-  return pool;
-}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -50,7 +33,7 @@ export default async function handler(req, res) {
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
   try {
-    const [rows] = await getPool().query(
+    const rows = await queryRead(
       `SELECT Trn_itemCode AS itemCode, Trn_Unit AS unit,
               DATE_FORMAT(Trn_DocDate, '%Y-%m-%d') AS d,
               SUM(Trn_InvQty) AS qty
@@ -85,7 +68,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ status: 'success', data: receivedMap });
   } catch (error) {
-    console.error('MySQL orderd error:', error);
-    return res.status(500).json({ status: 'error', message: error.message });
+    return replyDbError(res, error, 'orderd');
   }
 }

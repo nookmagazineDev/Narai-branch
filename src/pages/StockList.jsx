@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, errMessage } from '../services/api';
+import { tryGetJson } from '../services/dashboardApi';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -179,7 +180,7 @@ export default function StockList() {
     setMenuTables(prev => ({ ...prev, [menuName]: { loading: true, rows: [] } }));
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}&menu=${encodeURIComponent(menuName)}`;
-      const res = await fetch(`/api/usagebytable?${qs}`).then(r => r.json());
+      const res = await tryGetJson(`/api/usagebytable?${qs}`);
       setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: res.status === 'success' ? (res.data || []) : [] } }));
     } catch {
       setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: [] } }));
@@ -214,7 +215,7 @@ export default function StockList() {
     }
     setIsLoadingPct(true);
     try {
-      const res = await fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(branch)}`).then(r => r.json());
+      const res = await tryGetJson(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(branch)}`);
       if (res.status === 'success') {
         setSpecialPcts(res.data || []);
       }
@@ -235,7 +236,7 @@ export default function StockList() {
     const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const label = `${thaiMonths[start.getMonth()]} ${start.getFullYear() + 543}`;
     try {
-      const res = await fetch(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(start)}&endDate=${ymd(end)}`).then(r => r.json());
+      const res = await tryGetJson(`/api/dashboard?branch=${encodeURIComponent(branch)}&startDate=${ymd(start)}&endDate=${ymd(end)}`);
       const coversByDate = {}, covers259ByDate = {}, covers359ByDate = {};
       let total259 = 0, total359 = 0;
       if (res.status === 'success') {
@@ -461,16 +462,21 @@ export default function StockList() {
         ? (branches.find(b => b.name === branch)?.outletId || '')
         : (user?.outletId || '');
 
-      const [itemsRes, empRes, incomingRes, avgRes, closingRes] = await Promise.all([
+      // ใช้ allSettled: มีแค่รายการสินค้าที่ขาดไม่ได้ ส่วนที่เหลือถ้าโหลดไม่ได้ก็ยังเปิดหน้าทำงานต่อได้
+      // (เดิมใช้ Promise.all — คำขอเดียวพลาด หน้าว่างทั้งหน้าแล้วขึ้น "ติดต่อเซิร์ฟเวอร์ไม่ได้")
+      const settled = await Promise.allSettled([
         apiCall('getStockItems', { branch }),
         apiCall('getScheduleEmployees', { branch }),
         outletId
-          ? fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`).then(r => r.json()).catch(() => null)
+          ? tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`)
           : Promise.resolve(null),
-        fetch(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`).then(r => r.json()).catch(() => null),
+        tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`),
         // ยอดยกมาเดือนที่แล้ว = ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน) — ยอดปิดบัญชีจริง
-        fetch(`/api/stockcount?closingprev=1&branch=${encodeURIComponent(branch)}`).then(r => r.json()).catch(() => null),
+        tryGetJson(`/api/stockcount?closingprev=1&branch=${encodeURIComponent(branch)}`),
       ]);
+      if (settled[0].status === 'rejected') throw settled[0].reason;
+      const [itemsRes, empRes, incomingRes, avgRes, closingRes] =
+        settled.map(s => s.status === 'fulfilled' ? s.value : null);
 
       if (itemsRes.status === 'success') {
         const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
@@ -496,9 +502,9 @@ export default function StockList() {
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
       }
-      if (empRes.status === 'success') setEmployees(empRes.data);
+      if (empRes?.status === 'success') setEmployees(empRes.data);
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      toast.error(errMessage(err));
     } finally {
       setLoading(false);
     }
@@ -522,9 +528,9 @@ export default function StockList() {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
       const supQs = `branch=${encodeURIComponent(effectiveBranch)}&start=${encodeURIComponent(apiStartDate)}&end=${encodeURIComponent(apiEndDate)}&supreceived=1`;
       const [receivedRes, usageMenuRes, supRcvRes] = await Promise.all([
-        fetch(`/api/orderd?${qs}`).then(r => r.json()),
-        fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
-        fetch(`/api/stockcount?${supQs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
+        tryGetJson(`/api/orderd?${qs}`, 'ดึงยอดรับเข้า'),
+        tryGetJson(`/api/usagemenu?${qs}`, 'ดึงยอดใช้ตามเมนู'),
+        tryGetJson(`/api/stockcount?${supQs}`, 'ดึงยอดรับจาก Supplier'),
       ]);
 
       // ยอดรับจากรายจ่าย Supplier (ที่สาขากรอกในหน้ากรอกรายจ่าย) — merge เข้ากับยอดรับจาก POS
@@ -593,7 +599,7 @@ export default function StockList() {
     setIsLoadingWithdrawals(true);
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
-      const res = await fetch(`/api/withdrawals?${qs}`).then(r => r.json());
+      const res = await tryGetJson(`/api/withdrawals?${qs}`);
       if (res.status === 'success') {
         setWithdrawalDocs(res.data || []);
         setExpandedDoc(null);
@@ -734,8 +740,7 @@ export default function StockList() {
       ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
       : (user?.outletId || ''));
     if (!outletId) throw new Error('ไม่พบรหัสสาขา (outletId)');
-    const res = await fetch(`/api/pending_orders?no=${encodeURIComponent(order.no)}&outletId=${encodeURIComponent(outletId)}`);
-    const data = await res.json();
+    const data = await tryGetJson(`/api/pending_orders?no=${encodeURIComponent(order.no)}&outletId=${encodeURIComponent(outletId)}`);
     if (data.status !== 'success') throw new Error(data.message || 'ดึงรายละเอียดใบเบิกไม่สำเร็จ');
     const items = (data.items || []).map(it => ({
       itemCode: it.itemCode, itemName: it.itemName, qty: Number(it.qty) || 0,
@@ -857,7 +862,7 @@ export default function StockList() {
     setIsCalcReq(true);
     try {
       // 1) ค่าเฉลี่ยต่อหัวของสาขานี้
-      const avgRes = await fetch(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json());
+      const avgRes = await tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`);
       if (avgRes.status !== 'success') throw new Error(avgRes.message || 'ดึงค่าเฉลี่ยต่อหัวไม่สำเร็จ');
       const avgMap = avgRes.data || {};
       if (!Object.keys(avgMap).length) throw new Error('ไม่พบค่าเฉลี่ยต่อหัวของสาขานี้ในชีท');
@@ -898,10 +903,10 @@ export default function StockList() {
       const realRangeEnd = targetForecast < yesterday ? targetForecast : yesterday;
 
       const [pctRes, bucketInfo, realRes] = await Promise.all([
-        fetch(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`).then(r => r.json()),
+        tryGetJson(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`),
         fetchCoverBuckets(effectiveBranch),
         (realRangeStart && realRangeStart <= realRangeEnd)
-          ? fetch(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(realRangeStart)}&endDate=${toYMD(realRangeEnd)}`).then(r => r.json())
+          ? tryGetJson(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(realRangeStart)}&endDate=${toYMD(realRangeEnd)}`)
           : Promise.resolve(null),
       ]);
 
@@ -1003,8 +1008,7 @@ export default function StockList() {
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const prefix = `${yy}${mm}`;
     try {
-      const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      const data = await res.json();
+      const data = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
       let maxRun = 0;
       if (data.status === 'success' && Array.isArray(data.all)) {
         data.all.forEach(order => {
@@ -1095,8 +1099,7 @@ export default function StockList() {
     }
     // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
     try {
-      const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      const pj = await p.json();
+      const pj = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
       if (pj.status === 'success') setPendingOrders(pj.data || []);
     } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
   };
@@ -1214,8 +1217,7 @@ export default function StockList() {
       toast.error('ส่งสั่งของไม่สำเร็จเลยสักใบ');
     }
     try {
-      const p = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      const pj = await p.json();
+      const pj = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
       if (pj.status === 'success') setPendingOrders(pj.data || []);
     } catch (e) { /* ไม่เป็นไร กดดูเองได้ */ }
   };
@@ -1250,8 +1252,7 @@ export default function StockList() {
       try {
         const results = await Promise.all(targets.map(async (b) => {
           try {
-            const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(b.outletId)}`);
-            const data = await res.json();
+            const data = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(b.outletId)}`);
             if (data.status === 'success') {
               return (data.data || []).map(o => ({ ...o, branchName: b.name, outletId: b.outletId }));
             }
@@ -1275,8 +1276,7 @@ export default function StockList() {
     if (!outletId) { toast.error('ไม่พบรหัสสาขา'); return; }
     setIsLoadingPending(true);
     try {
-      const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      const data = await res.json();
+      const data = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
       if (data.status === 'success') {
         setPendingOrders(data.data || []);
         setShowPendingModal(true);
@@ -1388,7 +1388,7 @@ export default function StockList() {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
       }
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      toast.error(errMessage(err));
     } finally {
       setIsSaving(false);
     }
@@ -1412,7 +1412,7 @@ export default function StockList() {
           toast.error(res.message || 'เกิดข้อผิดพลาด');
         }
       } catch (err) {
-        toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+        toast.error(errMessage(err));
       } finally {
         setIsEditingCat(false);
       }
@@ -1448,7 +1448,7 @@ export default function StockList() {
         toast.error(res.message || 'บันทึกค่าเฉลี่ยต่อหัวไม่สำเร็จ');
       }
     } catch (e) {
-      toast.error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ');
+      toast.error(errMessage(e));
     } finally {
       setSavingAvg(s => { const n = { ...s }; delete n[pid]; return n; });
     }

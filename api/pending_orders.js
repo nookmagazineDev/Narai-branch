@@ -1,4 +1,4 @@
-import mysql from 'mysql2/promise';
+import { queryRead, replyDbError } from '../lib/mysql.js';
 
 // ใบเบิกค้าง (สั่งแล้วยังไม่ได้รับของ) — อ่านตรงจาก myfbdata.orderd
 //   ใบที่ยังไม่ได้รับ = ยังไม่มีรายการไหนถูกบันทึกรับเข้า (Ord_Rcv ยังว่าง)
@@ -6,23 +6,6 @@ import mysql from 'mysql2/promise';
 // GET ?outletId=7[&days=120][&no=3498]
 // GET ?outletId=7&incoming=1  → สินค้ารอเข้า: ต่อ 1 รหัสสินค้า เอาแถวที่ยังไม่รับ (Ord_Rcv ว่าง)
 //   ซึ่งวันที่รับ (deldate) ใกล้ที่สุด (ถ้ารหัสเดียวกันค้างอยู่หลายใบ เอาใบที่จะถึงก่อน)
-
-let pool;
-function getPool() {
-  if (!pool) {
-    pool = mysql.createPool({
-      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'myfbdata',
-      waitForConnections: true,
-      connectionLimit: 5,
-      connectTimeout: 15000,
-    });
-  }
-  return pool;
-}
 
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
@@ -49,7 +32,7 @@ export default async function handler(req, res) {
   try {
     // ดูรายการสินค้าในใบเดียว
     if (no) {
-      const [items] = await getPool().query(
+      const items = await queryRead(
         `SELECT Ord_Seq AS seq, Ord_ItmID AS itemId, Ord_itemCode AS itemCode,
                 Ord_ItemName AS itemName, Ord_Qty AS qty, Ord_Unit AS unit,
                 Ord_UnPr AS unitPrice, Ord_Rcv AS received
@@ -69,7 +52,7 @@ export default async function handler(req, res) {
     const suffix = DB_SUFFIX[Number(outletId)];
     if (suffix) {
       try {
-        const [cfg] = await getPool().query(`SELECT Cfg_LstOrdID AS v FROM \`myfbdata${suffix}\`.config LIMIT 1`);
+        const cfg = await queryRead(`SELECT Cfg_LstOrdID AS v FROM \`myfbdata${suffix}\`.config LIMIT 1`);
         const last = Number(cfg[0]?.v) || 0;
         if (last > 0) {
           // 500 เลขย้อนหลังครอบคลุมเกิน 120 วันของทุกสาขา (สาขาที่สั่งถี่สุดใช้ ~210 เลข)
@@ -84,7 +67,7 @@ export default async function handler(req, res) {
     // สินค้ารอเข้า — ต่อรหัสสินค้า 1 รายการ เอาแถวที่ยังไม่รับ วันรับใกล้ที่สุด (เฉพาะช่วงใกล้ปัจจุบัน
     // กันใบเก่าที่ค้าง Ord_Rcv ว่างมานาน — POS ไม่ได้บันทึกรับจริง ไม่ใช่ของที่ยังรอเข้าจริง)
     if (req.query.incoming) {
-      const [rows] = await getPool().query(
+      const rows = await queryRead(
         `SELECT Ord_itemCode AS itemCode, Ord_ItemName AS itemName, Ord_Qty AS qty,
                 Ord_Unit AS unit, DATE_FORMAT(Ord_DelDate, '%Y-%m-%d') AS deldate, Ord_No AS orderNo
            FROM orderd
@@ -102,7 +85,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', data: incoming });
     }
 
-    const [rows] = await getPool().query(
+    const rows = await queryRead(
       `SELECT Ord_No AS no,
               DATE_FORMAT(Ord_OrdDate, '%Y-%m-%d') AS orderDate,
               DATE_FORMAT(Ord_DelDate, '%Y-%m-%d') AS deldate,
@@ -133,7 +116,6 @@ export default async function handler(req, res) {
       all,                                  // ทั้งหมดในช่วงเวลา
     });
   } catch (error) {
-    console.error('pending_orders error:', error);
-    return res.status(500).json({ status: 'error', message: error.message });
+    return replyDbError(res, error, 'pending_orders');
   }
 }

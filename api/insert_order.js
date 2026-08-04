@@ -1,4 +1,5 @@
-import mysql from 'mysql2/promise';
+import { getPool, queryRead, replyDbError } from '../lib/mysql.js';
+import { fetchSheet } from '../lib/upstream.js';
 
 // สั่งของ/ขอเบิกจากสาขา — เขียนตรงลง MySQL: inventory.dyndns.tv
 //   หัวใจคือตาราง myfbdata.orderd (ใบสั่งของกลาง, Ord_ReqType='TRF')
@@ -7,23 +8,6 @@ import mysql from 'mysql2/promise';
 //
 // POST body: { outletId, branch, deldate:'YYYY-MM-DD', items:[{itemId,itemCode,itemName,qty,unit,price}], dryRun }
 // GET  ?peek=<Ord_No>&outletId=<id>  → ดูใบที่บันทึกไปแล้ว (ใช้ตรวจสอบผลลัพธ์)
-
-let pool;
-function getPool() {
-  if (!pool) {
-    pool = mysql.createPool({
-      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'myfbdata',
-      waitForConnections: true,
-      connectionLimit: 5,
-      connectTimeout: 15000,
-    });
-  }
-  return pool;
-}
 
 // รหัสสาขา (outletId) → ชื่อฐานข้อมูลสาขา myfbdata<suffix>
 // ตรวจสอบแล้วจากค่า Cfg_LstOrdID ที่ตรงกับใบสั่งล่าสุดของแต่ละสาขาจริง
@@ -49,7 +33,7 @@ async function loadSheetMaps() {
   // แคช 10 นาที กันยิงชีทซ้ำทุกครั้งที่สั่งของ
   if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache;
   const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
-  const txt = await fetch(url).then(r => r.text());
+  const txt = await fetchSheet(url).then(r => r.text());
   const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
   if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
   const json = JSON.parse(txt.slice(s, e + 1));
@@ -117,7 +101,7 @@ export default async function handler(req, res) {
     const { peek, outletId } = req.query;
     if (!outletId) return res.status(400).json({ status: 'error', message: 'ระบุ outletId' });
     try {
-      const [rows] = await getPool().query(
+      const rows = await queryRead(
         `SELECT Ord_No, Ord_Seq, DATE_FORMAT(Ord_OrdDate,'%Y-%m-%d') ordDate,
                 DATE_FORMAT(Ord_DelDate,'%Y-%m-%d') delDate, Ord_PostTime postTime,
                 Ord_ItmID itemId, Ord_itemCode itemCode, Ord_ItemName itemName,
@@ -289,8 +273,7 @@ export default async function handler(req, res) {
       message: `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${clean.length} รายการ เรียบร้อย`,
     });
   } catch (error) {
-    console.error('insert_order error:', error);
-    return res.status(500).json({ status: 'error', message: error.message });
+    return replyDbError(res, error, 'insert_order');
   } finally {
     conn.release();
   }
