@@ -2,18 +2,22 @@
 var SALES_DATA_SPREADSHEET_ID = '1kxVqX_hp5B0YTNSPj7mhyFl1OLbnhN-dIWm9ywzHA60';
 
 // --- Cache: ชีท "ข้อมูลนับสตอค" มี 25,000+ แถวสะสมไม่มีวันหมด อ่านทั้งชีทกิน ~20 วินาทีทุกครั้ง
-//   แคชผลลัพธ์ getStockItems ไว้ต่อสาขา (90 วินาที) กันคนกดเข้าหน้านับสต๊อกซ้ำๆ ในช่วงเวลาใกล้กันต้องรอนาน
+//   แคชผลลัพธ์ที่อ่านแล้วไว้ต่อสาขา กันคนกดเข้าหน้าเดิมซ้ำๆ ในช่วงเวลาใกล้กันต้องรอนาน
 //   CacheService จำกัดค่าละ 100KB จึงต้อง gzip+base64 ก่อนเก็บ แล้วยังตัดเป็นชิ้นๆ (chunk) เผื่อสาขาที่มีข้อมูลเยอะเกิน
-var STOCK_ITEMS_CACHE_TTL = 90; // วินาที
-function getStockItemsFromCache(reqBranch) {
+var STOCK_ITEMS_CACHE_TTL = 90;    // วินาที — getStockItems (หน้านับสต๊อก)
+var CLOSING_ITEMS_CACHE_TTL = 300; // วินาที — getClosingItems อ่านแค่ชีท item ที่แทบไม่เปลี่ยนระหว่างวัน แคชได้นานกว่า
+var MONTH_END_CACHE_TTL = 120;     // วินาที — getMonthEndClosing (ล้างแคชทันทีเมื่อมีการบันทึกใหม่ จึงไม่เห็นข้อมูลเก่าค้าง)
+var CACHE_CHUNK_SIZE = 90000;      // ตัวอักษรต่อชิ้น — เผื่อขอบเขตให้ห่างจากลิมิต 100KB ของ CacheService
+
+// อ่านค่าที่แคชไว้ (คืน null ถ้าไม่มี/หมดอายุ/อ่านพลาด — ให้ผู้เรียกไปอ่านสดแทน)
+function getCachedJson(cacheKey) {
   try {
     var cache = CacheService.getScriptCache();
-    var metaKey = 'stockItems_' + reqBranch + '_meta';
-    var chunkCount = parseInt(cache.get(metaKey), 10);
+    var chunkCount = parseInt(cache.get(cacheKey + '_meta'), 10);
     if (!chunkCount) return null;
     var parts = [];
     for (var i = 0; i < chunkCount; i++) {
-      var part = cache.get('stockItems_' + reqBranch + '_' + i);
+      var part = cache.get(cacheKey + '_' + i);
       if (part === null) return null; // ชิ้นไหนหาย (หมดอายุไม่พร้อมกัน) ถือว่า cache miss ทั้งชุด
       parts.push(part);
     }
@@ -24,21 +28,41 @@ function getStockItemsFromCache(reqBranch) {
     return null; // แคชอ่านพลาด ไม่เป็นไร ไปอ่านสดแทน
   }
 }
-function putStockItemsToCache(reqBranch, itemsArray) {
+
+function putCachedJson(cacheKey, value, ttlSeconds) {
   try {
     var cache = CacheService.getScriptCache();
-    var jsonStr = JSON.stringify(itemsArray);
+    var jsonStr = JSON.stringify(value);
     var gzipped = Utilities.gzip(Utilities.newBlob(jsonStr, 'application/json'));
     var b64 = Utilities.base64Encode(gzipped.getBytes());
-    var CHUNK_SIZE = 90000; // ตัวอักษร — เผื่อขอบเขตให้ห่างจากลิมิต 100KB ของ CacheService
-    var chunkCount = Math.ceil(b64.length / CHUNK_SIZE) || 1;
+    var chunkCount = Math.ceil(b64.length / CACHE_CHUNK_SIZE) || 1;
     for (var i = 0; i < chunkCount; i++) {
-      cache.put('stockItems_' + reqBranch + '_' + i, b64.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE), STOCK_ITEMS_CACHE_TTL);
+      cache.put(cacheKey + '_' + i, b64.substring(i * CACHE_CHUNK_SIZE, (i + 1) * CACHE_CHUNK_SIZE), ttlSeconds);
     }
-    cache.put('stockItems_' + reqBranch + '_meta', String(chunkCount), STOCK_ITEMS_CACHE_TTL);
+    cache.put(cacheKey + '_meta', String(chunkCount), ttlSeconds);
   } catch (e) {
     // แคชเขียนพลาดไม่เป็นไร แค่รอบถัดไปจะไม่เร็วขึ้น ไม่กระทบผลลัพธ์หลัก
   }
+}
+
+// ล้างแคชของ key นั้น — เรียกหลังบันทึกข้อมูลใหม่ เพื่อไม่ให้ผู้ใช้เห็นค่าเก่าค้างจนกว่าแคชจะหมดอายุ
+function clearCachedJson(cacheKey) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var chunkCount = parseInt(cache.get(cacheKey + '_meta'), 10) || 0;
+    var keys = [cacheKey + '_meta'];
+    for (var i = 0; i < chunkCount; i++) keys.push(cacheKey + '_' + i);
+    cache.removeAll(keys);
+  } catch (e) {
+    // ล้างไม่สำเร็จก็ยังปลอดภัย แค่รออีกไม่เกิน TTL ค่าใหม่จะขึ้นเอง
+  }
+}
+
+function getStockItemsFromCache(reqBranch) {
+  return getCachedJson('stockItems_' + reqBranch);
+}
+function putStockItemsToCache(reqBranch, itemsArray) {
+  putCachedJson('stockItems_' + reqBranch, itemsArray, STOCK_ITEMS_CACHE_TTL);
 }
 
 // --- Helper: เปรียบเทียบวันที่อย่างปลอดภัย ---
@@ -824,6 +848,46 @@ function doPost(e) {
       putStockItemsToCache(reqBranch, items);
       if (_debug) response._timing = _timing;
       } // ปิด if (!cachedItems)
+    } else if (action === 'getClosingItems') {
+      // รายการสินค้าแบบเบา สำหรับหน้า "ปิดยอดสิ้นเดือน" ที่ใช้แค่ รหัส/ชื่อ/หน่วย/ราคา
+      // ต่างจาก getStockItems ตรงที่ไม่แตะไฟล์สต๊อกเลย จึงไม่ต้องอ่านชีท "ข้อมูลนับสตอค" 25,000+ แถว
+      // (getStockItems กินเวลา ~20 วิ จนหน้าปิดยอดหมดเวลารอ ทั้งที่ข้อมูล 90% ที่อ่านมาไม่ได้ใช้)
+      var ciBranch = (data.branch || '').toLowerCase();
+      var ciCacheKey = 'closingItems_' + ciBranch;
+      var ciCached = data.debug ? null : getCachedJson(ciCacheKey);
+      if (ciCached) {
+        response.status = 'success';
+        response.data = ciCached;
+      } else {
+        var ciSs = SpreadsheetApp.openById('1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw');
+        var ciSheet = ciSs.getSheetByName('item');
+        if (!ciSheet) throw new Error('Sheet "item" not found');
+        var ciLastRow = ciSheet.getLastRow();
+        var ciItems = [];
+        if (ciLastRow > 1) {
+          // อ่านแค่คอลัมน์ A–J (ที่ใช้จริง) แทน getDataRange() ที่ลากมาทุกคอลัมน์
+          // A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ J=สาขาที่ใช้
+          var ciValues = ciSheet.getRange(2, 1, ciLastRow - 1, 10).getValues();
+          var ciAlias = { 'zjp': 'sjp', 'zip': 'sjp' }; // เว็บใช้ zjp แต่ในชีทเป็น SJP
+          var ciBranchU = (ciAlias[ciBranch] || ciBranch).toUpperCase();
+          for (var ci = 0; ci < ciValues.length; ci++) {
+            var ciRow = ciValues[ci];
+            if (!ciRow[0] && !ciRow[1]) continue;
+            var ciBrArr = String(ciRow[9] == null ? '' : ciRow[9]).toUpperCase().split(/[,\s]+/);
+            if (ciBrArr.indexOf(ciBranchU) === -1) continue;
+            if (String(ciRow[4] || '').trim() === 'ปิดการใช้งาน') continue;
+            ciItems.push({
+              productId: ciRow[0] || '',
+              name: ciRow[1] || '',
+              unit: ciRow[3] || '',
+              price: ciRow[2] || ''
+            });
+          }
+        }
+        response.status = 'success';
+        response.data = ciItems;
+        putCachedJson(ciCacheKey, ciItems, CLOSING_ITEMS_CACHE_TTL);
+      }
     } else if (action === 'getStockTotal') {
       var endDateStr = data.endDate || '';
       var endDateObj = null;
@@ -1128,6 +1192,10 @@ function doPost(e) {
 
       var mecNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
       var mecCount = 0, mecTotal = 0;
+      // สร้างแถวทั้งหมดก่อนแล้วเขียนทีเดียวด้วย setValues
+      // เดิมใช้ appendRow ทีละรายการ = เขียนชีท 200+ ครั้งต่อการกดบันทึกหนึ่งครั้ง ช้าจนหมดเวลารอ
+      // และเพราะคำสั่งบันทึกไม่ลองใหม่อัตโนมัติ ถ้าหมดเวลากลางคันจะเหลือข้อมูลค้างครึ่งๆ กลางๆ ในชีท
+      var mecRows = [];
       mecItems.forEach(function (it) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q < 0) return;
@@ -1135,9 +1203,20 @@ function doPost(e) {
         var unitPrice = parseFloat(it.price) || 0;
         var amount = Math.round(q * unitPrice * 100) / 100;
         mecTotal += amount;
-        mecSheet.appendRow([mecDate, mecBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, mecRecorder, mecNow]);
+        mecRows.push([mecDate, mecBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, mecRecorder, mecNow]);
         mecCount++;
       });
+      if (mecRows.length) {
+        // appendRow ต่อแถวให้เองอัตโนมัติ แต่ setValues ไม่ทำ — ต้องขยายกริดเองก่อนถ้าแถวไม่พอ
+        var mecStartRow = mecSheet.getLastRow() + 1;
+        var mecNeedRows = mecStartRow + mecRows.length - 1;
+        if (mecNeedRows > mecSheet.getMaxRows()) {
+          mecSheet.insertRowsAfter(mecSheet.getMaxRows(), mecNeedRows - mecSheet.getMaxRows());
+        }
+        mecSheet.getRange(mecStartRow, 1, mecRows.length, 10).setValues(mecRows);
+        SpreadsheetApp.flush();
+      }
+      clearCachedJson('monthEnd_' + mecBranch); // เพิ่งบันทึกใหม่ ต้องให้ดึงของสดรอบหน้า ไม่ใช่ค่าเก่าในแคช
 
       response.status = 'success';
       response.message = 'บันทึกปิดยอดสิ้นเดือนแล้ว ' + mecCount + ' รายการ รวมมูลค่า ฿' + mecTotal.toFixed(2);
@@ -1161,9 +1240,21 @@ function doPost(e) {
         if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
         return s;
       };
+      // แคชต่อสาขา: ชีทนี้เขียนต่อท้ายอย่างเดียว ไม่เคยทับของเดิม แถวจึงสะสมขึ้นทุกเดือน
+      // และช่วงวันที่ 25–5 ทุกสาขาเข้ามาพร้อมกัน อ่านสดทุกครั้งจะชนกันเองจนหมดเวลารอ
+      // แคชถูกล้างทันทีที่มีการบันทึกใหม่ของสาขานั้น (ดู saveMonthEndClosing) จึงไม่มีปัญหาเห็นค่าเก่าค้าง
+      var gmeCacheKey = 'monthEnd_' + gmeBranch;
+      var gmeCached = gmeBranch ? getCachedJson(gmeCacheKey) : null;
+      if (gmeCached) {
+        response.status = 'success';
+        response.data = gmeCached;
+        return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+      }
       var gmeOut = {};
       if (gmeSheet && gmeSheet.getLastRow() > 1 && gmeBranch) {
-        var gmeVals = gmeSheet.getDataRange().getValues();
+        // อ่านเฉพาะคอลัมน์ A–J ที่ใช้จริง แทน getDataRange() ที่ลากทุกคอลัมน์ในชีทมาด้วย
+        // (เผื่อกรณีมีคนลบคอลัมน์ท้ายๆ ทิ้ง ขอไม่เกินจำนวนคอลัมน์ที่มีจริง กัน getRange พังทั้งคำสั่ง)
+        var gmeVals = gmeSheet.getRange(1, 1, gmeSheet.getLastRow(), Math.min(10, gmeSheet.getMaxColumns())).getValues();
         for (var gm = 1; gm < gmeVals.length; gm++) {
           var gmr = gmeVals[gm];
           if (String(gmr[1] || '').toLowerCase().trim() !== gmeBranch) continue;

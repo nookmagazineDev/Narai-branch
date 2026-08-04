@@ -101,37 +101,45 @@ export default function MonthEndClosing() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  // โหลดทีละคำสั่ง ไม่ยิงพร้อมกัน — Google Apps Script จำกัดจำนวน execution ที่วิ่งพร้อมกันต่อบัญชี
+  // ช่วงวันที่ 25–5 ทุกสาขาเข้าหน้านี้พร้อมกันอยู่แล้ว ถ้าคนหนึ่งยิงสองคำสั่งซ้อนกันจะยิ่งไปต่อคิวจนหมดเวลารอ
+  // ค่าที่โชว์เป็นค่าล่าสุดของสาขาเสมอ ไม่ผูกกับ closingDate ที่เลือกอยู่ จึงโหลดครั้งเดียวตอนเปลี่ยนสาขาก็พอ
   useEffect(() => {
-    if (branch) loadItems();
+    if (!branch) return;
+    let cancelled = false;
+    const isStale = () => cancelled;
+    (async () => {
+      await loadItems(isStale);
+      if (!cancelled) await loadExistingClosing(isStale);
+    })();
+    return () => { cancelled = true; }; // สลับสาขาระหว่างโหลด: ผลของสาขาเก่าต้องไม่ทับของใหม่
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branch]);
 
-  useEffect(() => {
-    // ค่าที่โชว์เป็นค่าล่าสุดของสาขาเสมอ ไม่ผูกกับ closingDate ที่เลือกอยู่แล้ว จึงโหลดครั้งเดียวตอนเปลี่ยนสาขาก็พอ
-    if (branch) loadExistingClosing();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branch]);
-
-  const loadItems = async () => {
+  const loadItems = async (isStale) => {
     setLoading(true);
     try {
-      const res = await apiCall('getStockItems', { branch });
+      // ใช้ getClosingItems (อ่านแค่ชีท item) แทน getStockItems ที่ต้องไล่อ่านชีทนับสต๊อก 25,000+ แถว
+      // หน้านี้ใช้แค่ รหัส/ชื่อ/หน่วย/ราคา ไม่ได้ใช้ประวัติการนับหรือยอดยกมาเลย
+      const res = await apiCall('getClosingItems', { branch });
+      if (isStale?.()) return;
       if (res.status === 'success') {
         setItems(res.data);
       } else {
         toast.error('ไม่สามารถดึงรายการสินค้าได้');
       }
     } catch (err) {
-      toast.error(errMessage(err));
+      if (!isStale?.()) toast.error(errMessage(err));
     } finally {
-      setLoading(false);
+      if (!isStale?.()) setLoading(false);
     }
   };
 
   // ดึงยอดล่าสุดที่เคยบันทึกไว้ของสาขานี้มาเติมให้ (โชว์ค่าล่าสุดเสมอไม่ว่าจะเลือกวันที่ไหน) + ประวัติการบันทึกทั้งหมด
-  const loadExistingClosing = async () => {
+  const loadExistingClosing = async (isStale) => {
     try {
       const res = await apiCall('getMonthEndClosing', { branch });
+      if (isStale?.()) return;
       if (res.status === 'success') {
         const map = {}, hist = {}, dateMap = {};
         Object.entries(res.data || {}).forEach(([code, v]) => {
