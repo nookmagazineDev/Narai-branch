@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { Search, RefreshCw, Store, X, CheckSquare, Square } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
+import { tryGetJson } from '../services/dashboardApi';
 
 const baht = (n) => '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -50,7 +51,7 @@ export default function SalesSearch() {
     setLoading(true);
     try {
       const qs = `branch=${encodeURIComponent(branch)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&itemsales=1`;
-      const res = await fetch(`/api/dashboard?${qs}`).then((r) => r.json());
+      const res = await tryGetJson(`/api/dashboard?${qs}`);
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setItems(res.data || []);
       setLoadedRange(`${startDate} ถึง ${endDate}`);

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { apiCall } from '../services/api';
+import { tryGetJson } from '../services/dashboardApi';
 
 export default function StockTotalList() {
   const [items, setItems] = useState([]);
@@ -102,20 +103,17 @@ export default function StockTotalList() {
       const validBranches = branches.filter(b => b.outletId);
 
       const receivedPromises = validBranches.map(b =>
-        fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
+        tryGetJson(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
       );
 
       // ยอดใช้จากสูตร BOM × ยอดขายจริง (office-server) — แหล่งเดียว ไม่ใช้ชีท UsageHistory แล้ว
       const usageMenuPromises = validBranches.map(b =>
-        fetch(`/api/usagemenu?branch=${encodeURIComponent(b.name)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
+        tryGetJson(`/api/usagemenu?branch=${encodeURIComponent(b.name)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
       );
 
       // ยอดรับจากรายจ่าย Supplier (สาขากรอกในหน้ากรอกรายจ่าย) — รวมเป็น "ยอดรับ" ด้วย
       const supRcvPromises = validBranches.map(b =>
-        fetch(`/api/stockcount?branch=${encodeURIComponent(b.name)}&start=${encodeURIComponent(fetchStartDate)}&end=${encodeURIComponent(fetchEndDate)}&supreceived=1`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
+        tryGetJson(`/api/stockcount?branch=${encodeURIComponent(b.name)}&start=${encodeURIComponent(fetchStartDate)}&end=${encodeURIComponent(fetchEndDate)}&supreceived=1`)
       );
 
       const [receivedResults, usageMenuResults, supRcvResults] = await Promise.all([

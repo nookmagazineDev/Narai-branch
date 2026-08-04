@@ -1,3 +1,4 @@
+import { fetchSheet } from '../lib/upstream.js';
 // ดึงสูตรเมนู (RcpDtls) จาก Google Sheet เพื่อสร้าง map: รหัสวัตถุดิบ -> รายชื่อเมนูที่ใช้วัตถุดิบนั้น
 // Spreadsheet: 1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg | ชีท RcpDtls
 // คอลัมน์ A: รหัสเมนู | C: ชื่อเมนู | E: รหัสวัตถุดิบ | J: รหัสวัตถุดิบ (ตัด 0 นำหน้า)
@@ -30,7 +31,7 @@ export default async function handler(req, res) {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
 
   try {
-    const fetchRes = await fetch(url);
+    const fetchRes = await fetchSheet(url);
     if (!fetchRes.ok) {
       return res.status(fetchRes.status).json({ status: 'error', message: `Google Sheet Error: ${fetchRes.status}` });
     }

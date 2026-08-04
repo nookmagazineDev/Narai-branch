@@ -1,3 +1,4 @@
+import { fetchSheet } from '../lib/upstream.js';
 // มูลค่าสต๊อกคงเหลือรายเดือน — อ่านจาก Google Sheet เดียวกัน 2 ชีท (gviz, ต้องแชร์ "ใครมีลิงก์ก็ดูได้")
 //   - ชีท "ข้อมูลนับสตอค" (gid 923363118): ยอดคงเหลือรายสินค้า/สาขา/วันที่นับ
 //   - ชีท "8.2": ตารางราคากลาง [0]รหัส [1]ชื่อ [2]ราคา/หน่วย
@@ -89,7 +90,7 @@ async function fetchClosingMonthValue(closingJson, branchKey, targetMonth) {
 }
 
 async function fetchGviz(url) {
-  const r = await fetch(url);
+  const r = await fetchSheet(url);
   const text = await r.text();
   if (text.startsWith('<')) throw new Error('อ่านชีทไม่ได้ (ต้องตั้งแชร์ "ใครมีลิงก์ก็ดูได้")');
   const a = text.indexOf('{'), b = text.lastIndexOf('}');
@@ -107,7 +108,7 @@ export default async function handler(req, res) {
   // (รวมไว้ใน endpoint นี้เพราะ Vercel Hobby จำกัด serverless functions ที่ 12 ตัว)
   if (req.query.prices) {
     try {
-      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(PRICE_SHEET)}`);
+      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(PRICE_SHEET)}`);
       const text = await r.text();
       if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีท 8.2 ไม่ได้' });
       const a = text.indexOf('{'), b = text.lastIndexOf('}');
@@ -133,7 +134,7 @@ export default async function handler(req, res) {
     const brA = String(req.query.branch || '').toLowerCase().trim();
     if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetch('https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/gviz/tq?tqx=out:json&gid=1722427042');
+      const r = await fetchSheet('https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/gviz/tq?tqx=out:json&gid=1722427042');
       const text = await r.text();
       if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทค่าเฉลี่ยยอดใช้ต่อหัวไม่ได้ (ต้องแชร์ลิงก์)' });
       const a = text.indexOf('{'), b = text.lastIndexOf('}');
@@ -162,7 +163,7 @@ export default async function handler(req, res) {
     const brA = String(req.query.branch || '').toLowerCase().trim();
     if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('เปอร์เซ็นการเบิกของแต่ละสาขา')}`);
+      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('เปอร์เซ็นการเบิกของแต่ละสาขา')}`);
       const text = await r.text();
       if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทเปอร์เซ็นการเบิกของแต่ละสาขาไม่ได้ (ต้องแชร์ลิงก์)' });
       const a = text.indexOf('{'), b = text.lastIndexOf('}');
@@ -220,7 +221,7 @@ export default async function handler(req, res) {
     const en = String(req.query.end || '9999-12-31');
     if (!brK) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetch(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SUP_SHEET)}`);
+      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SUP_SHEET)}`);
       const text = await r.text();
       if (text.startsWith('<')) return res.status(200).json({ status: 'success', data: {} });
       const a = text.indexOf('{'), b = text.lastIndexOf('}');

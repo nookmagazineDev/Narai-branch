@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, errMessage } from '../services/api';
 import { PackageCheck, Loader2, AlertCircle, AlertTriangle, Save, ChevronLeft, CheckCircle2, Pencil, Camera, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -62,7 +62,7 @@ export default function ReceiveGoods() {
         toast.error('ไม่สามารถดึงรายการรับสินค้าได้');
       }
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      toast.error(errMessage(err));
     } finally {
       setLoading(false);
     }
