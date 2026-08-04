@@ -28,6 +28,7 @@ function prevMonthFromHistory(history) {
 
 import toast from 'react-hot-toast';
 import CalcModal from '../components/CalcModal';
+import StockGuide from '../components/StockGuide';
 
 const thaiMonths = [
   'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
@@ -1498,6 +1499,9 @@ export default function StockList() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-5">
+
+      {/* คู่มือการนับสต๊อก/ขอเบิก — ย่อไว้เป็นค่าเริ่มต้น กดเปิดดูได้ */}
+      <StockGuide />
 
       {/* Header */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
