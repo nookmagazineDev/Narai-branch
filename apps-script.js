@@ -1271,6 +1271,7 @@ function doPost(e) {
             recorder: gmr[8] || '', time: gmr[9] || ''
           });
         }
+        putCachedJson(gmeCacheKey, gmeOut, MONTH_END_CACHE_TTL); // เก็บไว้ให้คนถัดไปในช่วง 2 นาทีไม่ต้องอ่านชีทซ้ำ
       }
       response.status = 'success';
       response.data = gmeOut;
