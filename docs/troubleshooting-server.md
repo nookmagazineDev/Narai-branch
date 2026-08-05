@@ -49,6 +49,18 @@ powershell -ExecutionPolicy Bypass -File .\fix-narai-api.ps1 -Harden
 
 > ทำครั้งเดียวพอ ไม่ต้องรันซ้ำทุกครั้ง
 
+**ถ้าเครื่องนั้นใช้ PowerShell ไม่ได้** (ถูกปิดใช้งาน / ติด policy) มีเวอร์ชัน `.cmd` ที่ทำงานเหมือนกัน
+ใช้แค่คำสั่งพื้นฐานของ Windows (`sc`, `netsh`, `schtasks`, `curl`) — คลิกขวาที่ไฟล์ → **Run as administrator**
+
+```cmd
+cd /d <โฟลเดอร์โค้ด>\office-server\scripts
+fix-narai-api.cmd
+fix-narai-api.cmd harden     :: + กันดับซ้ำ (ทำครั้งเดียวพอ)
+```
+
+ต่างจากเวอร์ชัน PowerShell เล็กน้อย: ตรงขั้นเทียบ IP จะพิมพ์ค่าทั้งสองออกมาให้เทียบเอง
+และต้องมี `curl` (มากับ Windows 10 build 1803 ขึ้นไป)
+
 ## เช็คทีละชั้นด้วยมือ (ถ้าไม่ใช้สคริป)
 
 ```powershell
