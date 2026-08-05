@@ -3,7 +3,7 @@
 //   -> { status, branch, outletId, count, data:[ { date, checkID, tableID, cashierName, waiterName,
 //        amount, beforeVat, vat, billTotal, billCost, paidType, memberTel, cover, coverAd, coverAll,
 //        startTime, endTime, checkDesc, orderID } ] }
-import { USAGE_API_BASE, fetchUpstream, applyCors, replyUpstreamError } from '../lib/upstream.js';
+import { USAGE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, applyCors, replyUpstreamError } from '../lib/upstream.js';
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
@@ -18,7 +18,8 @@ export default async function handler(req, res) {
     const params = new URLSearchParams({ start: startDate, end: endDate });
     if (branchKey) params.set('branch', branchKey);
     if (outletId) params.set('outletid', String(outletId));
-    const r = await fetchUpstream(`${USAGE_API_BASE}/bills?${params.toString()}`);
+    // รวมบิลข้ามหลายวันบน office-server — ต้องให้เวลายาวกว่า timeout ดีฟอลต์ (ดู HEAVY_UPSTREAM_OPTS)
+    const r = await fetchUpstream(`${USAGE_API_BASE}/bills?${params.toString()}`, HEAVY_UPSTREAM_OPTS);
     const payload = await r.json().catch(() => null);
     if (!r.ok || !payload || payload.status !== 'success') {
       return res.status(502).json({ status: 'error', message: (payload && payload.message) || `Office API Error: ${r.status}` });

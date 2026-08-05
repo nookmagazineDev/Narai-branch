@@ -10,6 +10,13 @@ const TIMEOUT_MS = 30000;   // ต่อการยิงหนึ่งคร�
 const DEADLINE_MS = 60000;  // เวลารวมทั้งหมดรวมการลองใหม่ — เกินนี้ยอมแพ้ ไม่ปล่อยให้ผู้ใช้รอลอยๆ
 const RETRY_DELAYS = [700, 1800, 4000];
 
+// endpoint หนัก (ยอดขายรายเมนู/รายการบิล/แดชบอร์ด): office-server ต้องคำนวณข้ามหลายวัน
+// วันที่ยังไม่อยู่ในแคชต้องดึงจาก POS สด ฝั่ง Vercel รอได้ถึง ~60 วิ (maxDuration)
+// ถ้าเบราว์เซอร์ตัดที่ 30 วิ จะยกเลิกทั้งที่เซิร์ฟเวอร์กำลังจะตอบ — รายการเลยไม่ขึ้นทั้งที่รออีกนิดก็ได้
+// ต่อรอบจึงต้องรอนานกว่าเพดานของ Vercel และเผื่อเวลารวมให้ลองใหม่ได้อีกรอบ
+// (การลองใหม่ไม่เริ่มจากศูนย์ — office-server แคชรายวันที่คำนวณเสร็จแล้วไว้ รอบถัดไปจึงเร็วขึ้นเรื่อยๆ)
+const HEAVY_OPTS = { timeoutMs: 65000, deadlineMs: 130000 };
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // รวม signal ของผู้เรียก (ยกเลิกตอน component unmount) เข้ากับ timeout ภายใน
@@ -28,12 +35,12 @@ function withTimeout(outerSignal, timeoutMs) {
   return { signal: controller.signal, cleanup };
 }
 
-async function getJson(url, { signal, label }) {
+async function getJson(url, { signal, label, timeoutMs = TIMEOUT_MS, deadlineMs = DEADLINE_MS }) {
   let lastError;
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
   for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const { signal: reqSignal, cleanup } = withTimeout(signal, TIMEOUT_MS);
+    const { signal: reqSignal, cleanup } = withTimeout(signal, timeoutMs);
     try {
       const res = await fetch(url, { signal: reqSignal });
       const text = await res.text();
@@ -74,9 +81,9 @@ async function getJson(url, { signal, label }) {
  * เรียก /api/* แบบไม่โยน error — คืน { status:'error', message } เมื่อพลาด
  * ใช้กับจุดที่โหลดไม่ได้ก็ให้หน้าทำงานต่อได้ (จะได้ไม่พังทั้งหน้าเพราะ endpoint เดียว)
  */
-export async function tryGetJson(url, label = 'ดึงข้อมูล') {
+export async function tryGetJson(url, label = 'ดึงข้อมูล', opts = {}) {
   try {
-    return await getJson(url, { label });
+    return await getJson(url, { label, ...opts });
   } catch (err) {
     if (err.name === 'AbortError') throw err;
     return { status: 'error', message: err.message || `${label}ไม่สำเร็จ` };
@@ -130,8 +137,17 @@ export async function fetchDashboard({ branch, outletId, startDate, endDate, sig
   const params = new URLSearchParams({ startDate, endDate });
   if (branch) params.set('branch', String(branch).toLowerCase());
   if (outletId) params.set('outletId', String(outletId));
-  return getJson(`/api/dashboard?${params.toString()}`, { signal, label: 'ดึงข้อมูล' });
+  return getJson(`/api/dashboard?${params.toString()}`, { signal, label: 'ดึงข้อมูล', ...HEAVY_OPTS });
   // { status, branch, outletId, data:{...} }
+}
+
+// ดึงยอดขายรายเมนู รวม+รายวัน (หน้า "ค้นหารายการขาย") — โหมด itemsales=1 ของ /api/dashboard
+export async function fetchItemSales({ branch, outletId, startDate, endDate, signal }) {
+  const params = new URLSearchParams({ startDate, endDate, itemsales: '1' });
+  if (branch) params.set('branch', String(branch).toLowerCase());
+  if (outletId) params.set('outletId', String(outletId));
+  return getJson(`/api/dashboard?${params.toString()}`, { signal, label: 'ดึงรายการขาย', ...HEAVY_OPTS });
+  // { status, branch, outletId, count, data:[{itemCode,name,qty,amt,daily}] }
 }
 
 // ดึงรายการบิลทั้งหมด (ตารางรายการขาย) ของสาขาในช่วงเวลา
@@ -139,7 +155,7 @@ export async function fetchBills({ branch, outletId, startDate, endDate, signal 
   const params = new URLSearchParams({ startDate, endDate });
   if (branch) params.set('branch', String(branch).toLowerCase());
   if (outletId) params.set('outletId', String(outletId));
-  return getJson(`/api/bills?${params.toString()}`, { signal, label: 'ดึงรายการบิล' });
+  return getJson(`/api/bills?${params.toString()}`, { signal, label: 'ดึงรายการบิล', ...HEAVY_OPTS });
   // { status, branch, outletId, count, data:[...] }
 }
 
