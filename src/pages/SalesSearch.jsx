@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { Search, RefreshCw, Store, X, CheckSquare, Square } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
-import { tryGetJson } from '../services/dashboardApi';
+import { fetchItemSales } from '../services/dashboardApi';
 
 const baht = (n) => '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -50,8 +50,7 @@ export default function SalesSearch() {
     if (!startDate || !endDate) { toast.error('กรุณาเลือกช่วงวันที่'); return; }
     setLoading(true);
     try {
-      const qs = `branch=${encodeURIComponent(branch)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&itemsales=1`;
-      const res = await tryGetJson(`/api/dashboard?${qs}`);
+      const res = await fetchItemSales({ branch, startDate, endDate });
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setItems(res.data || []);
       setLoadedRange(`${startDate} ถึง ${endDate}`);
@@ -122,7 +121,8 @@ export default function SalesSearch() {
           {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
           {loading ? 'กำลังดึงข้อมูล…' : 'ดึงข้อมูล'}
         </button>
-        {loadedRange && <span className="text-xs text-gray-400">ข้อมูล: {loadedRange}</span>}
+        {loading && <span className="text-xs text-gray-400">ช่วงวันที่ที่ยังไม่เคยดึง อาจใช้เวลาถึง 1-2 นาที กรุณาอย่าปิดหน้านี้</span>}
+        {!loading && loadedRange && <span className="text-xs text-gray-400">ข้อมูล: {loadedRange}</span>}
       </div>
 
       {items !== null && (
