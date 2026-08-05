@@ -60,6 +60,21 @@ powershell -ExecutionPolicy Bypass -File .\install-office-server.ps1
 ฝั่ง Vercel ตั้ง env `USAGE_API_BASE = http://inventory.dyndns.tv:8787` ไว้แล้ว
 พอ office-server ขึ้นที่เครื่องนั้น หน้าเว็บจะใช้ได้ทันที (อาจต้อง Redeploy หนึ่งครั้ง)
 
+### ถ้าเข้าไปเปิดพอร์ตที่ router ไม่ได้ — ใช้ Cloudflare Tunnel แทน
+
+เครื่องคลาวด์อยู่หลัง NAT (IP ภายใน `172.28.1.48`) ถ้าไม่มีสิทธิ์ forward พอร์ต 8787 ที่ router
+ให้ใช้ Cloudflare Tunnel แทน — `cloudflared` ต่อ **ออก** ไปหา Cloudflare เอง แล้วเปิดทางกลับเข้ามา
+
+```powershell
+# สร้าง tunnel ที่ https://one.dash.cloudflare.com (Networks > Tunnels) เอา token มาก่อน แล้ว:
+powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token "<token>"
+```
+
+ได้ `https://usage.khanoykorshabu.com` → `http://localhost:8787`
+แล้วเปลี่ยน env บน Vercel เป็น `USAGE_API_BASE = https://usage.khanoykorshabu.com`
+
+ดีกว่าการเปิดพอร์ตตรงๆ ตรงที่ได้ HTTPS ฟรี ไม่ต้องพึ่ง dyndns และไม่มีพอร์ตเปิดค้างให้สแกนเจอ
+
 ## ตั้งค่า (ไม่บังคับ) — ไฟล์ .env
 - `PORT` (ค่าเริ่มต้น 8787)
 - `API_TOKEN` (ถ้าตั้ง ต้องส่ง header x-api-token ให้ตรง — ปัจจุบันเว้นว่าง)
