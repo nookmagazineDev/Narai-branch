@@ -38,6 +38,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fix-narai-api.ps1 -Harden   #
 
 > เดิมรันผ่าน pm2 (สตาร์ทเฉพาะตอนล็อกอิน) เปลี่ยนมาเป็น Windows Service แล้วเพื่อให้ทนรีบูตโดยไม่ต้องล็อกอิน
 
+## ย้ายไปรันบนเครื่องคลาวด์ (แนะนำ)
+
+รันบนเครื่องที่ออฟฟิศมีจุดอ่อนคือ **เครื่องปิด/เน็ตหลุด = ทุกสาขาดูยอดขายไม่ได้ทันที**
+ทางแก้ถาวรคือย้ายไปรันบนเครื่องคลาวด์ `203.154.185.48` (`inventory.dyndns.tv`) ที่เปิดตลอดอยู่แล้ว
+เครื่องนั้นยังเป็นที่อยู่ของ `api.khanoykorshabu.com` ด้วย จึงดึงข้อมูลขายได้ในเครื่องเอง ไม่ต้องออกเน็ต
+
+```powershell
+# บนเครื่องปลายทาง (Windows Server) — PowerShell แบบ Run as administrator
+# ก๊อปโฟลเดอร์โค้ดไปวางก่อน แล้ว:
+cd <โฟลเดอร์โค้ด>\office-server\scripts
+powershell -ExecutionPolicy Bypass -File .\install-office-server.ps1
+```
+
+สคริปทำให้ครบ: `npm install` → สร้าง `.env` (ปิด UPnP เพราะเครื่องมี IP นิ่ง)
+→ ติดตั้ง Windows Service ผ่าน NSSM (สตาร์ทเองตอนเปิดเครื่อง + รีสตาร์ทเองเมื่อโปรเซสตาย)
+→ เปิดพอร์ต 8787 ใน firewall → ทดสอบ `/health` ให้เลย — **รันซ้ำได้ปลอดภัย**
+
+ต้องมี Node.js กับ NSSM (`C:\tools\nssm.exe`) บนเครื่องนั้นก่อน ถ้าไม่มีสคริปจะบอกวิธีติดตั้ง
+
+ฝั่ง Vercel ตั้ง env `USAGE_API_BASE = http://inventory.dyndns.tv:8787` ไว้แล้ว
+พอ office-server ขึ้นที่เครื่องนั้น หน้าเว็บจะใช้ได้ทันที (อาจต้อง Redeploy หนึ่งครั้ง)
+
 ## ตั้งค่า (ไม่บังคับ) — ไฟล์ .env
 - `PORT` (ค่าเริ่มต้น 8787)
 - `API_TOKEN` (ถ้าตั้ง ต้องส่ง header x-api-token ให้ตรง — ปัจจุบันเว้นว่าง)
