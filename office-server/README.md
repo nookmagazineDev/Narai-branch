@@ -24,6 +24,15 @@ Get-Service NaraiUsageAPI            # ดูสถานะ
 Restart-Service NaraiUsageAPI        # รีสตาร์ท (หลังแก้โค้ด/แก้ .env)
 Stop-Service NaraiUsageAPI           # หยุด
 ```
+
+**เวลาหน้าเว็บขึ้น "เครื่อง IT-Narai อาจปิดอยู่"** ให้เปิดเครื่องก่อน แล้วรันสคริปตรวจ+ซ่อม:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fix-narai-api.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\fix-narai-api.ps1 -Harden   # + กันดับซ้ำ (ทำครั้งเดียวพอ)
+```
+ไล่ตรวจให้ทีละชั้น (Node → service → /health → firewall → dyndns ชี้ IP ถูกไหม) แล้วซ่อมเท่าที่ซ่อมได้
+`-Harden` เพิ่ม: ไม่ให้เครื่องหลับ + auto-restart เมื่อโปรเซสตาย + ตัวเฝ้าระวังทุก 5 นาที
+รายละเอียดที่ [`docs/troubleshooting-server.md`](../docs/troubleshooting-server.md)
 - log: `office-server\logs\service-out.log` และ `service-err.log`
 - เช็คสถานะ/จำนวนวันที่ cache: เปิด `http://localhost:8787/health`
 
