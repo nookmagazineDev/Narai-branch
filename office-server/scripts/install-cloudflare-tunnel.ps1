@@ -16,6 +16,9 @@
 # แล้วรันสคริปนี้ (PowerShell แบบ Run as administrator):
 #   powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token "<วาง token ตรงนี้>"
 #
+# ถ้าเครื่องมี cloudflared รันอยู่แล้ว สคริปจะหยุดและบอกให้ไปเพิ่ม hostname ใน tunnel เดิมแทน
+# (ห้ามติดตั้งทับ ของเดิมอาจกำลังให้บริการโดเมนอื่นอยู่)
+#
 # หลังรันเสร็จ กลับไปตั้ง Public Hostname ในหน้าเว็บ Cloudflare (สคริปจะบอกขั้นตอนอีกที)
 # ---------------------------------------------------------------------------
 
@@ -90,11 +93,31 @@ if (Test-Path $exe) {
 # ---- 3) ติดตั้งเป็น Windows Service ----
 Say ''
 Say '[3/4] ติดตั้ง cloudflared เป็น Windows Service'
+# เครื่องหนึ่งรัน cloudflared ได้ service เดียว แต่ tunnel หนึ่งตัวมีได้หลาย hostname
+# ถ้ามีของเดิมอยู่ ห้ามถอนทิ้งเด็ดขาด — ของเดิมอาจกำลังให้บริการโดเมนอื่นอยู่
+# (เคยพลาดมาแล้ว: ถอนทิ้งไปทำให้ api.khanoykorshabu.com ล่มทันที เพราะมันวิ่งผ่าน tunnel ตัวนั้น)
+# ทางที่ถูกคือไปเพิ่ม Public Hostname เข้าไปใน tunnel เดิม ไม่ใช่สร้างตัวใหม่มาแทน
 $existing = Get-Service -Name 'cloudflared' -ErrorAction SilentlyContinue
 if ($existing) {
-  Warn 'มี service cloudflared อยู่แล้ว — ถอนของเดิมก่อนเพื่อติดตั้งด้วย token ใหม่'
-  & $exe service uninstall 2>&1 | Out-Null
-  Start-Sleep -Seconds 3
+  Bad 'เครื่องนี้มี Cloudflare Tunnel ตัวเดิมรันอยู่แล้ว — หยุดก่อน ห้ามติดตั้งทับ'
+  Say ''
+  Say '  ถ้าติดตั้งทับ tunnel เดิมจะถูกแทนที่ และโดเมนที่วิ่งผ่านมันจะล่มทันที'
+  Say ''
+  Fix 'ทางที่ถูก: เพิ่ม hostname เข้าไปใน tunnel เดิมแทน (tunnel เดียวมีได้หลาย hostname)'
+  Say ''
+  Say '    1) เปิด https://one.dash.cloudflare.com -> Networks -> Tunnels'
+  Say '    2) กดที่ tunnel ตัวที่มีอยู่ -> Configure -> แท็บ Public Hostname'
+  Say '    3) Add a public hostname:'
+  Say '         Subdomain : usage'
+  Say '         Domain    : khanoykorshabu.com'
+  Say '         Type      : HTTP'
+  Say "         URL       : localhost:$Port"
+  Say '    4) Save — เสร็จแล้ว ไม่ต้องรันสคริปนี้เลย'
+  Say ''
+  Say '  ดู tunnel ที่เครื่องนี้รันอยู่ตอนนี้:'
+  Say '    Get-Content "C:\Windows\System32\config\systemprofile\.cloudflared\*.json"'
+  Say ''
+  exit 1
 }
 
 & $exe service install $Token 2>&1 | ForEach-Object { Say "      $_" }

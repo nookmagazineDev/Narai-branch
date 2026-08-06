@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { apiCall } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchAttendance } from '../services/dashboardApi';
+import { hhmm, summarizeDaily } from '../utils/attendance';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -20,6 +22,59 @@ export default function EmployeeList() {
   const [resignDate, setResignDate] = useState('');
   const [resignReason, setResignReason] = useState('');
   const [resignSubmitting, setResignSubmitting] = useState(false);
+
+  // ---- ดูสแกนเข้า-ออกรายคน (ข้อมูลจากเครื่องสแกนหน้า ZKBio ผ่าน office-server) ----
+  const [scanTarget, setScanTarget] = useState(null);   // { hrCode, fullName, branch }
+  const [scanStart, setScanStart] = useState('');
+  const [scanEnd, setScanEnd] = useState('');
+  const [scanRows, setScanRows] = useState(null);
+  const [scanLoading, setScanLoading] = useState(false);
+
+  const ymd = (d) => d.toISOString().slice(0, 10);
+
+  const openScanModal = (emp) => {
+    // แอดมินดูข้ามสาขาได้ จึงต้องใช้สาขาของพนักงานคนนั้น ไม่ใช่ของคนที่ล็อกอิน
+    const branch = (emp.branch && String(emp.branch).toLowerCase() !== 'all') ? emp.branch : user?.branch;
+    if (!branch || String(branch).toLowerCase() === 'all') {
+      toast.error('ไม่ทราบสาขาของพนักงานคนนี้');
+      return;
+    }
+    if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
+    const today = new Date();
+    const weekAgo = new Date(today.getTime() - 6 * 86400000);
+    setScanTarget({ hrCode: emp.hrCode, fullName: emp.fullName, branch });
+    setScanStart(ymd(weekAgo));
+    setScanEnd(ymd(today));
+    setScanRows(null);
+  };
+
+  const closeScanModal = () => {
+    setScanTarget(null);
+    setScanRows(null);
+  };
+
+  const loadScans = async (target = scanTarget, start = scanStart, end = scanEnd) => {
+    if (!target) return;
+    setScanLoading(true);
+    try {
+      const res = await fetchAttendance({ branch: target.branch, startDate: start, endDate: end, emp: target.hrCode });
+      if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
+      setScanRows(res.data || []);
+    } catch (err) {
+      toast.error(err.message || 'ดึงข้อมูลสแกนไม่สำเร็จ');
+      setScanRows([]);
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  // เปิด modal แล้วดึงให้เลยรอบแรก ไม่ต้องให้กดซ้ำ
+  useEffect(() => {
+    if (scanTarget && scanRows === null && !scanLoading) loadScans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanTarget]);
+
+  const scanDaily = scanRows ? summarizeDaily(scanRows) : [];
 
   const handleSaveLoga = async (emp) => {
     if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
@@ -483,6 +538,13 @@ export default function EmployeeList() {
                             <ImageIcon className="w-3.5 h-3.5" />
                           </a>
                         )}
+                        <button
+                          onClick={() => openScanModal(emp)}
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-teal-50 text-teal-600 hover:bg-teal-100 border border-teal-200 rounded-md text-xs font-medium transition-colors"
+                          title="ดูเวลาสแกนเข้า-ออก"
+                        >
+                          <Fingerprint className="w-3 h-3" /> สแกน
+                        </button>
                         {emp.status !== 'ลาออก' && (
                           <button
                             onClick={() => openResignModal(emp.hrCode, emp.fullName)}
@@ -500,6 +562,92 @@ export default function EmployeeList() {
           </table>
         </div>
       </div>
+
+      {/* Modal: เวลาสแกนเข้า-ออกรายคน */}
+      {scanTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={closeScanModal}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2.5 bg-teal-100 text-teal-600 rounded-xl shrink-0">
+                  <Fingerprint className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-bold text-gray-800 truncate">เวลาสแกนเข้า-ออก</h3>
+                  <p className="text-sm text-gray-500 truncate">
+                    {scanTarget.fullName} · รหัส {scanTarget.hrCode} · สาขา {scanTarget.branch}
+                  </p>
+                </div>
+              </div>
+              <button onClick={closeScanModal} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* เลือกช่วงวันที่ */}
+            <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center gap-2">
+              <input type="date" value={scanStart} max={scanEnd} onChange={(e) => setScanStart(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+              <span className="text-gray-400 text-sm">ถึง</span>
+              <input type="date" value={scanEnd} min={scanStart} onChange={(e) => setScanEnd(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+              <button onClick={() => loadScans()} disabled={scanLoading}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50">
+                {scanLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                ดึงข้อมูล
+              </button>
+              <button
+                onClick={() => { const t = new Date(); setScanStart(ymd(t)); setScanEnd(ymd(t)); }}
+                className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-white">วันนี้</button>
+            </div>
+
+            <div className="flex-1 overflow-auto">
+              {scanLoading ? (
+                <div className="py-16 flex flex-col items-center text-gray-500">
+                  <Loader2 className="w-8 h-8 animate-spin text-teal-500 mb-2" />
+                  <p className="text-sm">กำลังโหลด...</p>
+                </div>
+              ) : scanRows === null ? null : scanDaily.length === 0 ? (
+                <div className="py-16 px-6 text-center text-sm space-y-1">
+                  <p className="text-amber-600 font-medium">ไม่พบการสแกนในช่วงวันที่ที่เลือก</p>
+                  <p className="text-gray-400 text-xs">
+                    ลองขยายช่วงวันที่ หรือตรวจว่ารหัส {scanTarget.hrCode} ตรงกับรหัสในเครื่องสแกนหรือไม่
+                  </p>
+                </div>
+              ) : (
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="text-gray-600 text-xs">
+                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                      <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้า</th>
+                      <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออก</th>
+                      <th className="px-5 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม (ชม.)</th>
+                      <th className="px-5 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สแกน</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-gray-700">
+                    {scanDaily.map((d) => (
+                      <tr key={d.date} className="hover:bg-teal-50/40">
+                        <td className="px-5 py-2 font-medium text-gray-800">{d.date}</td>
+                        <td className="px-5 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
+                        <td className="px-5 py-2 text-center font-mono font-semibold text-rose-700">
+                          {d.count > 1 ? hhmm(d.last) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-5 py-2 text-right font-mono">{d.hours != null ? d.hours.toFixed(2) : '-'}</td>
+                        <td className="px-5 py-2 text-right font-mono text-gray-400">{d.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
+              เข้า = เวลาสแกนแรกของวัน · ออก = เวลาสแกนสุดท้าย · ช่อง "ออก" เป็น — คือวันที่สแกนครั้งเดียว
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Resign Modal */}
       {resignTarget && (

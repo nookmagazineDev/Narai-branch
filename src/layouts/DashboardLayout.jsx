@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet, Search } from 'lucide-react';
+import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet, Search, Fingerprint } from 'lucide-react';
 import { useState } from 'react';
 
 export default function DashboardLayout() {
@@ -67,7 +67,8 @@ export default function DashboardLayout() {
       ]
     },
     { name: 'กรอกรายจ่าย', path: '/expense', icon: Wallet },
-    { name: 'ค้นหารายการขาย', path: '/sales-search', icon: Search }
+    { name: 'ค้นหารายการขาย', path: '/sales-search', icon: Search },
+    { name: 'สแกนเข้า-ออก', path: '/attendance', icon: Fingerprint }
   ];
 
   return (

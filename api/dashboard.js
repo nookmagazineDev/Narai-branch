@@ -9,7 +9,9 @@ export default async function handler(req, res) {
   if (applyCors(req, res)) return;
 
   const { branch, startDate, endDate, outletId } = req.query;
-  if ((!branch && !outletId) || !startDate || !endDate) {
+  // โหมดสแกนเข้า-ออกใช้สาขาอย่างเดียว ไม่มี outletId
+  const needsOutlet = !req.query.attendance;
+  if ((needsOutlet && !branch && !outletId) || (!needsOutlet && !branch) || !startDate || !endDate) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา/รหัสสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
   }
 
@@ -18,10 +20,15 @@ export default async function handler(req, res) {
     const params = new URLSearchParams({ start: startDate, end: endDate });
     if (branchKey) params.set('branch', branchKey);
     if (outletId) params.set('outletid', String(outletId));
-    // โหมดค้นหารายการขาย (?itemsales=1) — ยอดขายรายเมนู รวม+รายวัน (รวมใน endpoint นี้เพราะลิมิต 12 functions)
-    const path = req.query.itemsales ? 'itemsales' : 'dashboard';
-    // ทั้งสองโหมดคำนวณข้ามหลายวันบน office-server — ต้องให้เวลายาวกว่า timeout ดีฟอลต์ (ดู HEAVY_UPSTREAM_OPTS)
-    const r = await fetchUpstream(`${USAGE_API_BASE}/${path}?${params.toString()}`, HEAVY_UPSTREAM_OPTS);
+    if (req.query.emp) params.set('emp', String(req.query.emp));
+    // รวมหลายโหมดไว้ใน endpoint เดียวเพราะ Vercel จำกัด 12 functions และตอนนี้เต็มแล้ว
+    //   ?itemsales=1  — ยอดขายรายเมนู รวม+รายวัน (หน้าค้นหารายการขาย)
+    //   ?attendance=1 — ประวัติสแกนเข้า-ออกจาก ZKBio9 (หน้าสแกนเข้า-ออก)
+    const path = req.query.attendance ? 'attendance' : (req.query.itemsales ? 'itemsales' : 'dashboard');
+    // โหมด dashboard/itemsales คำนวณข้ามหลายวันบน office-server ต้องให้เวลายาว (ดู HEAVY_UPSTREAM_OPTS)
+    // ส่วน attendance เป็น query ตรงเข้าฐานข้อมูลในเครื่อง ตอบไวอยู่แล้ว ไม่ต้องรอนาน
+    const opts = path === 'attendance' ? { timeoutMs: 30000, retries: 1, deadlineMs: 40000 } : HEAVY_UPSTREAM_OPTS;
+    const r = await fetchUpstream(`${USAGE_API_BASE}/${path}?${params.toString()}`, opts);
     const payload = await r.json().catch(() => null);
     if (!r.ok || !payload || payload.status !== 'success') {
       return res.status(502).json({ status: 'error', message: (payload && payload.message) || `Office API Error: ${r.status}` });

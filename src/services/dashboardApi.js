@@ -150,6 +150,16 @@ export async function fetchItemSales({ branch, outletId, startDate, endDate, sig
   // { status, branch, outletId, count, data:[{itemCode,name,qty,amt,daily}] }
 }
 
+// ดึงประวัติสแกนเข้า-ออกจากเครื่องสแกนหน้า (ZKBio9) ของสาขาในช่วงวันที่
+// เป็น query ตรงเข้าฐานข้อมูล ตอบไว ไม่ต้องใช้ HEAVY_OPTS
+export async function fetchAttendance({ branch, startDate, endDate, emp, signal }) {
+  const params = new URLSearchParams({ startDate, endDate, attendance: '1' });
+  if (branch) params.set('branch', String(branch).toLowerCase());
+  if (emp) params.set('emp', String(emp).trim());
+  return getJson(`/api/dashboard?${params.toString()}`, { signal, label: 'ดึงประวัติสแกน' });
+  // { status, branch, count, data:[{empCode,name,time,date,state,stateLabel,area,terminal}] }
+}
+
 // ดึงรายการบิลทั้งหมด (ตารางรายการขาย) ของสาขาในช่วงเวลา
 export async function fetchBills({ branch, outletId, startDate, endDate, signal }) {
   const params = new URLSearchParams({ startDate, endDate });

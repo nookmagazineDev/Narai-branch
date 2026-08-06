@@ -6,6 +6,7 @@
 import 'dotenv/config';
 import express from 'express';
 import natUpnp from 'nat-upnp';
+import sql from 'mssql';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
@@ -656,6 +657,111 @@ app.get('/dashboard', async (req, res) => {
     res.json({ status: 'success', branch, outletId: outletNum, start, end, data });
   } catch (e) {
     console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
+
+// ---------- ประวัติสแกนเข้า-ออก (ZKBio9 บน SQL Server เครื่องเดียวกัน) ----------
+// ตาราง iclock_transaction: area_alias = รหัสสาขา (ตัวพิมพ์ใหญ่ เช่น SUM/XCM/ZBW ตรงกับที่เว็บใช้)
+//   emp_code = รหัสพนักงาน, punch_time = เวลาสแกน, punch_state = ประเภทการสแกน
+// เชื่อมผ่าน localhost จึงไม่ต้องเปิดพอร์ต SQL ออกเน็ต (ตั้งค่าใน .env — ดู .env.example)
+const ZK_DB = {
+  server: process.env.ZK_DB_HOST || 'localhost',
+  database: process.env.ZK_DB_NAME || 'ZKBio9',
+  user: process.env.ZK_DB_USER || '',
+  password: process.env.ZK_DB_PASSWORD || '',
+  options: {
+    encrypt: false,                 // ต่อในเครื่องเดียวกัน ไม่ต้องเข้ารหัส
+    trustServerCertificate: true,
+    ...(process.env.ZK_DB_INSTANCE ? { instanceName: process.env.ZK_DB_INSTANCE } : {}),
+  },
+  ...(process.env.ZK_DB_PORT ? { port: Number(process.env.ZK_DB_PORT) } : {}),
+  pool: { max: 4, min: 0, idleTimeoutMillis: 30000 },
+  requestTimeout: 30000,
+  connectionTimeout: 15000,
+};
+
+let zkPool = null;      // ใช้ pool เดิมซ้ำ ไม่ต่อใหม่ทุก request
+let zkNameCache = null; // { at, map } — ชื่อพนักงานเปลี่ยนน้อย แคชไว้ 10 นาทีพอ
+
+async function getZkPool() {
+  if (zkPool && zkPool.connected) return zkPool;
+  if (!ZK_DB.user) throw new Error('ยังไม่ได้ตั้งค่าการเชื่อมต่อ ZKBio (ZK_DB_USER/ZK_DB_PASSWORD ใน .env)');
+  zkPool = await new sql.ConnectionPool(ZK_DB).connect();
+  zkPool.on('error', () => { zkPool = null; }); // ต่อหลุดแล้วให้สร้างใหม่รอบหน้า
+  return zkPool;
+}
+
+// ชื่อพนักงาน — เป็นของแถม ถ้าตารางคนละโครงก็ยังคืนรายการสแกนได้ตามปกติ
+async function zkNameMap(pool) {
+  if (zkNameCache && Date.now() - zkNameCache.at < 10 * 60 * 1000) return zkNameCache.map;
+  const map = {};
+  try {
+    const r = await pool.request().query('SELECT emp_code, first_name, last_name FROM dbo.personnel_employee');
+    for (const row of r.recordset) {
+      const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
+      if (row.emp_code) map[String(row.emp_code).trim()] = name;
+    }
+  } catch (e) {
+    console.log('อ่านชื่อพนักงานจาก personnel_employee ไม่ได้ (จะแสดงเฉพาะรหัส): ' + e.message);
+  }
+  zkNameCache = { at: Date.now(), map };
+  return map;
+}
+
+// ป้ายกำกับตามมาตรฐาน ZKTeco — ตัวเครื่องตั้งค่าต่างกันได้ หน้าเว็บจึงคิด "เข้า/ออก" จาก
+// เวลาสแกนแรก-สุดท้ายของวันด้วย ไม่พึ่ง punch_state อย่างเดียว
+const ZK_PUNCH_LABEL = { '0': 'เข้างาน', '1': 'ออกงาน', '2': 'พักออก', '3': 'พักเข้า', '4': 'OT เข้า', '5': 'OT ออก' };
+
+app.get('/attendance', async (req, res) => {
+  try {
+    const branch = String(req.query.branch || '').toUpperCase().trim();
+    const start = String(req.query.start || '');
+    const end = String(req.query.end || '');
+    if (!start || !end) return res.status(400).json({ status: 'error', message: 'missing start/end' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return res.status(400).json({ status: 'error', message: 'รูปแบบวันที่ต้องเป็น YYYY-MM-DD' });
+    }
+    // end เป็นวันสุดท้ายที่ต้องการ -> เทียบแบบ < วันถัดไป เพื่อให้ครอบคลุมทั้งวัน
+    const endEx = new Date(end + 'T00:00:00Z');
+    endEx.setUTCDate(endEx.getUTCDate() + 1);
+    const endExclusive = endEx.toISOString().slice(0, 10);
+
+    const pool = await getZkPool();
+    const rq = pool.request()
+      .input('start', sql.VarChar(10), start)
+      .input('endEx', sql.VarChar(10), endExclusive);
+    let where = 'punch_time >= CONVERT(datetime2, @start, 23) AND punch_time < CONVERT(datetime2, @endEx, 23)';
+    if (branch) { rq.input('branch', sql.NVarChar(64), branch); where += ' AND UPPER(area_alias) = @branch'; }
+    if (req.query.emp) { rq.input('emp', sql.NVarChar(64), String(req.query.emp).trim()); where += ' AND emp_code = @emp'; }
+
+    // แปลงเวลาเป็นข้อความในฝั่ง SQL (style 120 = yyyy-mm-dd hh:mi:ss)
+    // กันปัญหา timezone เพี้ยนตอนแปลงเป็น Date ของ JS แล้วส่งเป็น JSON
+    const r = await rq.query(`
+      SELECT TOP (20000)
+        emp_code                              AS empCode,
+        CONVERT(varchar(19), punch_time, 120) AS time,
+        punch_state                           AS state,
+        area_alias                            AS area,
+        terminal_alias                        AS terminal
+      FROM dbo.iclock_transaction
+      WHERE ${where}
+      ORDER BY punch_time DESC`);
+
+    const names = await zkNameMap(pool);
+    const data = r.recordset.map((x) => ({
+      empCode: String(x.empCode || '').trim(),
+      name: names[String(x.empCode || '').trim()] || '',
+      time: x.time,
+      date: String(x.time || '').slice(0, 10),
+      state: String(x.state == null ? '' : x.state).trim(),
+      stateLabel: ZK_PUNCH_LABEL[String(x.state == null ? '' : x.state).trim()] || '',
+      area: x.area || '',
+      terminal: x.terminal || '',
+    }));
+    res.json({ status: 'success', branch, start, end, count: data.length, data });
+  } catch (e) {
+    console.error('attendance error:', e);
     res.status(500).json({ status: 'error', message: e.message });
   }
 });
