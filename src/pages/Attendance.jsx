@@ -156,8 +156,12 @@ export default function Attendance() {
                     <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
                     <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
                     <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้า</th>
+                    <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออกเบรค</th>
+                    <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้าเบรค</th>
                     <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออก</th>
-                    <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม (ชม.)</th>
+                    <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม</th>
+                    <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">พัก</th>
+                    <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สุทธิ</th>
                     <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สแกน</th>
                   </tr>
                 </thead>
@@ -166,19 +170,28 @@ export default function Attendance() {
                     <tr key={`${d.date}|${d.empCode}`} className="hover:bg-teal-50/40">
                       <td className="px-4 py-2 font-medium text-gray-800">{d.date}</td>
                       <td className="px-4 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
-                      <td className="px-4 py-2">{d.name || <span className="text-gray-300">—</span>}</td>
+                      <td className="px-4 py-2 whitespace-nowrap">{d.name || <span className="text-gray-300">—</span>}</td>
                       <td className="px-4 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
-                      <td className="px-4 py-2 text-center font-mono font-semibold text-rose-700">
-                        {d.count > 1 ? hhmm(d.last) : <span className="text-gray-300">—</span>}
+                      <td className="px-4 py-2 text-center font-mono text-amber-600">
+                        {d.breakOut ? hhmm(d.breakOut) : <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono">{d.hours != null ? d.hours.toFixed(2) : '-'}</td>
+                      <td className="px-4 py-2 text-center font-mono text-amber-600">
+                        {d.breakIn ? hhmm(d.breakIn) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-2 text-center font-mono font-semibold text-rose-700">
+                        {d.last ? hhmm(d.last) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-gray-500">{d.hours != null ? d.hours.toFixed(2) : '-'}</td>
+                      <td className="px-4 py-2 text-right font-mono text-gray-400">{d.breakHours != null ? d.breakHours.toFixed(2) : '-'}</td>
+                      <td className="px-4 py-2 text-right font-mono font-bold text-gray-800">{d.netHours != null ? d.netHours.toFixed(2) : '-'}</td>
                       <td className="px-4 py-2 text-right font-mono text-gray-400">{d.count}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
               <p className="px-4 py-3 text-xs text-gray-400 border-t border-gray-100">
-                แถวที่ช่อง "ออก" เป็น — คือวันที่สแกนครั้งเดียว (ยังไม่ได้สแกนออก หรือลืมสแกน)
+                อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
+                <span className="font-medium"> สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว · ช่องที่เป็น — คือวันนั้นสแกนไม่ครบ 4 รอบ
               </p>
             </div>
           ) : (
