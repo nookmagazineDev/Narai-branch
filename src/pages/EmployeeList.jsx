@@ -29,6 +29,7 @@ export default function EmployeeList() {
   const [scanEnd, setScanEnd] = useState('');
   const [scanRows, setScanRows] = useState(null);
   const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState('');
 
   const ymd = (d) => d.toISOString().slice(0, 10);
 
@@ -56,12 +57,15 @@ export default function EmployeeList() {
   const loadScans = async (target = scanTarget, start = scanStart, end = scanEnd) => {
     if (!target) return;
     setScanLoading(true);
+    setScanError('');
     try {
       const res = await fetchAttendance({ branch: target.branch, startDate: start, endDate: end, emp: target.hrCode });
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setScanRows(res.data || []);
     } catch (err) {
-      toast.error(err.message || 'ดึงข้อมูลสแกนไม่สำเร็จ');
+      // เก็บสาเหตุจริงไว้โชว์ใน modal — เดิมเซ็ตเป็นค่าว่างเฉยๆ ทำให้ error หน้าตาเหมือน "ไม่มีข้อมูล"
+      // ซึ่งพาไปไล่หาผิดทาง (เช่นตอน office-server ยังไม่มี route จะขึ้นว่าไม่พบการสแกน)
+      setScanError(err.message || 'ดึงข้อมูลสแกนไม่สำเร็จ');
       setScanRows([]);
     } finally {
       setScanLoading(false);
@@ -606,6 +610,15 @@ export default function EmployeeList() {
                 <div className="py-16 flex flex-col items-center text-gray-500">
                   <Loader2 className="w-8 h-8 animate-spin text-teal-500 mb-2" />
                   <p className="text-sm">กำลังโหลด...</p>
+                </div>
+              ) : scanError ? (
+                <div className="py-14 px-6 text-center text-sm space-y-2">
+                  <p className="text-red-600 font-medium">ดึงข้อมูลไม่สำเร็จ</p>
+                  <p className="text-gray-600 text-xs max-w-md mx-auto break-words">{scanError}</p>
+                  <button onClick={() => loadScans()}
+                    className="mt-2 px-4 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">
+                    ลองใหม่
+                  </button>
                 </div>
               ) : scanRows === null ? null : scanDaily.length === 0 ? (
                 <div className="py-16 px-6 text-center text-sm space-y-1">
