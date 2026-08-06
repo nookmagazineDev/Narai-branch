@@ -9,19 +9,10 @@ import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered } from
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 import { fetchAttendance } from '../services/dashboardApi';
+import { hhmm, summarizeDaily } from '../utils/attendance';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const hhmm = (t) => String(t || '').slice(11, 16);
-
-// ผลต่างเวลาเป็นชั่วโมง จาก "YYYY-MM-DD HH:MM:SS" (เวลาท้องถิ่นทั้งคู่ จึงลบกันตรงๆ ได้)
-const hoursBetween = (a, b) => {
-  if (!a || !b || a === b) return null;
-  const d1 = new Date(String(a).replace(' ', 'T'));
-  const d2 = new Date(String(b).replace(' ', 'T'));
-  if (isNaN(d1) || isNaN(d2)) return null;
-  return (d2 - d1) / 3600000;
-};
 
 export default function Attendance() {
   const { user } = useAuth();
@@ -79,21 +70,7 @@ export default function Attendance() {
   }, [rows, search]);
 
   // สรุปรายวัน: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
-  const daily = useMemo(() => {
-    const m = {};
-    for (const r of filtered) {
-      const k = `${r.date}|${r.empCode}`;
-      if (!m[k]) m[k] = { date: r.date, empCode: r.empCode, name: r.name, times: [] };
-      if (!m[k].name && r.name) m[k].name = r.name;
-      m[k].times.push(r.time);
-    }
-    return Object.values(m).map((e) => {
-      const ts = e.times.slice().sort();
-      const first = ts[0];
-      const last = ts[ts.length - 1];
-      return { ...e, first, last, count: ts.length, hours: hoursBetween(first, last) };
-    }).sort((a, b) => (b.date + b.empCode).localeCompare(a.date + a.empCode));
-  }, [filtered]);
+  const daily = useMemo(() => summarizeDaily(filtered), [filtered]);
 
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
 
