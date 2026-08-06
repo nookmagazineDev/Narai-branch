@@ -571,7 +571,7 @@ export default function EmployeeList() {
       {/* Modal: สแกนเข้า-ออกทั้งสาขา ของวันที่เลือก */}
       {scanOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setScanOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2.5 bg-teal-100 text-teal-600 rounded-xl shrink-0">
@@ -659,25 +659,37 @@ export default function EmployeeList() {
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="text-gray-600 text-xs">
-                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
-                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
-                      <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้า</th>
-                      <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออก</th>
-                      <th className="px-5 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม (ชม.)</th>
-                      <th className="px-5 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สแกน</th>
+                      <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
+                      <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
+                      <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้า</th>
+                      <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออกเบรค</th>
+                      <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้าเบรค</th>
+                      <th className="px-4 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออก</th>
+                      <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม</th>
+                      <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">พัก</th>
+                      <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สุทธิ</th>
+                      <th className="px-4 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">สแกน</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 text-gray-700">
                     {scanDaily.map((d) => (
                       <tr key={d.empCode} className="hover:bg-teal-50/40">
-                        <td className="px-5 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
-                        <td className="px-5 py-2">{d.name || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-5 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
-                        <td className="px-5 py-2 text-center font-mono font-semibold text-rose-700">
-                          {d.count > 1 ? hhmm(d.last) : <span className="text-gray-300">—</span>}
+                        <td className="px-4 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
+                        <td className="px-4 py-2 whitespace-nowrap">{d.name || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-4 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
+                        <td className="px-4 py-2 text-center font-mono text-amber-600">
+                          {d.breakOut ? hhmm(d.breakOut) : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="px-5 py-2 text-right font-mono">{d.hours != null ? d.hours.toFixed(2) : '-'}</td>
-                        <td className="px-5 py-2 text-right font-mono text-gray-400">{d.count}</td>
+                        <td className="px-4 py-2 text-center font-mono text-amber-600">
+                          {d.breakIn ? hhmm(d.breakIn) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-2 text-center font-mono font-semibold text-rose-700">
+                          {d.last ? hhmm(d.last) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono text-gray-500">{d.hours != null ? d.hours.toFixed(2) : '-'}</td>
+                        <td className="px-4 py-2 text-right font-mono text-gray-400">{d.breakHours != null ? d.breakHours.toFixed(2) : '-'}</td>
+                        <td className="px-4 py-2 text-right font-mono font-bold text-gray-800">{d.netHours != null ? d.netHours.toFixed(2) : '-'}</td>
+                        <td className="px-4 py-2 text-right font-mono text-gray-400">{d.count}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -686,7 +698,8 @@ export default function EmployeeList() {
             </div>
 
             <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
-              เข้า = เวลาสแกนแรกของวัน · ออก = เวลาสแกนสุดท้าย · ช่อง "ออก" เป็น — คือวันที่สแกนครั้งเดียว
+              อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
+              <span className="font-medium"> สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว · ช่องที่เป็น — คือวันนั้นสแกนไม่ครบ 4 รอบ
             </div>
           </div>
         </div>

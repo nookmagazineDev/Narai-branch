@@ -17,8 +17,17 @@ export function hoursBetween(a, b) {
 
 /**
  * รวมรายการสแกนดิบเป็นรายวัน — พนักงาน 1 คน x 1 วัน = 1 แถว
- * คืน [{ date, empCode, name, first, last, count, hours }] เรียงวันที่ล่าสุดก่อน
- * count = 1 แปลว่าสแกนครั้งเดียว (ยังไม่ได้สแกนออก หรือลืมสแกน) — last จะเท่ากับ first
+ * คืน [{ date, empCode, name, first, breakOut, breakIn, last, count, hours, breakHours, netHours }]
+ * เรียงวันที่ล่าสุดก่อน
+ *
+ * ลำดับการสแกนปกติของสาขาคือ 4 รอบ: เข้างาน -> ออกเบรค -> เข้าเบรค -> ออกงาน
+ * จึงอ่านจาก "ลำดับ" ของเวลาในวันนั้น ไม่ได้อ่านจาก punch_state
+ * เพราะการตั้งค่าปุ่มของเครื่องสแกนแต่ละตัวไม่เหมือนกัน (ข้อมูลจริงมีทั้งค่า 0/1/2 ปนกัน)
+ *
+ * จำนวนครั้งที่สแกนไม่ครบ 4 ก็ยังอ่านได้เท่าที่มี:
+ *   1 ครั้ง = มีแต่เวลาเข้า (ยังไม่ออก หรือลืมสแกน)
+ *   2 ครั้ง = เข้า-ออก ไม่ได้แยกเบรค
+ *   3 ครั้ง = มีออกเบรค แต่ขาดเข้าเบรค (ลืมสแกนตอนกลับ)
  */
 export function summarizeDaily(rows) {
   const m = {};
@@ -31,9 +40,25 @@ export function summarizeDaily(rows) {
   return Object.values(m)
     .map((e) => {
       const ts = e.times.slice().sort();
+      const n = ts.length;
       const first = ts[0];
-      const last = ts[ts.length - 1];
-      return { ...e, first, last, count: ts.length, hours: hoursBetween(first, last) };
+      const last = n > 1 ? ts[n - 1] : null;
+      const breakOut = n >= 3 ? ts[1] : null;
+      const breakIn = n >= 4 ? ts[2] : null;
+      const hours = hoursBetween(first, last);
+      const breakHours = hoursBetween(breakOut, breakIn);
+      return {
+        ...e,
+        first,
+        breakOut,
+        breakIn,
+        last,
+        count: n,
+        hours,
+        breakHours,
+        // ชั่วโมงทำงานจริงหลังหักเวลาพัก (ถ้าไม่มีข้อมูลพักก็เท่ากับชั่วโมงรวม)
+        netHours: hours != null && breakHours != null ? hours - breakHours : hours,
+      };
     })
     .sort((a, b) => (b.date + b.empCode).localeCompare(a.date + a.empCode));
 }
