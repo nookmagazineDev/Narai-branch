@@ -98,6 +98,13 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
   - กติกา exclude/prep/cover ตั้งเป็นค่าคงที่ในไฟล์ (`DASH_EXCLUDE_*`, `DASH_PREP_KG_ITEMS`, `DASH_COVER_ITEMS`) — ตรงกับ NARAI OFFICE
   - ต้องเข้าถึง `cpaidbetweendate` ได้ (ตั้ง env `PAID_BASE` ทับได้ ค่าเริ่มต้น = `SALES_BASE` แทน `ctranbetweendate`→`cpaidbetweendate`)
 
+- `GET /attendance?branch&start&end[&emp]` — **ประวัติสแกนเข้า-ออก** (จาก ZKBio9 บน SQL Server เครื่องเดียวกัน)
+  - คืน `{ status, branch, count, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }`
+  - `area_alias` ในตาราง `iclock_transaction` เก็บรหัสสาขาตรงกับที่เว็บใช้ (ตัวพิมพ์ใหญ่) จึงกรองด้วยสาขาได้เลย
+  - ต่อ SQL Server ผ่าน `localhost` — ไม่ต้องเปิดพอร์ต 1433 ออกเน็ต (ตั้งค่า `ZK_DB_*` ใน `.env`)
+  - ชื่อพนักงานดึงจาก `personnel_employee` แบบ best-effort (แคช 10 นาที) ถ้าอ่านไม่ได้จะแสดงเฉพาะรหัส
+  - จำกัด 20,000 แถวต่อครั้ง
+
 ## ฝั่ง Vercel
 `api/usagemenu.js` และ `api/dashboard.js` ชี้มาที่ `http://storenarai.dyndns.tv:8787` (ตั้ง env `USAGE_API_BASE` ทับได้)
 

@@ -16,6 +16,7 @@ import Waste from './pages/Waste';
 import ReceiveGoods from './pages/ReceiveGoods';
 import ExpenseEntry from './pages/ExpenseEntry';
 import SalesSearch from './pages/SalesSearch';
+import Attendance from './pages/Attendance';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -79,6 +80,7 @@ function App() {
             <Route path="stock/receive" element={<ReceiveGoods />} />
             <Route path="expense" element={<ExpenseEntry />} />
             <Route path="sales-search" element={<SalesSearch />} />
+            <Route path="attendance" element={<Attendance />} />
           </Route>
           
           <Route path="*" element={<Navigate to="/" replace />} />

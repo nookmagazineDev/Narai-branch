@@ -10,6 +10,7 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "mssql": "^11.0.1",
     "nat-upnp": "^1.1.1"
   }
 }
