@@ -23,48 +23,43 @@ export default function EmployeeList() {
   const [resignReason, setResignReason] = useState('');
   const [resignSubmitting, setResignSubmitting] = useState(false);
 
-  // ---- ดูสแกนเข้า-ออกรายคน (ข้อมูลจากเครื่องสแกนหน้า ZKBio ผ่าน office-server) ----
-  const [scanTarget, setScanTarget] = useState(null);   // { hrCode, fullName, branch }
-  const [scanStart, setScanStart] = useState('');
-  const [scanEnd, setScanEnd] = useState('');
+  // ---- ดูสแกนเข้า-ออกทั้งสาขา รายวัน (ข้อมูลจากเครื่องสแกนหน้า ZKBio ผ่าน office-server) ----
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanDate, setScanDate] = useState('');
+  const [scanBranch, setScanBranch] = useState('');
   const [scanRows, setScanRows] = useState(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState('');
+  const [scanSearch, setScanSearch] = useState('');
 
-  const ymd = (d) => d.toISOString().slice(0, 10);
+  // ใช้วันที่แบบเวลาท้องถิ่น — toISOString() เป็น UTC ทำให้ช่วงเที่ยงคืนถึง 7 โมงเช้าได้วันที่ย้อนไป 1 วัน
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-  const openScanModal = (emp) => {
-    // แอดมินดูข้ามสาขาได้ จึงต้องใช้สาขาของพนักงานคนนั้น ไม่ใช่ของคนที่ล็อกอิน
-    const branch = (emp.branch && String(emp.branch).toLowerCase() !== 'all') ? emp.branch : user?.branch;
-    if (!branch || String(branch).toLowerCase() === 'all') {
-      toast.error('ไม่ทราบสาขาของพนักงานคนนี้');
-      return;
-    }
-    if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
-    const today = new Date();
-    const weekAgo = new Date(today.getTime() - 6 * 86400000);
-    setScanTarget({ hrCode: emp.hrCode, fullName: emp.fullName, branch });
-    setScanStart(ymd(weekAgo));
-    setScanEnd(ymd(today));
+  const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+
+  const openScanModal = () => {
+    // แอดมินเลือกสาขาในกล่องได้ ถ้ากรองสาขาไว้อยู่แล้วให้ใช้อันนั้นเป็นค่าตั้งต้น
+    const initial = isAdmin ? (branchFilter || '') : (user?.branch || '');
+    setScanBranch(initial);
+    setScanDate(ymd(new Date()));
     setScanRows(null);
+    setScanError('');
+    setScanSearch('');
+    setScanOpen(true);
   };
 
-  const closeScanModal = () => {
-    setScanTarget(null);
-    setScanRows(null);
-  };
-
-  const loadScans = async (target = scanTarget, start = scanStart, end = scanEnd) => {
-    if (!target) return;
+  const loadScans = async (branch = scanBranch, date = scanDate) => {
+    if (!branch) { toast.error('กรุณาเลือกสาขา'); return; }
+    if (!date) { toast.error('กรุณาเลือกวันที่'); return; }
     setScanLoading(true);
     setScanError('');
     try {
-      const res = await fetchAttendance({ branch: target.branch, startDate: start, endDate: end, emp: target.hrCode });
+      // วันเดียว: start = end = วันที่ที่เลือก
+      const res = await fetchAttendance({ branch, startDate: date, endDate: date });
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setScanRows(res.data || []);
     } catch (err) {
-      // เก็บสาเหตุจริงไว้โชว์ใน modal — เดิมเซ็ตเป็นค่าว่างเฉยๆ ทำให้ error หน้าตาเหมือน "ไม่มีข้อมูล"
-      // ซึ่งพาไปไล่หาผิดทาง (เช่นตอน office-server ยังไม่มี route จะขึ้นว่าไม่พบการสแกน)
+      // เก็บสาเหตุจริงไว้โชว์ใน modal — ถ้าเซ็ตเป็นค่าว่างเฉยๆ error จะหน้าตาเหมือน "ไม่มีข้อมูล"
       setScanError(err.message || 'ดึงข้อมูลสแกนไม่สำเร็จ');
       setScanRows([]);
     } finally {
@@ -72,13 +67,20 @@ export default function EmployeeList() {
     }
   };
 
-  // เปิด modal แล้วดึงให้เลยรอบแรก ไม่ต้องให้กดซ้ำ
+  // เปิดกล่องแล้วดึงให้เลยถ้ารู้สาขาอยู่แล้ว (สาขาทั่วไป) — แอดมินต้องเลือกสาขาก่อน
   useEffect(() => {
-    if (scanTarget && scanRows === null && !scanLoading) loadScans();
+    if (scanOpen && scanBranch && scanRows === null && !scanLoading) loadScans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanTarget]);
+  }, [scanOpen]);
 
-  const scanDaily = scanRows ? summarizeDaily(scanRows) : [];
+  // สแกนวันเดียว -> 1 คน = 1 แถว เรียงตามเวลาเข้าก่อน-หลัง
+  const scanDaily = (scanRows ? summarizeDaily(scanRows) : [])
+    .filter((d) => {
+      const q = scanSearch.trim().toLowerCase();
+      if (!q) return true;
+      return String(d.empCode).toLowerCase().includes(q) || String(d.name || '').toLowerCase().includes(q);
+    })
+    .sort((a, b) => String(a.first).localeCompare(String(b.first)));
 
   const handleSaveLoga = async (emp) => {
     if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
@@ -338,7 +340,7 @@ export default function EmployeeList() {
           </div>
         )}
 
-        <div className="p-6 border-b border-gray-100">
+        <div className="p-6 border-b border-gray-100 flex flex-wrap items-center gap-3">
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <Search className="h-5 w-5 text-gray-400" />
@@ -351,6 +353,12 @@ export default function EmployeeList() {
               className="block w-full md:w-80 pl-10 pr-3 py-2 border border-gray-200 rounded-xl leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 sm:text-sm transition-colors"
             />
           </div>
+          <button
+            onClick={openScanModal}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-semibold hover:bg-teal-700 transition-colors shadow-sm"
+          >
+            <Fingerprint className="w-4 h-4" /> ดูสแกนเข้า-ออก
+          </button>
         </div>
 
         <div className="overflow-x-auto">
@@ -542,13 +550,6 @@ export default function EmployeeList() {
                             <ImageIcon className="w-3.5 h-3.5" />
                           </a>
                         )}
-                        <button
-                          onClick={() => openScanModal(emp)}
-                          className="inline-flex items-center gap-1 px-3 py-1 bg-teal-50 text-teal-600 hover:bg-teal-100 border border-teal-200 rounded-md text-xs font-medium transition-colors"
-                          title="ดูเวลาสแกนเข้า-ออก"
-                        >
-                          <Fingerprint className="w-3 h-3" /> สแกน
-                        </button>
                         {emp.status !== 'ลาออก' && (
                           <button
                             onClick={() => openResignModal(emp.hrCode, emp.fullName)}
@@ -567,42 +568,63 @@ export default function EmployeeList() {
         </div>
       </div>
 
-      {/* Modal: เวลาสแกนเข้า-ออกรายคน */}
-      {scanTarget && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={closeScanModal}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      {/* Modal: สแกนเข้า-ออกทั้งสาขา ของวันที่เลือก */}
+      {scanOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setScanOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2.5 bg-teal-100 text-teal-600 rounded-xl shrink-0">
                   <Fingerprint className="w-5 h-5" />
                 </div>
                 <div className="min-w-0">
-                  <h3 className="text-lg font-bold text-gray-800 truncate">เวลาสแกนเข้า-ออก</h3>
-                  <p className="text-sm text-gray-500 truncate">
-                    {scanTarget.fullName} · รหัส {scanTarget.hrCode} · สาขา {scanTarget.branch}
+                  <h3 className="text-lg font-bold text-gray-800">สแกนเข้า-ออก</h3>
+                  <p className="text-sm text-gray-500">
+                    เวลาสแกนหน้าของพนักงานทั้งสาขา ในวันที่เลือก
+                    {scanRows && !scanError ? ` · ${scanDaily.length} คน` : ''}
                   </p>
                 </div>
               </div>
-              <button onClick={closeScanModal} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 shrink-0">
+              <button onClick={() => setScanOpen(false)} className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 shrink-0">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* เลือกช่วงวันที่ */}
+            {/* เลือกวันที่ (+ สาขา สำหรับแอดมิน) */}
             <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 flex flex-wrap items-center gap-2">
-              <input type="date" value={scanStart} max={scanEnd} onChange={(e) => setScanStart(e.target.value)}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
-              <span className="text-gray-400 text-sm">ถึง</span>
-              <input type="date" value={scanEnd} min={scanStart} onChange={(e) => setScanEnd(e.target.value)}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
+              {isAdmin && (
+                <select
+                  value={scanBranch}
+                  onChange={(e) => { setScanBranch(e.target.value); setScanRows(null); setScanError(''); }}
+                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-teal-500 outline-none"
+                >
+                  <option value="">เลือกสาขา…</option>
+                  {uniqueBranches.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              )}
+              <input
+                type="date"
+                value={scanDate}
+                max={ymd(new Date())}
+                onChange={(e) => setScanDate(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 outline-none"
+              />
               <button onClick={() => loadScans()} disabled={scanLoading}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50">
                 {scanLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
                 ดึงข้อมูล
               </button>
               <button
-                onClick={() => { const t = new Date(); setScanStart(ymd(t)); setScanEnd(ymd(t)); }}
+                onClick={() => { const t = ymd(new Date()); setScanDate(t); loadScans(scanBranch, t); }}
                 className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 text-gray-600 hover:bg-white">วันนี้</button>
+              {scanRows && scanRows.length > 0 && (
+                <input
+                  value={scanSearch}
+                  onChange={(e) => setScanSearch(e.target.value)}
+                  placeholder="ค้นหาชื่อ/รหัส…"
+                  className="ml-auto px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-44 focus:ring-2 focus:ring-teal-500 outline-none"
+                />
+              )}
             </div>
 
             <div className="flex-1 overflow-auto">
@@ -620,18 +642,25 @@ export default function EmployeeList() {
                     ลองใหม่
                   </button>
                 </div>
-              ) : scanRows === null ? null : scanDaily.length === 0 ? (
+              ) : scanRows === null ? (
+                <div className="py-16 px-6 text-center text-sm text-gray-400">
+                  {isAdmin && !scanBranch ? 'เลือกสาขาแล้วกด "ดึงข้อมูล"' : 'กด "ดึงข้อมูล" เพื่อดูเวลาสแกน'}
+                </div>
+              ) : scanDaily.length === 0 ? (
                 <div className="py-16 px-6 text-center text-sm space-y-1">
-                  <p className="text-amber-600 font-medium">ไม่พบการสแกนในช่วงวันที่ที่เลือก</p>
-                  <p className="text-gray-400 text-xs">
-                    ลองขยายช่วงวันที่ หรือตรวจว่ารหัส {scanTarget.hrCode} ตรงกับรหัสในเครื่องสแกนหรือไม่
+                  <p className="text-amber-600 font-medium">
+                    {scanSearch ? 'ไม่พบพนักงานที่ค้นหา' : 'ไม่พบการสแกนในวันที่เลือก'}
                   </p>
+                  {!scanSearch && (
+                    <p className="text-gray-400 text-xs">ลองเปลี่ยนวันที่ หรือตรวจว่าเครื่องสแกนของสาขาส่งข้อมูลเข้าระบบแล้วหรือยัง</p>
+                  )}
                 </div>
               ) : (
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="text-gray-600 text-xs">
-                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
+                      <th className="px-5 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
                       <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">เข้า</th>
                       <th className="px-5 py-2.5 text-center sticky top-0 bg-gray-50 border-b border-gray-200">ออก</th>
                       <th className="px-5 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">รวม (ชม.)</th>
@@ -640,8 +669,9 @@ export default function EmployeeList() {
                   </thead>
                   <tbody className="divide-y divide-gray-100 text-gray-700">
                     {scanDaily.map((d) => (
-                      <tr key={d.date} className="hover:bg-teal-50/40">
-                        <td className="px-5 py-2 font-medium text-gray-800">{d.date}</td>
+                      <tr key={d.empCode} className="hover:bg-teal-50/40">
+                        <td className="px-5 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
+                        <td className="px-5 py-2">{d.name || <span className="text-gray-300">—</span>}</td>
                         <td className="px-5 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
                         <td className="px-5 py-2 text-center font-mono font-semibold text-rose-700">
                           {d.count > 1 ? hhmm(d.last) : <span className="text-gray-300">—</span>}
