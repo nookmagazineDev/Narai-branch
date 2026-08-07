@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, errMessage } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Printer } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
@@ -534,7 +534,9 @@ export default function ScheduleWeekly() {
         toast.error('บันทึกไม่สำเร็จ: ' + res.message);
       }
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการบันทึก');
+      // เดิมกลืนข้อความจริงทิ้ง ทำให้ผู้ใช้เห็นแค่ "เกิดข้อผิดพลาด" แล้วบอกไม่ได้ว่าติดอะไร
+      // (หมดเวลารอ / GAS ปฏิเสธเพราะยิงพร้อมกันเยอะ / เน็ตหลุด — คนละสาเหตุกันทั้งนั้น)
+      toast.error(errMessage(err, 'บันทึกตารางงานไม่สำเร็จ'), { duration: 6000 });
     } finally {
       setIsSaving(false);
     }

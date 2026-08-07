@@ -12,7 +12,11 @@ export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPt
 // ---------------------------------------------------------------------------
 
 const TIMEOUT_MS = 30000;      // GAS เปิดสเปรดชีตใหญ่ๆ ช้าได้ แต่ไม่ควรค้างเกินนี้ต่อหนึ่งครั้ง
-const DEADLINE_MS = 70000;     // เวลารวมทั้งหมดรวมการลองใหม่ — เกินนี้ยอมแพ้ ไม่ปล่อยให้ผู้ใช้รอลอยๆ
+// คำสั่งบันทึกยอมรอได้นานกว่าคำสั่งอ่าน เพราะยิงครั้งเดียวไม่ลองใหม่ (ลองใหม่ = ข้อมูลซ้ำ)
+// ถ้าตัดที่ 30 วิ ทั้งที่ GAS ยังเขียนชีทค้างอยู่ ผู้ใช้จะเห็นว่า "บันทึกไม่ไป" แล้วกดซ้ำ
+// กลายเป็นข้อมูลซ้ำสองชุด — ยอมให้รอจนเกือบสุด deadline ดีกว่า
+const WRITE_TIMEOUT_MS = 90000;
+const DEADLINE_MS = 100000;    // เวลารวมทั้งหมดรวมการลองใหม่ — เกินนี้ยอมแพ้ ไม่ปล่อยให้ผู้ใช้รอลอยๆ
 const MIN_ATTEMPT_MS = 8000;   // เหลือเวลาน้อยกว่านี้ก็ไม่ต้องลองใหม่แล้ว ยิงไปก็ไม่ทันอยู่ดี
 const MAX_CONCURRENT = 3;      // ยิงพร้อมกันเกินนี้ GAS จะเริ่มปฏิเสธ
 const RETRY_DELAYS = [800, 2500, 5000]; // ms — หน่วงเพิ่มขึ้นเรื่อยๆ กันซ้ำเติมตอนเซิร์ฟเวอร์แน่น
@@ -53,7 +57,7 @@ const pump = () => {
 const acquire = () => new Promise((resolve) => { waiting.push(resolve); pump(); });
 const release = () => { active--; pump(); };
 
-const requestOnce = async (action, payload, timeoutMs) => {
+const requestOnce = async (action, payload, timeoutMs, isRead = true) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -68,7 +72,14 @@ const requestOnce = async (action, payload, timeoutMs) => {
     });
   } catch (err) {
     if (controller.signal.aborted) {
-      throw new ApiError('เซิร์ฟเวอร์ตอบกลับช้าเกินไป (หมดเวลารอ) กรุณาลองใหม่อีกครั้ง', 'network', err);
+      // คำสั่งบันทึก: การหมดเวลารอ "ไม่ได้" แปลว่าไม่ได้บันทึก — เซิร์ฟเวอร์อาจเขียนสำเร็จแล้วแต่ตอบกลับไม่ทัน
+      // ถ้าบอกให้กดซ้ำทันทีจะได้ข้อมูลซ้ำสองชุด ต้องให้ไปตรวจก่อน
+      throw new ApiError(
+        isRead
+          ? 'เซิร์ฟเวอร์ตอบกลับช้าเกินไป (หมดเวลารอ) กรุณาลองใหม่อีกครั้ง'
+          : 'เซิร์ฟเวอร์ตอบกลับช้าเกินไป (หมดเวลารอ) — ข้อมูลอาจถูกบันทึกไปแล้ว กรุณาตรวจสอบข้อมูลก่อนกดบันทึกซ้ำ',
+        'network', err,
+      );
     }
     throw new ApiError('ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบสัญญาณอินเทอร์เน็ตแล้วลองใหม่', 'network', err);
   } finally {
@@ -123,8 +134,9 @@ export const apiCall = async (action, payload, options = {}) => {
     throw new ApiError("กรุณาตั้งค่า SCRIPT_URL ในไฟล์ src/services/api.js ก่อนใช้งาน", 'server');
   }
 
-  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
-  const retries = options.retries ?? (READ_ONLY_ACTION.test(action) ? RETRY_DELAYS.length : 0);
+  const isRead = READ_ONLY_ACTION.test(action);
+  const timeoutMs = options.timeoutMs ?? (isRead ? TIMEOUT_MS : WRITE_TIMEOUT_MS);
+  const retries = options.retries ?? (isRead ? RETRY_DELAYS.length : 0);
 
   await acquire();
   const deadline = Date.now() + (options.deadlineMs ?? DEADLINE_MS);
@@ -134,7 +146,7 @@ export const apiCall = async (action, payload, options = {}) => {
         // ตัด timeout ของรอบนี้ไม่ให้ล้ำ deadline รวม — เดิมทุกรอบใช้ 30 วิเต็มโดยไม่สนเวลาที่ใช้ไปแล้ว
         // ทำให้ 3 รอบรวมกันเป็น ~93 วิ ทั้งที่ตั้ง deadline ไว้ 70 วิ (ผู้ใช้นั่งรอค้างเกินจริงเกือบครึ่งนาที)
         const remaining = deadline - Date.now();
-        return await requestOnce(action, payload, Math.min(timeoutMs, remaining));
+        return await requestOnce(action, payload, Math.min(timeoutMs, remaining), isRead);
       } catch (err) {
         // เซิร์ฟเวอร์ตอบมาแล้วว่าทำไม่ได้ (เช่น รหัสผ่านผิด, ไม่พบข้อมูล) — ลองใหม่ก็ได้ผลเดิม
         const delay = RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];

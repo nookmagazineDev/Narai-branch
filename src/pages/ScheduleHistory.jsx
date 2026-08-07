@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, errMessage } from '../services/api';
 import { Loader2, Search, CheckCircle, ChevronLeft, ChevronRight, Calendar, Users, DollarSign, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -25,10 +25,21 @@ export default function ScheduleHistory() {
   const [otApprovals, setOtApprovals] = useState({});
 
   useEffect(() => {
+    // เดิมเรียก 'getBranchList' ซึ่ง Apps Script ไม่มีคำสั่งนี้ (ตอบ 'Invalid action' เสมอ)
+    // ผลคือ dropdown สาขาว่างเปล่า -> แอดมินเลือกสาขาไม่ได้ -> ค้นหาไม่ได้ -> ปุ่มบันทึกอนุมัติ OT ถูกปิดตลอด
+    // คำสั่งจริงชื่อ 'getBranches' และคืนเป็น [{ name, outletId }] จึงต้องดึงเฉพาะชื่อออกมา
     const fetchBranches = async () => {
-      const res = await apiCall('getBranchList');
-      if (res.status === 'success') {
-        setBranches(res.data);
+      try {
+        const res = await apiCall('getBranches', {});
+        if (res.status === 'success' && Array.isArray(res.data)) {
+          setBranches(
+            res.data
+              .map((b) => String(b?.name || '').trim())
+              .filter((n) => n && n.toLowerCase() !== 'all' && n !== 'ชื่อสาขา')
+          );
+        }
+      } catch (err) {
+        toast.error(errMessage(err, 'โหลดรายชื่อสาขาไม่สำเร็จ'));
       }
     };
     fetchBranches();
@@ -54,8 +65,10 @@ export default function ScheduleHistory() {
     setLoading(true);
     try {
       // Fetch History Data
+      // Apps Script อ่านวันที่จาก data.date (ไม่ใช่ searchDate) — ส่งชื่อผิดทำให้ไม่กรองวันที่เลย
+      // แล้วคืนประวัติของสาขานั้น "ทุกวันที่ตั้งแต่เปิดใช้ระบบ" ช้าและตัวเลขสรุปผิด
       const res = await apiCall('getHistoryData', {
-        searchDate: historyDate,
+        date: historyDate,
         branch: selectedBranch
       });
       
@@ -85,12 +98,13 @@ export default function ScheduleHistory() {
         setHistoryData(validData);
         setOtApprovals(initialApprovals);
       } else {
-        toast.error('เกิดข้อผิดพลาดในการดึงประวัติ');
+        toast.error(res.message || 'เกิดข้อผิดพลาดในการดึงประวัติ');
         setHistoryData([]);
       }
     } catch (err) {
       console.error(err);
-      toast.error('การเชื่อมต่อขัดข้อง');
+      // โชว์สาเหตุจริงจากเซิร์ฟเวอร์ แทนคำว่า "การเชื่อมต่อขัดข้อง" ลอยๆ ที่กลบต้นเหตุจนหาไม่เจอ
+      toast.error(errMessage(err, 'ดึงประวัติไม่สำเร็จ'));
     } finally {
       setLoading(false);
     }
@@ -130,7 +144,7 @@ export default function ScheduleHistory() {
       }
     } catch (err) {
       console.error(err);
-      toast.error('การเชื่อมต่อขัดข้อง');
+      toast.error(errMessage(err, 'บันทึกอนุมัติ OT ไม่สำเร็จ'));
     } finally {
       setSaving(false);
     }

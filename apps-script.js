@@ -9,6 +9,21 @@ var CLOSING_ITEMS_CACHE_TTL = 300; // วินาที — getClosingItems อ
 var MONTH_END_CACHE_TTL = 120;     // วินาที — getMonthEndClosing (ล้างแคชทันทีเมื่อมีการบันทึกใหม่ จึงไม่เห็นข้อมูลเก่าค้าง)
 var CACHE_CHUNK_SIZE = 90000;      // ตัวอักษรต่อชิ้น — เผื่อขอบเขตให้ห่างจากลิมิต 100KB ของ CacheService
 
+// --- Helper: ต่อท้ายชีทหลายแถวด้วยการเขียนครั้งเดียว ---
+// appendRow() เขียนชีท 1 ครั้งต่อ 1 แถว และยิ่งชีทยาวยิ่งช้า การบันทึกที่มี 100-800 แถว
+// (นับสต๊อก / ตารางงานทั้งสัปดาห์) จึงใช้เวลาเกิน timeout ฝั่งเว็บจนผู้ใช้เห็นว่า "บันทึกไม่ไป"
+// setValues เขียนทีเดียวจบ แต่ไม่ขยายกริดให้เอง ต้อง insertRowsAfter เองถ้าแถวไม่พอ
+function appendRowsBatch(sheet, rows) {
+  if (!rows || !rows.length) return 0;
+  var startRow = sheet.getLastRow() + 1;
+  var needRows = startRow + rows.length - 1;
+  if (needRows > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), needRows - sheet.getMaxRows());
+  }
+  sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+  return startRow;
+}
+
 // อ่านค่าที่แคชไว้ (คืน null ถ้าไม่มี/หมดอายุ/อ่านพลาด — ให้ผู้เรียกไปอ่านสดแทน)
 function getCachedJson(cacheKey) {
   try {
@@ -570,17 +585,25 @@ function doPost(e) {
       }
       var logs = data.logs || [];
       var timestamp = new Date();
-      logs.forEach(function (item) {
-        sheet.appendRow([
+      // สร้างแถวทั้งหมดก่อนแล้วเขียนทีเดียวด้วย setValues
+      // เดิมใช้ appendRow ทีละแถว = กดบันทึกตารางงาน 1 สัปดาห์ (พนักงาน 20 คน x 7 วัน) เขียนชีท 140 ครั้ง
+      // ยิ่งชีท 'ลงตารางงาน' ยาวขึ้นทุกวัน แต่ละครั้งยิ่งช้า จนเกิน timeout ฝั่งเว็บ -> ผู้ใช้เห็นว่า "บันทึกไม่ไป"
+      // ทั้งที่ GAS ยังเขียนต่อจนจบ กลายเป็นข้อมูลค้างครึ่งๆ กลางๆ (คำสั่งบันทึกไม่ลองใหม่อัตโนมัติ)
+      var tsRows = logs.map(function (item) {
+        return [
           timestamp, item.workDate, item.branch, item.hrCode, item.name, item.position,
           item.checkIn || '', item.checkOut || '', item.breakTime || '', item.ot || '', item.wage || '',
           item.status || '', item.leaveNote || '', item.empType || '', item.unpaidLeave || '',
           item.otAccumulated || '', item.hourlyLeave || '', item.otherNote || item.note || '',
           item.breakTimeRange || '', item.workStation || '', '', item.useAccumulatedHours || ''
-        ]);
+        ];
       });
+      if (tsRows.length) {
+        appendRowsBatch(sheet, tsRows);
+        SpreadsheetApp.flush();
+      }
       response.status = 'success';
-      response.message = 'บันทึกสำเร็จ';
+      response.message = 'บันทึกสำเร็จ ' + tsRows.length + ' รายการ';
     } else if (action === 'getHistoryData') {
       var destSs = SpreadsheetApp.openById('1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U');
       var sheet = destSs.getSheetByName('ลงตารางงาน');
@@ -1105,6 +1128,7 @@ function doPost(e) {
 
       var supNow = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
       var supTotal = 0, supNew = 0, supUpd = 0;
+      var supNewRows = []; // เก็บแถวใหม่ไว้เขียนทีเดียวท้ายสุด แทน appendRow ทีละรายการ
       supItems.forEach(function (it) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
@@ -1125,11 +1149,15 @@ function doPost(e) {
           supSheet.getRange(rowN, 11).setValue(supNow);
           supUpd++;
         } else {
-          supSheet.appendRow([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow, '']);
+          supNewRows.push([supDate, supBranch, /^\d+$/.test(codeN) ? Number(codeN) : codeN, it.name || '', it.unit || '', q, unitPrice, amount, supRecorder, supNow, '']);
           supNew++;
         }
         supTotal += amount;
       });
+      if (supNewRows.length) {
+        appendRowsBatch(supSheet, supNewRows);
+        SpreadsheetApp.flush();
+      }
 
       response.status = 'success';
       response.message = 'บันทึกแล้ว ' + (supNew + supUpd) + ' รายการ (ใหม่ ' + supNew + ' / แก้ไข ' + supUpd + ') รวม ฿' + supTotal.toFixed(2);
@@ -1728,27 +1756,61 @@ function doPost(e) {
         return /^\d+$/.test(s) ? Number(s) : s;
       };
 
+      // รวบรวมทุกแถวไว้ในหน่วยความจำก่อน แล้วค่อยเขียนชีทครั้งเดียวต่อชีท
+      // เดิมวนเขียนทีละรายการ: นับสต๊อก 200 รายการ = appendRow 200 ครั้ง (ข้อมูลนับสตอค)
+      //   + setValue 400 ครั้ง (ยอดยกมา คอลัมน์ D และ E แยกกัน) + appendRow อีกไม่เกิน 200 ครั้ง (ข้อมูลเบิก)
+      //   รวม ~800 ครั้งต่อการกดบันทึกหนึ่งครั้ง และยิ่งชีทสะสมยาวขึ้นยิ่งช้าลงเรื่อยๆ
+      //   จนเกิน timeout ฝั่งเว็บ ผู้ใช้เห็นว่า "ส่งข้อมูลบันทึกไม่ไป" ทั้งที่ GAS ยังเขียนค้างอยู่
+      var countRows = [];
+      var requestRows = [];
+      var balNewRows = [];
+      // แถวยอดยกมาที่ต้องแก้ (คอลัมน์ D=ยอด, E=วันที่อัปเดต) เก็บไว้เขียนรวดเดียวท้ายสุด
+      var balUpdates = {}; // rowIndex -> [ยอดคงเหลือ, วันที่อัปเดต]
+      var balPendingNew = {}; // normId -> ตำแหน่งใน balNewRows (กันรหัสซ้ำในชุดเดียวกันถูก append สองแถว)
+
       items.forEach(function (item) {
         // Save remaining stock
         if (item.remaining !== null && item.remaining !== undefined && item.remaining !== '') {
-          countSheet.appendRow([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
+          countRows.push([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
 
           // Update balance sheet
           var normId = normalizeId(item.productId);
           if (balRowMap[normId]) {
-            var rowIndex = balRowMap[normId];
-            balanceSheet.getRange(rowIndex, 4).setValue(item.remaining);
-            balanceSheet.getRange(rowIndex, 5).setValue(formattedDate);
+            balUpdates[balRowMap[normId]] = [item.remaining, formattedDate];
+          } else if (balPendingNew[normId] !== undefined) {
+            // รหัสเดียวกันมาซ้ำในชุดนี้ — ทับค่าแถวใหม่ที่เตรียมไว้ ไม่สร้างแถวซ้ำ
+            balNewRows[balPendingNew[normId]][3] = item.remaining;
+            balNewRows[balPendingNew[normId]][4] = formattedDate;
           } else {
-            balanceSheet.appendRow(["'" + item.productId, item.name, branch, item.remaining, formattedDate]);
-            balRowMap[normId] = balanceSheet.getLastRow();
+            balPendingNew[normId] = balNewRows.length;
+            balNewRows.push(["'" + item.productId, item.name, branch, item.remaining, formattedDate]);
           }
         }
         // Save requested stock
         if (item.requested > 0) {
-          requestSheet.appendRow([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
+          requestRows.push([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
         }
       });
+
+      appendRowsBatch(countSheet, countRows);
+      appendRowsBatch(requestSheet, requestRows);
+
+      // แก้ยอดยกมาแถวเดิม: เขียนคอลัมน์ D:E ครั้งเดียว แทนการ setValue ทีละช่อง (เดิม 2 ครั้งต่อรายการ)
+      // จำกัดช่วงที่เขียนไว้แค่แถวแรกถึงแถวสุดท้ายที่มีการแก้จริง แถวนอกช่วงไม่ถูกแตะเลย
+      // แถวที่อยู่ในช่วงแต่ไม่ได้แก้ (เช่นของสาขาอื่น) เขียนค่าเดิมกลับลงไปเหมือนเดิม ค่าจึงไม่เปลี่ยน
+      var balUpdateRows = Object.keys(balUpdates).map(Number);
+      if (balUpdateRows.length) {
+        var balFirst = Math.min.apply(null, balUpdateRows);
+        var balLast = Math.max.apply(null, balUpdateRows);
+        var balDE = [];
+        for (var u = balFirst; u <= balLast; u++) {
+          var upd = balUpdates[u];
+          balDE.push(upd ? upd : [balValues[u - 1][3], balValues[u - 1][4]]);
+        }
+        balanceSheet.getRange(balFirst, 4, balDE.length, 2).setValues(balDE);
+      }
+      appendRowsBatch(balanceSheet, balNewRows);
+      SpreadsheetApp.flush();
 
       response.status = 'success';
       response.message = 'บันทึกข้อมูลเรียบร้อยแล้ว' + (reqNumber ? ' (เลขที่ใบเบิก: ' + reqNumber + ')' : '');
@@ -1916,10 +1978,10 @@ function doPost(e) {
         if (upd.p259 !== null) sheet.getRange(upd.row, 4, 1, 2).setValues([[upd.p259, upd.p359]]);
       });
 
-      // 2. Append new rows
-      rowsToAppend.forEach(function (app) {
-        sheet.appendRow([app.date, pBranch, app.percent, app.p259 !== null ? app.p259 : '', app.p359 !== null ? app.p359 : '']);
-      });
+      // 2. Append new rows — เขียนทีเดียว แทน appendRow ทีละวัน (บันทึกทั้งเดือนคือ 30 ครั้ง)
+      appendRowsBatch(sheet, rowsToAppend.map(function (app) {
+        return [app.date, pBranch, app.percent, app.p259 !== null ? app.p259 : '', app.p359 !== null ? app.p359 : ''];
+      }));
 
       // 3. Delete rows in descending order
       rowsToDelete.sort(function (a, b) { return b - a; });
