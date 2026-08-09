@@ -58,6 +58,20 @@ function clearCachedJson(cacheKey) {
   }
 }
 
+// เขียนหลายแถวต่อท้ายชีทด้วย setValues ครั้งเดียว แทน appendRow ทีละแถว
+// appendRow 1 ครั้ง = คุยกับ Google Sheets 1 รอบ ถ้าบันทึกทีละ 200-300 รายการจะกินเวลาหลายสิบวินาที
+// ข้อควรระวัง: setValues ไม่ขยายกริดให้เองเหมือน appendRow ต้องเพิ่มแถวก่อนถ้าพื้นที่ไม่พอ
+function appendRowsBulk(sheet, rows, numCols) {
+  if (!rows || !rows.length) return 0;
+  var startRow = sheet.getLastRow() + 1;
+  var needRows = startRow + rows.length - 1;
+  if (needRows > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), needRows - sheet.getMaxRows());
+  }
+  sheet.getRange(startRow, 1, rows.length, numCols).setValues(rows);
+  return rows.length;
+}
+
 function getStockItemsFromCache(reqBranch) {
   return getCachedJson('stockItems_' + reqBranch);
 }
@@ -1665,6 +1679,13 @@ function doPost(e) {
         balanceSheet.getRange("A1:E1").setFontWeight("bold");
       }
 
+      // ── ทำไมโค้ดตรงนี้ถึงต้องรวบเขียนทีเดียว ──
+      // เดิมเขียนชีทในลูปทีละรายการ: ข้อมูลนับสตอค appendRow 1 ครั้ง + ยอดยกมา setValue 2 ครั้ง
+      // (หรือ appendRow 1 ครั้งถ้าเป็นสินค้าใหม่) + ข้อมูลเบิก appendRow 1 ครั้ง = คุยกับ Sheets ได้ถึง
+      // 4 รอบต่อสินค้า 1 ตัว สาขาหนึ่งกดบันทึกทีละ 200-300 รายการ = เขียนชีทเกือบพันครั้งต่อการกดหนึ่งครั้ง
+      // ใช้เวลาเกิน 30 วิ ฝั่งเว็บตัดทิ้งก่อนแล้วขึ้น "เซิร์ฟเวอร์ตอบกลับช้าเกินไป (หมดเวลารอ)"
+      // ทั้งที่ GAS ยังเขียนต่อจนจบ — ผู้ใช้กดบันทึกซ้ำจึงได้ข้อมูลซ้ำและเลขที่ใบเบิกซ้อนกัน
+      // ตอนนี้เตรียมแถวทั้งหมดในหน่วยความจำก่อน แล้วเขียน setValues ก้อนเดียวต่อชีท (แบบเดียวกับ saveMonthEndClosing)
       var items = data.items || [];
       var branch = data.branch || '';
       var username = data.username || 'Unknown';
@@ -1679,7 +1700,15 @@ function doPost(e) {
         return String(id).replace(/^0+/, '').toLowerCase();
       };
 
+      // รหัสสินค้า: เก็บเป็นตัวเลขถ้าเป็นเลขล้วน (ให้ชนิดข้อมูลตรงกับแถวเดิม — ถ้าเก็บเป็นข้อความปนกัน
+      // gviz จะคืนค่า null ทำให้หน้ามูลค่าสต๊อกจับคู่รหัสไม่ได้) เลข 0 นำหน้าตัดได้ เพราะทุกจุด normalize อยู่แล้ว
+      var pidValue = function (pid) {
+        var s = String(pid == null ? '' : pid).trim();
+        return /^\d+$/.test(s) ? Number(s) : s;
+      };
+
       // Load current balances to update them
+      // (อ่านนอกล็อกได้ — แถวเดิมไม่ขยับตำแหน่ง คนอื่นทำได้แค่ต่อแถวใหม่ท้ายชีท)
       var balValues = balanceSheet.getDataRange().getValues();
       var balRowMap = {};
       var reqBranch = branch.toLowerCase();
@@ -1691,67 +1720,100 @@ function doPost(e) {
         }
       }
 
-      // Filter requested items to check if we need a requisition number
-      var reqItems = items.filter(function (i) { return i.requested > 0; });
-      var reqNumber = "";
-
-      if (reqItems.length > 0) {
-        var yy = Utilities.formatDate(dateNow, "Asia/Bangkok", "yy");
-        var mm = Utilities.formatDate(dateNow, "Asia/Bangkok", "MM");
-        var branchPrefix = branch.toString().substring(0, 3).toUpperCase();
-        var prefix = branchPrefix + yy + mm; // e.g. BKK2605
-
-        // Find next running number
-        var lastNum = 0;
-        if (requestSheet.getLastRow() > 1) {
-          var reqValues = requestSheet.getDataRange().getValues();
-          for (var r = reqValues.length - 1; r >= 1; r--) {
-            var exNo = reqValues[r][0]; // คอลัมน์ A: เลขที่ใบเบิก
-            if (exNo && exNo.toString().indexOf(prefix) === 0) {
-              var suffix = exNo.toString().replace(prefix, '');
-              var parsed = parseInt(suffix, 10);
-              if (!isNaN(parsed) && parsed > lastNum) {
-                lastNum = parsed;
-              }
-            }
-          }
-        }
-        lastNum += 1;
-        var runningStr = ("000" + lastNum).slice(-3);
-        reqNumber = prefix + runningStr;
-      }
-
-      // รหัสสินค้า: เก็บเป็นตัวเลขถ้าเป็นเลขล้วน (ให้ชนิดข้อมูลตรงกับแถวเดิม — ถ้าเก็บเป็นข้อความปนกัน
-      // gviz จะคืนค่า null ทำให้หน้ามูลค่าสต๊อกจับคู่รหัสไม่ได้) เลข 0 นำหน้าตัดได้ เพราะทุกจุด normalize อยู่แล้ว
-      var pidValue = function (pid) {
-        var s = String(pid == null ? '' : pid).trim();
-        return /^\d+$/.test(s) ? Number(s) : s;
-      };
+      // เตรียมแถวทั้งหมดก่อน ยังไม่เขียนลงชีท
+      var countRows = [];      // ชีท ข้อมูลนับสตอค
+      var requestRows = [];    // ชีท ข้อมูลเบิก (เลขที่ใบเบิกในคอลัมน์ A เติมทีหลังตอนจองเลขได้แล้ว)
+      var balUpdateMap = {};   // เลขแถวเดิมในชีทยอดยกมา -> ยอดคงเหลือใหม่
+      var newBalRows = [];     // แถวยอดยกมาของสินค้าที่สาขานี้ยังไม่เคยมี
+      var newBalIndex = {};    // รหัสสินค้า -> ตำแหน่งใน newBalRows (กันสินค้าซ้ำในใบเดียวกันกลายเป็นสองแถว)
 
       items.forEach(function (item) {
         // Save remaining stock
         if (item.remaining !== null && item.remaining !== undefined && item.remaining !== '') {
-          countSheet.appendRow([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
+          countRows.push([formattedDate, counterName, branch, pidValue(item.productId), item.name, item.unit, item.remaining]);
 
           // Update balance sheet
           var normId = normalizeId(item.productId);
           if (balRowMap[normId]) {
-            var rowIndex = balRowMap[normId];
-            balanceSheet.getRange(rowIndex, 4).setValue(item.remaining);
-            balanceSheet.getRange(rowIndex, 5).setValue(formattedDate);
+            balUpdateMap[balRowMap[normId]] = item.remaining;
+          } else if (newBalIndex[normId] !== undefined) {
+            newBalRows[newBalIndex[normId]][3] = item.remaining;
           } else {
-            balanceSheet.appendRow(["'" + item.productId, item.name, branch, item.remaining, formattedDate]);
-            balRowMap[normId] = balanceSheet.getLastRow();
+            newBalIndex[normId] = newBalRows.length;
+            newBalRows.push(["'" + item.productId, item.name, branch, item.remaining, formattedDate]);
           }
         }
         // Save requested stock
         if (item.requested > 0) {
-          requestSheet.appendRow([reqNumber, formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
+          requestRows.push(['', formattedDate, "'" + item.productId, item.name, item.unit, item.requested, requestDate, requesterName, branch]);
         }
       });
 
+      // ล็อกช่วง "จองเลขที่ใบเบิก + เขียนต่อท้ายชีท" — appendRow ต่อท้ายให้เองแบบชนกันไม่ได้
+      // แต่ setValues ต้องคำนวณแถวสุดท้ายเอง ถ้าสองสาขากดบันทึกพร้อมกันจะเขียนทับกันเงียบๆ
+      var stockLock = LockService.getScriptLock();
+      if (!stockLock.tryLock(30000)) {
+        throw new Error('ระบบกำลังบันทึกข้อมูลของสาขาอื่นอยู่ กรุณากดบันทึกอีกครั้งในอีกสักครู่ (ข้อมูลที่กรอกไว้ยังอยู่ครบ)');
+      }
+
+      var reqNumber = "";
+      try {
+        if (requestRows.length > 0) {
+          var yy = Utilities.formatDate(dateNow, "Asia/Bangkok", "yy");
+          var mm = Utilities.formatDate(dateNow, "Asia/Bangkok", "MM");
+          var branchPrefix = branch.toString().substring(0, 3).toUpperCase();
+          var prefix = branchPrefix + yy + mm; // e.g. BKK2605
+
+          // Find next running number
+          // อ่านเฉพาะคอลัมน์ A (เลขที่ใบเบิก) — เดิมอ่านทั้ง 9 คอลัมน์ของชีทที่แถวสะสมขึ้นทุกวันไม่มีวันหมด
+          var lastNum = 0;
+          var reqLastRow = requestSheet.getLastRow();
+          if (reqLastRow > 1) {
+            var reqNos = requestSheet.getRange(2, 1, reqLastRow - 1, 1).getValues();
+            for (var r = reqNos.length - 1; r >= 0; r--) {
+              var exNo = reqNos[r][0];
+              if (exNo && exNo.toString().indexOf(prefix) === 0) {
+                var suffix = exNo.toString().replace(prefix, '');
+                var parsed = parseInt(suffix, 10);
+                if (!isNaN(parsed) && parsed > lastNum) {
+                  lastNum = parsed;
+                }
+              }
+            }
+          }
+          lastNum += 1;
+          var runningStr = ("000" + lastNum).slice(-3);
+          reqNumber = prefix + runningStr;
+          for (var q = 0; q < requestRows.length; q++) requestRows[q][0] = reqNumber;
+        }
+
+        appendRowsBulk(countSheet, countRows, 7);
+        appendRowsBulk(requestSheet, requestRows, 9);
+        appendRowsBulk(balanceSheet, newBalRows, 5);
+
+        // อัปเดตยอดยกมาแถวเดิม (คอลัมน์ D=ยอดยกมา, E=วันที่อัปเดต)
+        // แถวของสาขาเดียวกันมักอยู่ติดกันเป็นช่วงๆ จึงรวบเขียนทีละช่วงแทนที่จะยิงทีละแถว
+        var balRowsSorted = Object.keys(balUpdateMap).map(Number).sort(function (x, y) { return x - y; });
+        var u = 0;
+        while (u < balRowsSorted.length) {
+          var runStart = u;
+          while (u + 1 < balRowsSorted.length && balRowsSorted[u + 1] === balRowsSorted[u] + 1) u++;
+          var blockVals = [];
+          for (var k = runStart; k <= u; k++) blockVals.push([balUpdateMap[balRowsSorted[k]], formattedDate]);
+          balanceSheet.getRange(balRowsSorted[runStart], 4, blockVals.length, 2).setValues(blockVals);
+          u++;
+        }
+
+        SpreadsheetApp.flush(); // เขียนให้จบก่อนปล่อยล็อก ไม่งั้นคนถัดไปอ่านแถวสุดท้ายได้ค่าเก่า
+      } finally {
+        stockLock.releaseLock();
+      }
+
+      clearCachedJson('stockItems_' + reqBranch); // เพิ่งบันทึกใหม่ ต้องให้หน้านับสต๊อกดึงของสดรอบหน้า ไม่ใช่ค่าเก่าในแคช
+
       response.status = 'success';
       response.message = 'บันทึกข้อมูลเรียบร้อยแล้ว' + (reqNumber ? ' (เลขที่ใบเบิก: ' + reqNumber + ')' : '');
+      response.data = { countRows: countRows.length, requestRows: requestRows.length, orderNo: reqNumber };
     } else if (action === 'updateStorageCategory') {
       var stockSs = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ');
       var categorySheet = stockSs.getSheetByName('หมวดจัดเก็บสาขา');

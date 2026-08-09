@@ -1391,6 +1391,8 @@ export default function StockList() {
     setIsSaving(true);
     try {
       const payloadItems = itemsToSave.map(item => ({ ...item, requested: item.requested ? Number(item.requested) : 0 }));
+      // บันทึกทีเดียว 200-300 รายการ + อาจต้องรอคิวสาขาอื่นที่กดพร้อมกัน (ฝั่ง GAS ล็อกตอนเขียนชีท)
+      // ให้เวลามากกว่าค่ามาตรฐาน 30 วิ เพราะถ้าตัดกลางคันฝั่ง GAS ไม่ได้หยุดตาม แล้วผู้ใช้จะกดซ้ำจนข้อมูลซ้ำ
       const res = await apiCall('saveStock', {
         branch: effectiveBranch || 'Unknown',
         username: user?.username || 'Unknown',
@@ -1398,7 +1400,7 @@ export default function StockList() {
         requestDate,
         requesterName,
         items: payloadItems
-      });
+      }, { timeoutMs: 90000, deadlineMs: 95000 });
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
 
@@ -1438,7 +1440,16 @@ export default function StockList() {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
       }
     } catch (err) {
-      toast.error(errMessage(err));
+      // หมดเวลารอ/เน็ตหลุด = "ไม่รู้ผล" ไม่ใช่ "ไม่ได้บันทึก" — การตัดฝั่งเบราว์เซอร์ไม่ได้หยุดงานที่ Google Apps Script
+      // ถ้าบอกแค่ "ผิดพลาด" ผู้ใช้จะกดบันทึกซ้ำทันที แล้วได้ทั้งยอดนับซ้ำและใบเบิกซ้อนอีกใบ
+      if (err?.kind === 'network') {
+        toast.error(
+          errMessage(err) + '\n\n⚠️ ข้อมูลอาจถูกบันทึกไปแล้ว กรุณากดปุ่ม "ใบเบิกค้าง" หรือรีเฟรชหน้าเพื่อตรวจสอบก่อนบันทึกซ้ำ',
+          { duration: 12000, style: { whiteSpace: 'pre-line' } },
+        );
+      } else {
+        toast.error(errMessage(err));
+      }
     } finally {
       setIsSaving(false);
     }
