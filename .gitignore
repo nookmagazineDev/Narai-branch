@@ -16,6 +16,9 @@ dist-ssr
 .env
 office-server/.env
 
+# ตัวรันซิงก์รายการสินค้า — install-item-sync.ps1 สร้างให้ มีรหัสผ่านฐานข้อมูลอยู่ข้างใน
+db/sync/run-item-sync.cmd
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,0 +1,16 @@
+{
+  "name": "narai-item-sync",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ซิงก์รายการสินค้าจาก Google Sheets (ไฟล์ BOM) เข้า SQL Server ทางเดียว",
+  "scripts": {
+    "sync": "node sync-items.mjs"
+  },
+  "dependencies": {
+    "mssql": "^11.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

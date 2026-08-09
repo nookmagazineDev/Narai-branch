@@ -198,9 +198,75 @@ SELECT branch AS สาขา, COUNT(*) AS แถว,
 | `api/stockcount.js?avgperhead=1` | ชีทค่าเฉลี่ยต่อหัว ผ่าน gviz | `item_avg_per_head` |
 | `saveAvgPerHead` (apps-script) | **เขียน**ลงชีทค่าเฉลี่ยต่อหัว | MERGE เข้า `item_avg_per_head` |
 
-> ใครเป็นคนดูแลชีท `item`? ถ้าทีมอื่นยังแก้ผ่าน Google Sheets อยู่ ต้องมีตัว sync
-> จากชีทเข้า SQL Server เป็นรอบๆ (เช่นทุกชั่วโมง) ไม่งั้นสินค้าใหม่จะไม่ขึ้นในเว็บ
-> — ข้อนี้ต้องเคาะกับทีมก่อนตัดชีทออกจริง
+## ตัวซิงก์รายการสินค้า (`sync/`)
+
+**ชีท `item` ยังเป็นต้นทางจริง ห้ามตัดทิ้ง** — ทีม QC/RD แก้รายการสินค้าผ่านเว็บ
+`naraipizzer.vercel.app` (repo `nookmagazineDev/naraipizzeria`) ซึ่งเขียนลงชีทโดยตรง
+ผ่าน `qcrd-apps-script.gs` (คำสั่ง `addItem` / `saveItem` / `deleteItem` / `updateItemUnits`)
+
+ดังนั้นตาราง `item`, `item_branch`, `item_avg_per_head` ใน SQL Server คือ **"สำเนา" ของชีท**
+มีตัวซิงก์ดึงจากชีทมาทับเป็นรอบๆ
+
+```
+Google Sheets (ชีท item)  --[sync ทุก 30 นาที]-->  SQL Server
+        ^                                              |
+        | แก้จาก naraipizzer.vercel.app                | อ่านอย่างเดียว
+        |                                              v
+   ทีม QC/RD                                  หน้านับสต๊อกและขอเบิก
+```
+
+> ⚠️ **ทางเดียวเท่านั้น** ห้ามแก้ตาราง 3 ตัวนี้ในฐานข้อมูลตรงๆ รอบซิงก์ถัดไปจะทับหายทันที
+>
+> และ **อย่าเปลี่ยน `saveAvgPerHead` ให้เขียนลง SQL Server** ตราบใดที่ตัวซิงก์ยังทำงานอยู่
+> เพราะซิงก์จะเอาค่าจากชีทมาทับค่าที่เพิ่งแก้ ถ้าจะย้ายต้องหยุดซิงก์ตาราง `item_avg_per_head` ก่อน
+
+### รันที่ไหน
+
+**เครื่อง SQL Server เอง** (203.154.185.48 / NARAI-PIZZARIA) ผ่าน Windows Scheduled Task
+เพราะเครื่องเปิดตลอด ต่อฐานข้อมูลได้ในเครื่อง และต้องการแค่ออกเน็ตไป Google
+
+ไม่ทำเป็น Vercel Cron เพราะ `api/` มี 12 ไฟล์ = เพดาน Serverless Function พอดีอยู่แล้ว
+และ Vercel Hobby ตั้ง cron ได้วันละครั้ง ซึ่งช้าไปสำหรับสินค้าที่เพิ่มระหว่างวัน
+
+### ติดตั้ง
+
+ก๊อปโฟลเดอร์ `db\sync` ไปวางบนเครื่องนั้น แล้ว (PowerShell แบบ **Run as administrator**):
+
+```powershell
+cd <โฟลเดอร์>\db\sync
+powershell -ExecutionPolicy Bypass -File .\install-item-sync.ps1 -SqlUser narai_app -SqlPassword '<รหัส>'
+```
+
+สคริปต์จะ: ตรวจ Node.js → `npm install` → สร้างไฟล์ตัวรันพร้อมรหัสผ่าน (จำกัดสิทธิ์ให้
+เฉพาะ SYSTEM/Administrators อ่านได้ และ `.gitignore` ไว้แล้ว) → **ลองซิงก์จริงหนึ่งรอบ**
+→ ตั้ง Scheduled Task ทุก 30 นาที (รันในชื่อ SYSTEM ทำงานแม้ไม่มีคนล็อกอิน)
+
+ถ้าลองรอบแรกไม่ผ่าน จะไม่ตั้ง task ให้ และพิมพ์ log กับสาเหตุที่เจอบ่อยออกมา
+
+```powershell
+# อยากลองเฉยๆ ยังไม่ตั้ง task
+powershell -ExecutionPolicy Bypass -File .\install-item-sync.ps1 -SqlUser narai_app -SqlPassword '<รหัส>' -TestOnly
+
+# เปลี่ยนความถี่
+... -EveryMinutes 15
+```
+
+| คำสั่ง | ทำอะไร |
+|---|---|
+| `schtasks /run /tn "NaraiItemSync"` | สั่งซิงก์เดี๋ยวนี้ |
+| `schtasks /query /tn "NaraiItemSync" /v /fo list` | ดูสถานะ/รอบล่าสุด |
+| `schtasks /delete /tn "NaraiItemSync" /f` | ถอนออก |
+
+log อยู่ที่ `db\sync\logs\item-sync.log`
+
+### สิ่งที่ตัวซิงก์ทำ
+
+- **แตกคอลัมน์ J** `"CRM,HRS,XHH"` เป็นแถวๆ ลง `item_branch`
+- **แปลงรหัสสาขา** `sjp` / `zip` → `zjp` ทุกรอบ (ไม่ใช่แค่ตอน import ครั้งแรก)
+- **สินค้าที่หายจากชีท ไม่ลบทิ้ง แต่ตั้ง `is_active = 0`** เพราะยอดนับ/ใบเบิกเก่ายังอ้างรหัสนั้นอยู่
+- **ทำในทรานแซกชันเดียว** ล้มกลางคัน = ไม่เขียนอะไรเลย ข้อมูลเดิมอยู่ครบ
+- **กันเคสชีทตอบว่าง** ถ้าอ่านได้ 0 แถวจะยกเลิกทันทีโดยไม่แตะฐานข้อมูล
+  (กัน Google ตอบหน้า error แล้วเราไปล้างข้อมูลดีๆ ทิ้ง)
 
 > ⚠️ ตอนเพิ่มไฟล์ใน `api/` ระวังลิมิต Vercel — ตอนนี้มี 12 ไฟล์ = 12 Serverless Functions
 > ซึ่งเป็นเพดานพอดี (ดูคอมเมนต์ที่ `lib/mysql.js:2`) อาจต้องยุบ endpoint รวมกันหรืออัปแพลน
