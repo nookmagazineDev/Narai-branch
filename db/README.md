@@ -30,7 +30,12 @@ SQL Server Express จำกัดฐานละ 10 GB — ข้อมูล�
 
 ### 1. สร้างโครงฐานข้อมูล
 
-เปิด `001_stock_schema.sql` ใน SQL Server Management Studio แล้วกด **Execute (F5)**
+เปิดใน SQL Server Management Studio แล้วกด **Execute (F5)** **ตามลำดับ**:
+
+1. `001_stock_schema.sql` — ข้อมูลที่สาขากรอก (นับสต๊อก, ขอเบิก, ยอดยกมา, หมวดจัดเก็บ)
+2. `002_item_schema.sql` — รายการสินค้าจากไฟล์ BOM (item, สาขาที่ใช้, ค่าเฉลี่ยต่อหัว)
+
+ต้องรัน 001 ก่อนเสมอ เพราะ 002 ไม่ได้สร้าง database ให้
 รันซ้ำได้ปลอดภัย ทุกคำสั่งเช็คก่อนว่ามีของเดิมอยู่แล้วหรือยัง
 
 จากนั้นเลื่อนไปท้ายไฟล์ **แก้รหัสผ่านของ `narai_app` แล้วเอาคอมเมนต์ `/* */` ออก** เพื่อสร้าง
@@ -81,12 +86,64 @@ SELECT LOWER(LTRIM(RTRIM(สาขา))),
 
 ชีทอื่นใช้หลักเดียวกัน ต่างแค่ลำดับคอลัมน์:
 
-| ชีท | ตาราง | คอลัมน์ตามลำดับ |
-|---|---|---|
-| ข้อมูลนับสตอค | `stock_count` | วันที่, ผู้นับ, สาขา, รหัส, ชื่อ, หน่วย, คงเหลือ |
-| ข้อมูลเบิก | `stock_request` | เลขที่ใบเบิก, วันที่บันทึก, รหัส, ชื่อ, หน่วย, จำนวน, วันที่เบิก, ผู้เบิก, สาขา |
-| ยอดยกมา | `stock_balance` | รหัส, ชื่อ, สาขา, ยอดยกมา, วันที่อัปเดต |
-| หมวดจัดเก็บสาขา | `stock_storage_category` | รหัส, ชื่อ, สาขา, หมวดจัดเก็บ |
+| ไฟล์ | ชีท | ตาราง | คอลัมน์ตามลำดับ |
+|---|---|---|---|
+| สต๊อก | ข้อมูลนับสตอค | `stock_count` | วันที่, ผู้นับ, สาขา, รหัส, ชื่อ, หน่วย, คงเหลือ |
+| สต๊อก | ข้อมูลเบิก | `stock_request` | เลขที่ใบเบิก, วันที่บันทึก, รหัส, ชื่อ, หน่วย, จำนวน, วันที่เบิก, ผู้เบิก, สาขา |
+| สต๊อก | ยอดยกมา | `stock_balance` | รหัส, ชื่อ, สาขา, ยอดยกมา, วันที่อัปเดต |
+| สต๊อก | หมวดจัดเก็บสาขา | `stock_storage_category` | รหัส, ชื่อ, สาขา, หมวดจัดเก็บ |
+| BOM | item | `item` + `item_branch` | A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ J=สาขาที่ใช้ K=itemid L=หน่วยเบิก N=หมวดสโตร์ O=Plan |
+| BOM | ค่าเฉลี่ยยอดใช้ต่อหัว | `item_avg_per_head` | สาขา, รหัส, ชื่อ, ค่าเฉลี่ยต่อหัว |
+
+### 2.1 ชีท `item` — ต้องแตกคอลัมน์ J ออกเป็นแถว
+
+คอลัมน์ J เก็บสาขาที่ใช้รวมกันเป็นข้อความเดียว `"CRM,HRS,XHH"` โค้ดเดิมจึงต้องอ่าน
+ทั้งชีทแล้ว `split(',')` ทีละแถวทุกครั้งที่เปิดหน้า ตอนย้ายต้องแตกเป็น 1 แถว = 1 คู่ (สาขา, สินค้า)
+ลง `item_branch` ไม่งั้นจะเสียประโยชน์ของ index ไปเปล่าๆ
+
+```sql
+-- ตัวสินค้าเอง
+INSERT INTO dbo.item (code_norm, product_code, name, price, unit, status, is_active,
+                      item_id, request_unit, store_cat, plan_only)
+SELECT LOWER(SUBSTRING(LTRIM(RTRIM(A)), PATINDEX('%[^0]%', LTRIM(RTRIM(A)) + 'x'), 32)),
+       LTRIM(RTRIM(A)), B,
+       TRY_CONVERT(DECIMAL(14,4), NULLIF(LTRIM(RTRIM(C)), '')), D, E,
+       CASE WHEN LTRIM(RTRIM(E)) = N'ปิดการใช้งาน' THEN 0 ELSE 1 END,
+       TRY_CONVERT(INT, NULLIF(LTRIM(RTRIM(K)), '')),
+       TRY_CONVERT(DECIMAL(14,3), NULLIF(LTRIM(RTRIM(L)), '')),
+       N,
+       CASE WHEN LOWER(LTRIM(RTRIM(O))) IN ('true', 'ture') THEN 1 ELSE 0 END
+  FROM dbo.staging_item
+ WHERE LTRIM(RTRIM(A)) <> '' OR LTRIM(RTRIM(B)) <> '';
+
+-- แตกคอลัมน์ J: "CRM,HRS,XHH" -> 3 แถว (STRING_SPLIT มีใน SQL Server 2016 ขึ้นไป)
+INSERT INTO dbo.item_branch (branch, code_norm)
+SELECT DISTINCT
+       LOWER(LTRIM(RTRIM(s.value))),
+       LOWER(SUBSTRING(LTRIM(RTRIM(t.A)), PATINDEX('%[^0]%', LTRIM(RTRIM(t.A)) + 'x'), 32))
+  FROM dbo.staging_item AS t
+ CROSS APPLY STRING_SPLIT(REPLACE(t.J, ' ', ''), ',') AS s
+ WHERE LTRIM(RTRIM(s.value)) <> '';
+```
+
+> `plan_only` เช็คทั้ง `true` และ `ture` เพราะในชีทมีพิมพ์ผิดปนอยู่จริง
+> (โค้ดเดิมก็รับทั้งสองแบบ — ดู `apps-script.js` ฟิลด์ `planOnly`)
+
+### 2.2 ⚠️ รหัสสาขาในชีท BOM ไม่ตรงกับที่เว็บใช้
+
+ชีท BOM เก็บบางสาขาเป็น `SJP` แต่เว็บส่งมาเป็น `zjp` โค้ดเดิมเลยต้องมีตารางแปลง
+alias กระจายอยู่หลายที่ (`itemBranchAlias` ใน `getStockItems`, `aphAliases` ใน `saveAvgPerHead`)
+
+**ตอนย้ายให้แก้ที่ข้อมูลเลย อย่าขนความยุ่งนี้ตามมา** — แปลงให้เหลือรหัสเดียวคือ `zjp`
+(รหัสที่เว็บใช้ ซึ่งจะเป็นค่าที่ `saveStock` เขียนลงตารางอื่นๆ ทั้งหมด) แล้วโค้ดใหม่จะไม่ต้องมี alias เลย
+
+```sql
+UPDATE dbo.item_branch       SET branch = N'zjp' WHERE branch IN (N'sjp', N'zip');
+UPDATE dbo.item_avg_per_head SET branch = N'zjp' WHERE branch IN (N'sjp', N'zip');
+```
+
+(รันก่อนสร้าง PK ซ้ำจะติด — ถ้าเจอ error เรื่องคีย์ซ้ำ แปลว่ามีทั้ง `sjp` และ `zjp`
+ของสินค้าตัวเดียวกันอยู่แล้ว ให้ลบตัวซ้ำออกก่อนแล้วค่อยแปลง)
 
 ### 3. ตั้งตัวนับเลขที่ใบเบิกให้ต่อจากของเดิม
 
@@ -124,11 +181,26 @@ SELECT branch AS สาขา, COUNT(*) AS แถว,
 จากนั้นทำทีละขั้น:
 
 1. **อ่านก่อน** — เพิ่ม `api/stock_items.js` ให้หน้านับสต๊อกอ่านจาก SQL Server
+   (ใช้วิว `v_branch_item` join กับ `stock_count` / `stock_request` / `stock_balance`)
    ส่วน `saveStock` ยังเขียนลงชีทเหมือนเดิม → ได้ความเร็วทันที ถอยกลับได้ทุกเมื่อ
 2. **เขียนสองที่** — `saveStock` เขียนทั้ง SQL Server และชีท
    เพราะ `api/stockcount.js` ยังอ่านชีท `ข้อมูลนับสตอค` ผ่าน gviz อยู่ (หน้ามูลค่าสต๊อก/ปิดยอด)
    ถ้าเลิกเขียนลงชีทเลย **หน้านั้นพังทันที**
 3. **ตัดชีทออก** — เมื่อย้าย `api/stockcount.js` มาอ่าน SQL Server แล้ว
+
+จุดที่ต้องแก้ให้ครบตอนย้ายฝั่ง item (ถ้าลืมข้อไหน จะเหลือของค้างครึ่งๆ):
+
+| ที่ต้องแก้ | ตอนนี้อ่านอะไร | ย้ายไปใช้ |
+|---|---|---|
+| `getStockItems` (apps-script) | ชีท item A-O | `v_branch_item` |
+| `getClosingItems` (apps-script) | ชีท item A-J | `v_branch_item` |
+| `api/insert_order.js?units=1` | ชีท item K, L ผ่าน gviz | `item.item_id`, `item.request_unit` |
+| `api/stockcount.js?avgperhead=1` | ชีทค่าเฉลี่ยต่อหัว ผ่าน gviz | `item_avg_per_head` |
+| `saveAvgPerHead` (apps-script) | **เขียน**ลงชีทค่าเฉลี่ยต่อหัว | MERGE เข้า `item_avg_per_head` |
+
+> ใครเป็นคนดูแลชีท `item`? ถ้าทีมอื่นยังแก้ผ่าน Google Sheets อยู่ ต้องมีตัว sync
+> จากชีทเข้า SQL Server เป็นรอบๆ (เช่นทุกชั่วโมง) ไม่งั้นสินค้าใหม่จะไม่ขึ้นในเว็บ
+> — ข้อนี้ต้องเคาะกับทีมก่อนตัดชีทออกจริง
 
 > ⚠️ ตอนเพิ่มไฟล์ใน `api/` ระวังลิมิต Vercel — ตอนนี้มี 12 ไฟล์ = 12 Serverless Functions
 > ซึ่งเป็นเพดานพอดี (ดูคอมเมนต์ที่ `lib/mysql.js:2`) อาจต้องยุบ endpoint รวมกันหรืออัปแพลน
