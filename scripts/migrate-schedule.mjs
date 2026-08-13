@@ -2,7 +2,9 @@
 /**
  * ย้ายข้อมูลตารางงานจาก Google Sheets เข้า MS SQL Server (narai_hr)
  *
- * ย้ายให้ 4 อย่าง: สาขา+เป้าขาย, พนักงาน, ยอดขายรายวัน, ตารางงานย้อนหลัง
+ * ย้ายให้ 2 อย่าง: พนักงาน (พร้อมสร้างรายชื่อสาขาให้อัตโนมัติ) และตารางงานย้อนหลัง
+ * ชีทเป้าขาย (Details) กับยอดขายรายวัน เลิกใช้แล้วจึงไม่ย้าย
+ * -> เป้าขาย/ค่าแรงสูงสุด/ยอดขายของวัน จะเป็น 0 จนกว่าจะกรอกลง dbo.hr_branch เอง
  *
  * วิธีใช้ (รันจากเครื่องที่ต่อฐานข้อมูลได้):
  *   1) สร้างตารางก่อน:  sqlcmd -S 203.154.185.48 -U <user> -P <pass> -i docs/schema-hr.sql
@@ -14,12 +16,14 @@
  *
  * ตัวเลือก
  *   --months=6        ย้ายตารางงานย้อนหลังกี่เดือน (ค่าเริ่มต้น 6)
- *   --only=timesheet  ย้ายเฉพาะบางส่วน: branches | employees | sales | timesheet (คั่นด้วย ,)
+ *   --only=timesheet  ย้ายเฉพาะบางส่วน: employees | timesheet (คั่นด้วย ,)
  *   --dry-run         อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *
  * ข้อควรรู้
- * - อ่านชีทผ่าน gviz แบบไม่ต้องล็อกอิน ชีททั้ง 3 ไฟล์จึงต้องตั้งลิงก์เป็น
+ * - อ่านชีทผ่าน gviz แบบไม่ต้องล็อกอิน ชีททั้ง 2 ไฟล์จึงต้องตั้งลิงก์เป็น
  *   "ผู้ที่มีลิงก์ • ผู้อ่าน" ก่อน ไม่งั้นจะได้ HTML หน้า login แทนข้อมูล (สคริปต์จะแจ้งให้)
+ * - ชีทพนักงานจับคอลัมน์จาก "ชื่อหัวตาราง" ไม่ใช่ตำแหน่ง (ไฟล์เปลี่ยนมาแล้วครั้งหนึ่ง)
+ *   dry-run จะพิมพ์ให้ดูว่าจับคอลัมน์ไหนได้บ้าง ตรวจให้ตรงก่อนย้ายจริงเสมอ
  * - ชีทตารางงานเป็น log ต่อท้าย วันเดียวกันของคนเดียวกันมีได้หลายแถว
  *   สคริปต์จึงหยิบ "แถวล่าสุด" ตาม Timestamp เหมือนที่ Apps Script ทำตอนอ่าน
  *   และแถวที่หมายเหตุเป็น 'ล้างข้อมูล' = ถือว่าถูกลบ ไม่ย้ายเข้า SQL
@@ -29,10 +33,11 @@
 import process from 'node:process';
 import { sql, getPool, withTransaction, describeDbError } from '../lib/mssql.js';
 
-/* ---- ไอดีชีทต้นทาง (ยกมาจาก Apps Script เดิม indexลงตารางงาน.txt) ---- */
-const SOURCE_SPREADSHEET_ID = '1CLyJb_6QxWTNV0NOmJklMzrLxmqn6AlWABRvzt4bFng'; // พนักงาน (ชีทแรก)
+/* ---- ไอดีชีทต้นทาง ----
+   ชีทพนักงานย้ายไฟล์มาแล้ว ไม่ใช่ไฟล์เดียวกับที่ Apps Script เดิมชี้ไว้
+   ส่วนชีท Details (เป้าขาย) และ "ยอดขายสาขา" เลิกใช้แล้ว จึงไม่ย้าย */
+const SOURCE_SPREADSHEET_ID = '1Abot2hKLUO6_z8NRW6c9A0m0ggra3ZE7Yq10kcUPr7Y'; // พนักงาน (ชีทแรก)
 const DESTINATION_SPREADSHEET_ID = '1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U'; // ลงตารางงาน
-const SALES_DATA_SPREADSHEET_ID = '1kxVqX_hp5B0YTNSPj7mhyFl1OLbnhN-dIWm9ywzHA60'; // Details + ยอดขายสาขา
 const LOG_SHEET_NAME = 'ลงตารางงาน';
 
 const args = process.argv.slice(2);
@@ -62,9 +67,16 @@ const cutoff = (() => {
 
 /* ------------------------------ อ่านชีท ------------------------------ */
 
-/** ดึงชีทหนึ่งแผ่นผ่าน gviz แล้วคืนเป็น array ของ array (แถว x คอลัมน์) */
-async function fetchSheetRows(spreadsheetId, sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json${
+/**
+ * ดึงชีทหนึ่งแผ่นผ่าน gviz
+ * คืน { headers, rows } — headers คือชื่อหัวคอลัมน์, rows คือข้อมูลล้วน (ไม่มีแถวหัว)
+ *
+ * ใส่ headers=1 บอก gviz ตรงๆ ว่าแถวแรกเป็นหัวตาราง ถ้าไม่บอก gviz จะเดาเอง
+ * บางชีทเดาว่าไม่มีหัว -> แถวหัวปนมากับข้อมูล บางชีทเดาว่ามี -> ถ้าเราตัดแถวแรกทิ้งอีก
+ * จะหายไปหนึ่งคน โดยไม่มีอะไรฟ้อง
+ */
+async function fetchSheet(spreadsheetId, sheetName) {
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&headers=1${
     sheetName ? `&sheet=${encodeURIComponent(sheetName)}` : ''
   }`;
   const res = await fetch(url, { redirect: 'follow' });
@@ -79,7 +91,8 @@ async function fetchSheetRows(spreadsheetId, sheetName) {
   }
   const json = JSON.parse(text.slice(start, end + 1));
   const cols = json.table.cols || [];
-  return (json.table.rows || []).map((row) =>
+  const headers = cols.map((c) => str(c.label));
+  const rows = (json.table.rows || []).map((row) =>
     cols.map((_, i) => {
       const cell = row.c && row.c[i];
       if (!cell) return '';
@@ -92,6 +105,44 @@ async function fetchSheetRows(spreadsheetId, sheetName) {
       return cell.v;
     })
   );
+  return { headers, rows };
+}
+
+/** ชื่อคอลัมน์แบบ A, B, ... Z, AA ไว้แสดงตอนรายงานว่าจับคอลัมน์ไหนได้ */
+function colName(i) {
+  let s = '';
+  for (let n = i; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s;
+  return s;
+}
+
+/**
+ * จับคอลัมน์จาก "ชื่อหัวตาราง" แทนการนับตำแหน่งตายตัว
+ * ชีทพนักงานถูกเปลี่ยนไฟล์มาแล้วครั้งหนึ่ง การนับตำแหน่งจึงเชื่อไม่ได้อีก
+ * ถ้าหาหัวคอลัมน์ไม่เจอ ค่อยถอยไปใช้ตำแหน่งเดิมของ Apps Script (fallback)
+ */
+function mapColumns(headers, defs) {
+  const used = new Set();
+  const map = {};
+  const report = [];
+  for (const def of defs) {
+    let found = -1;
+    for (let i = 0; i < headers.length; i++) {
+      if (used.has(i) || !headers[i]) continue;
+      if (def.match.test(headers[i]) && !(def.avoid && def.avoid.test(headers[i]))) {
+        found = i;
+        break;
+      }
+    }
+    if (found >= 0) {
+      used.add(found);
+      map[def.key] = found;
+      report.push(`  ${def.key.padEnd(11)} <- ${colName(found)} "${headers[found]}"`);
+    } else {
+      map[def.key] = def.fallback;
+      report.push(`  ${def.key.padEnd(11)} <- ${colName(def.fallback)} (ไม่พบหัวคอลัมน์ ใช้ตำแหน่งเดิม)`);
+    }
+  }
+  return { map, report };
 }
 
 /** ค่าที่อาจเป็น 'YYYY-MM-DD', Date หรือข้อความไทย -> 'YYYY-MM-DD' (คืน null ถ้าอ่านไม่ออก) */
@@ -156,59 +207,42 @@ async function runBatch(label, rows, buildStatement) {
 
 /* --------------------------- ส่วนที่ย้ายแต่ละชุด --------------------------- */
 
-// ชีท Details: A=สาขา, B=ยอดขาย, C=เป้าต่อวัน, D=เป้าต่อเดือน, F=ค่าแรงสูงสุด
-async function migrateBranches() {
-  console.log('\n[1/4] สาขา + เป้าขาย (ชีท Details)');
-  const rows = await fetchSheetRows(SALES_DATA_SPREADSHEET_ID, 'Details');
-  const seen = new Set();
-  const data = [];
-  for (const r of rows.slice(1)) {
-    const branch = str(r[0]);
-    if (!branch || seen.has(branch)) continue;
-    seen.add(branch);
-    data.push({
-      branch,
-      dailyTarget: num(r[2]),
-      monthlyTarget: num(r[3]),
-      maxWage: num(r[5]),
-    });
-  }
-  await runBatch('สาขา', data, (row) => ({
-    text: `MERGE dbo.hr_branch WITH (HOLDLOCK) AS t
-             USING (SELECT @branch AS branch) AS s ON t.branch = s.branch
-           WHEN MATCHED THEN UPDATE SET
-             daily_target = @dailyTarget, monthly_target = @monthlyTarget,
-             max_wage = @maxWage, updated_at = SYSDATETIME()
-           WHEN NOT MATCHED THEN
-             INSERT (branch, branch_name, daily_target, monthly_target, max_wage)
-             VALUES (@branch, @branch, @dailyTarget, @monthlyTarget, @maxWage);`,
-    params: {
-      branch: { type: sql.NVarChar(50), value: row.branch },
-      dailyTarget: { type: sql.Decimal(14, 2), value: row.dailyTarget },
-      monthlyTarget: { type: sql.Decimal(14, 2), value: row.monthlyTarget },
-      maxWage: { type: sql.Decimal(14, 2), value: row.maxWage },
-    },
-  }));
-}
+/* ชีทพนักงานเปลี่ยนไฟล์มาแล้วครั้งหนึ่ง ตำแหน่งคอลัมน์จึงเชื่อไม่ได้
+   จับจากชื่อหัวตารางก่อน ไม่เจอค่อยถอยไปใช้ตำแหน่งเดิมของ Apps Script */
+const EMP_COLUMNS = [
+  { key: 'hrCode',     match: /รหัส/,                    avoid: /สาขา|บัตร|ผ่าน/, fallback: 2 },
+  { key: 'branch',     match: /สาขา/,                    fallback: 4 },
+  { key: 'name',       match: /ชื่อ/,                     avoid: /สาขา|เล่น|ผู้/,   fallback: 3 },
+  { key: 'empType',    match: /ประเภท/,                  fallback: 5 },
+  { key: 'status',     match: /สถานะ/,                   fallback: 6 },
+  { key: 'position',   match: /ตำแหน่ง/,                 fallback: 8 },
+  { key: 'dailyWage',  match: /ค่าแรง|ค่าจ้าง|เรท/,      fallback: 9 },
+  { key: 'resignDate', match: /ลาออก|วันที่ออก/,          fallback: 14 },
+];
 
-// ชีทพนักงาน (แผ่นแรก): C=รหัส HR, D=ชื่อ, E=สาขา, F=ประเภท, G=สถานะ, I=ตำแหน่ง, J=ค่าแรง/วัน, O=วันที่ลาออก
 async function migrateEmployees() {
-  console.log('\n[2/4] พนักงาน');
-  const rows = await fetchSheetRows(SOURCE_SPREADSHEET_ID, '');
+  console.log('\n[1/2] พนักงาน');
+  const { headers, rows } = await fetchSheet(SOURCE_SPREADSHEET_ID, '');
+  const { map, report } = mapColumns(headers, EMP_COLUMNS);
+
+  console.log('  หัวคอลัมน์ที่อ่านได้:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
+  console.log('  จับคอลัมน์ได้ดังนี้ — ตรวจให้ตรงก่อนย้ายจริง');
+  report.forEach((line) => console.log(line));
+
   const byCode = new Map();
-  for (const r of rows.slice(1)) {
-    const hrCode = str(r[2]);
-    const name = str(r[3]);
+  for (const r of rows) {
+    const hrCode = str(r[map.hrCode]);
+    const name = str(r[map.name]);
     if (!hrCode || !name) continue;
     byCode.set(hrCode, {
       hrCode,
       name,
-      branch: str(r[4]),
-      empType: str(r[5]),
-      status: str(r[6]) || 'ทำงาน',
-      position: str(r[8]),
-      dailyWage: num(r[9]),
-      resignDate: toDateKey(r[14]),
+      branch: str(r[map.branch]),
+      empType: str(r[map.empType]),
+      status: str(r[map.status]) || 'ทำงาน',
+      position: str(r[map.position]),
+      dailyWage: num(r[map.dailyWage]),
+      resignDate: toDateKey(r[map.resignDate]),
     });
   }
   const data = [...byCode.values()];
@@ -234,39 +268,14 @@ async function migrateEmployees() {
     },
   }));
 
-  // สาขาที่มีพนักงานแต่ยังไม่มีในตารางสาขา (ชีท Details ไม่ครบ) — เติมให้ ไม่งั้นดรอปดาวน์สาขาจะขาด
-  const branches = [...new Set(data.map((d) => d.branch).filter(Boolean))];
-  await runBatch('สาขาที่พบจากพนักงาน', branches.map((b) => ({ branch: b })), (row) => ({
+  // รายชื่อสาขามาจากพนักงานล้วนๆ (ชีท Details เลิกใช้แล้ว)
+  // เป้าขาย/ค่าแรงสูงสุดจึงเป็น 0 ไปก่อน ต้องกรอกเองด้วย UPDATE dbo.hr_branch
+  const branches = [...new Set(data.map((d) => d.branch).filter(Boolean))].sort();
+  console.log(`  พบสาขา ${branches.length} สาขา: ${branches.join(', ') || '(ไม่มี)'}`);
+  await runBatch('สาขา', branches.map((b) => ({ branch: b })), (row) => ({
     text: `IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch WHERE branch = @branch)
              INSERT INTO dbo.hr_branch (branch, branch_name) VALUES (@branch, @branch);`,
     params: { branch: { type: sql.NVarChar(50), value: row.branch } },
-  }));
-}
-
-// ชีท "ยอดขายสาขา": A=วันที่, C=สาขา, D=ยอดขาย
-async function migrateDailySales() {
-  console.log('\n[3/4] ยอดขายรายวัน');
-  const rows = await fetchSheetRows(SALES_DATA_SPREADSHEET_ID, 'ยอดขายสาขา');
-  const byKey = new Map();
-  for (const r of rows.slice(1)) {
-    const date = toDateKey(r[0]);
-    const branch = str(r[2]);
-    if (!date || !branch) continue;
-    if (new Date(date) < cutoff) continue;
-    byKey.set(`${date}_${branch}`, { date, branch, sales: num(r[3]) });
-  }
-  const data = [...byKey.values()];
-  await runBatch(`ยอดขาย (ย้อนหลัง ${MONTHS} เดือน)`, data, (row) => ({
-    text: `MERGE dbo.hr_daily_sales WITH (HOLDLOCK) AS t
-             USING (SELECT @d AS sale_date, @branch AS branch) AS s
-                ON t.sale_date = s.sale_date AND t.branch = s.branch
-           WHEN MATCHED THEN UPDATE SET sales = @sales, updated_at = SYSDATETIME()
-           WHEN NOT MATCHED THEN INSERT (sale_date, branch, sales) VALUES (@d, @branch, @sales);`,
-    params: {
-      d: { type: sql.Date, value: row.date },
-      branch: { type: sql.NVarChar(50), value: row.branch },
-      sales: { type: sql.Decimal(14, 2), value: row.sales },
-    },
   }));
 }
 
@@ -274,16 +283,18 @@ async function migrateDailySales() {
 //  A Timestamp | B วันที่ลงงาน | C สาขา | D รหัส HR | E ชื่อ | F ตำแหน่ง | G เข้า | H ออก
 //  I เบรค | J OT | K ค่าแรง | L สถานะ | M ลา(รับค่าแรง) | N ประเภท | O หยุด(ไม่รับค่าแรง)
 //  P ชั่วโมงสะสม | Q ลารายชั่วโมง | R หมายเหตุ | S ช่วงเบรค | T จุดปฏิบัติงาน | U ผู้อนุมัติ OT | V ใช้ชั่วโมงสะสม
+// ชีทนี้ Apps Script เป็นคนเขียนเองทั้งหมด ลำดับคอลัมน์จึงคงที่ ใช้ตำแหน่งตรงๆ ได้
 async function migrateTimesheet() {
-  console.log(`\n[4/4] ตารางงาน (ย้อนหลัง ${MONTHS} เดือน ตั้งแต่ ${fmtDate(cutoff)})`);
-  const rows = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+  console.log(`\n[2/2] ตารางงาน (ย้อนหลัง ${MONTHS} เดือน ตั้งแต่ ${fmtDate(cutoff)})`);
+  const { headers, rows } = await fetchSheet(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+  console.log('  หัวคอลัมน์ที่อ่านได้:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
 
   // ชีทเป็น log ต่อท้าย — เก็บเฉพาะแถวล่าสุดของแต่ละ (วันที่, สาขา, รหัส) เหมือนที่ Apps Script อ่าน
   const latest = new Map();
   let skippedOld = 0;
   let cleared = 0;
 
-  for (const r of rows.slice(1)) {
+  for (const r of rows) {
     const workDate = toDateKey(r[1]);
     const branch = str(r[2]);
     const hrCode = str(r[3]) || str(r[4]); // แถวเก่าบางแถวไม่มีรหัส ใช้ชื่อแทนเหมือนของเดิม
@@ -330,7 +341,7 @@ async function migrateTimesheet() {
     });
   }
 
-  console.log(`  อ่านจากชีท ${rows.length - 1} แถว | เก่ากว่ากำหนด ${skippedOld} | ถูกล้างไปแล้ว ${cleared}`);
+  console.log(`  อ่านจากชีท ${rows.length} แถว | เก่ากว่ากำหนด ${skippedOld} | ถูกล้างไปแล้ว ${cleared}`);
   await runBatch('ตารางงาน', data, (row) => ({
     text: `MERGE dbo.hr_timesheet WITH (HOLDLOCK) AS t
              USING (SELECT @d AS work_date, @branch AS branch, @hrCode AS hr_code) AS s
@@ -394,10 +405,8 @@ async function main() {
   }
   if (!DRY_RUN) await getPool(); // ต่อฐานข้อมูลให้พังตั้งแต่ต้นถ้าต่อไม่ได้ จะได้ไม่เสียเวลาอ่านชีท
 
-  // เรียงตามลำดับนี้เสมอ: สาขาต้องมาก่อนพนักงาน และพนักงานมาก่อนตารางงาน
-  if (wants('branches')) await migrateBranches();
+  // พนักงานต้องมาก่อนตารางงานเสมอ (รายชื่อสาขาถูกสร้างจากพนักงาน)
   if (wants('employees')) await migrateEmployees();
-  if (wants('sales')) await migrateDailySales();
   if (wants('timesheet')) await migrateTimesheet();
 
   console.log('\nเสร็จเรียบร้อย');
