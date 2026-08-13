@@ -18,6 +18,9 @@
  *   --months=6        ย้ายตารางงานย้อนหลังกี่เดือน (ค่าเริ่มต้น 6)
  *   --only=timesheet  ย้ายเฉพาะบางส่วน: employees | timesheet (คั่นด้วย ,)
  *   --dry-run         อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
+ *   --inspect         พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร (ไม่แตะฐานข้อมูล)
+ *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
+ *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
  * ข้อควรรู้
  * - อ่านชีทผ่าน gviz แบบไม่ต้องล็อกอิน ชีททั้ง 2 ไฟล์จึงต้องตั้งลิงก์เป็น
@@ -31,7 +34,7 @@
  */
 
 import process from 'node:process';
-import { sql, getPool, withTransaction, describeDbError } from '../lib/mssql.js';
+import { sql, getPool, closePool, withTransaction, describeDbError } from '../lib/mssql.js';
 
 /* ---- ไอดีชีทต้นทาง ----
    ชีทพนักงานย้ายไฟล์มาแล้ว ไม่ใช่ไฟล์เดียวกับที่ Apps Script เดิมชี้ไว้
@@ -46,9 +49,13 @@ const argVal = (name, fallback) => {
   return hit ? hit.slice(name.length + 3) : fallback;
 };
 const DRY_RUN = args.includes('--dry-run');
+const INSPECT = args.includes('--inspect');
 const MONTHS = Math.max(1, Number(argVal('months', '6')) || 6);
 const ONLY = String(argVal('only', '')).split(',').map((s) => s.trim()).filter(Boolean);
 const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
+// แท็บของชีทพนักงาน (เว้นว่าง = แท็บแรก) และแถวหัวตาราง (0 = ให้หาเอง)
+const EMP_SHEET = argVal('sheet', '');
+const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -68,15 +75,15 @@ const cutoff = (() => {
 /* ------------------------------ อ่านชีท ------------------------------ */
 
 /**
- * ดึงชีทหนึ่งแผ่นผ่าน gviz
- * คืน { headers, rows } — headers คือชื่อหัวคอลัมน์, rows คือข้อมูลล้วน (ไม่มีแถวหัว)
+ * ดึงชีทหนึ่งแผ่นผ่าน gviz — คืนทุกแถวดิบ รวมแถวหัวตาราง
  *
- * ใส่ headers=1 บอก gviz ตรงๆ ว่าแถวแรกเป็นหัวตาราง ถ้าไม่บอก gviz จะเดาเอง
- * บางชีทเดาว่าไม่มีหัว -> แถวหัวปนมากับข้อมูล บางชีทเดาว่ามี -> ถ้าเราตัดแถวแรกทิ้งอีก
- * จะหายไปหนึ่งคน โดยไม่มีอะไรฟ้อง
+ * ใช้ headers=0 บังคับให้ gviz ส่งทุกแถวมาเป็นข้อมูล ไม่ต้องเดาว่าแถวไหนเป็นหัว
+ * เพราะชีทพนักงานมีหัวตารางแบบรวมกลุ่มสองชั้น (ข้อมูลพื้นฐาน / ค่าจ้าง / ประวัติ)
+ * ถ้าปล่อยให้ gviz เดา มันจะหยิบชั้นบน (หัวกลุ่ม) มาเป็นชื่อคอลัมน์ แล้วจับคอลัมน์ผิดทั้งแถบ
+ * เราหาแถวหัวจริงเองด้วย pickHeaderRow() แทน
  */
-async function fetchSheet(spreadsheetId, sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&headers=1${
+async function fetchRows(spreadsheetId, sheetName) {
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&headers=0${
     sheetName ? `&sheet=${encodeURIComponent(sheetName)}` : ''
   }`;
   const res = await fetch(url, { redirect: 'follow' });
@@ -91,8 +98,7 @@ async function fetchSheet(spreadsheetId, sheetName) {
   }
   const json = JSON.parse(text.slice(start, end + 1));
   const cols = json.table.cols || [];
-  const headers = cols.map((c) => str(c.label));
-  const rows = (json.table.rows || []).map((row) =>
+  return (json.table.rows || []).map((row) =>
     cols.map((_, i) => {
       const cell = row.c && row.c[i];
       if (!cell) return '';
@@ -105,7 +111,34 @@ async function fetchSheet(spreadsheetId, sheetName) {
       return cell.v;
     })
   );
-  return { headers, rows };
+}
+
+/**
+ * หาว่าแถวไหนคือ "หัวตารางจริง" — ให้คะแนนตามจำนวนคอลัมน์ที่ตรงกับที่เราต้องการ
+ * ชีทที่มีหัวรวมกลุ่มสองชั้น แถวบนจะได้คะแนนน้อย (ตรงแค่ 1-2 คำ) แถวหัวจริงจะได้คะแนนสูงสุด
+ */
+function pickHeaderRow(rows, defs, maxScan = 15) {
+  let best = { row: -1, score: 0 };
+  for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
+    const cells = rows[i].map(str);
+    let score = 0;
+    for (const def of defs) {
+      if (cells.some((c) => c && def.match.test(c) && !(def.avoid && def.avoid.test(c)))) score++;
+    }
+    if (score > best.score) best = { row: i, score };
+  }
+  return best;
+}
+
+/** โหมด --inspect: พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ พร้อมชื่อคอลัมน์ ไว้ดูโครงสร้างจริง */
+function dumpRows(rows, count = 6) {
+  for (let i = 0; i < Math.min(rows.length, count); i++) {
+    const cells = rows[i]
+      .map((v, idx) => (str(v) === '' ? null : `${colName(idx)}="${str(v)}"`))
+      .filter(Boolean);
+    console.log(`  แถว ${i + 1}: ${cells.length ? cells.join(' | ') : '(ว่างทั้งแถว)'}`);
+  }
+  console.log(`  ...รวมทั้งหมด ${rows.length} แถว`);
 }
 
 /** ชื่อคอลัมน์แบบ A, B, ... Z, AA ไว้แสดงตอนรายงานว่าจับคอลัมน์ไหนได้ */
@@ -126,12 +159,17 @@ function mapColumns(headers, defs) {
   const report = [];
   for (const def of defs) {
     let found = -1;
-    for (let i = 0; i < headers.length; i++) {
-      if (used.has(i) || !headers[i]) continue;
-      if (def.match.test(headers[i]) && !(def.avoid && def.avoid.test(headers[i]))) {
-        found = i;
-        break;
+    // match เป็นลิสต์เรียงตามลำดับความสำคัญ — ลองแบบเจาะจงก่อน ค่อยลงมาแบบกว้าง
+    // (เช่นคอลัมน์รหัส ต้องเลือก "รหัสพนักงาน" ก่อน "รหัส POS" ซึ่งเป็นคนละรหัสกัน)
+    for (const pattern of def.match) {
+      for (let i = 0; i < headers.length; i++) {
+        if (used.has(i) || !headers[i]) continue;
+        if (pattern.test(headers[i]) && !(def.avoid && def.avoid.test(headers[i]))) {
+          found = i;
+          break;
+        }
       }
+      if (found >= 0) break;
     }
     if (found >= 0) {
       used.add(found);
@@ -210,22 +248,36 @@ async function runBatch(label, rows, buildStatement) {
 /* ชีทพนักงานเปลี่ยนไฟล์มาแล้วครั้งหนึ่ง ตำแหน่งคอลัมน์จึงเชื่อไม่ได้
    จับจากชื่อหัวตารางก่อน ไม่เจอค่อยถอยไปใช้ตำแหน่งเดิมของ Apps Script */
 const EMP_COLUMNS = [
-  { key: 'hrCode',     match: /รหัส/,                    avoid: /สาขา|บัตร|ผ่าน/, fallback: 2 },
-  { key: 'branch',     match: /สาขา/,                    fallback: 4 },
-  { key: 'name',       match: /ชื่อ/,                     avoid: /สาขา|เล่น|ผู้/,   fallback: 3 },
-  { key: 'empType',    match: /ประเภท/,                  fallback: 5 },
-  { key: 'status',     match: /สถานะ/,                   fallback: 6 },
-  { key: 'position',   match: /ตำแหน่ง/,                 fallback: 8 },
-  { key: 'dailyWage',  match: /ค่าแรง|ค่าจ้าง|เรท/,      fallback: 9 },
-  { key: 'resignDate', match: /ลาออก|วันที่ออก/,          fallback: 14 },
+  // รหัสตัวนี้ต้องเป็นรหัสเดียวกับที่ชีทลงตารางงานใช้ (คอลัมน์ "รหัส HR")
+  // ชีทมี "รหัส POS" อยู่ด้วยซึ่งเป็นคนละรหัสกัน จึงกันไว้ใน avoid
+  { key: 'hrCode',     match: [/รหัส\s*hr/i, /รหัส.*พนักงาน/, /^รหัส$/, /^hr.?code$/i, /รหัส/], avoid: /สาขา|บัตร|ผ่าน|pos|ประชาชน/i, fallback: 2 },
+  { key: 'branch',     match: [/^สาขา$/, /สาขา/],                fallback: 4 },
+  { key: 'name',       match: [/ชื่อ.*สกุล/, /ชื่อ/],            avoid: /สาขา|เล่น|ผู้|บัญชี/, fallback: 3 },
+  { key: 'empType',    match: [/ประเภท/],                        fallback: 5 },
+  { key: 'status',     match: [/^สถานะ$/, /สถานะ/],              fallback: 6 },
+  { key: 'position',   match: [/ตำแหน่ง/],                       fallback: 8 },
+  { key: 'dailyWage',  match: [/ค่าแรง.*วัน/, /ค่าจ้าง.*วัน/, /ค่าแรง/, /ค่าจ้าง/, /เรท/], avoid: /เดือน|รวม|ล่วงเวลา/, fallback: 9 },
+  { key: 'resignDate', match: [/ลาออก/, /วันที่ออก/],            fallback: 14 },
 ];
 
 async function migrateEmployees() {
   console.log('\n[1/2] พนักงาน');
-  const { headers, rows } = await fetchSheet(SOURCE_SPREADSHEET_ID, '');
-  const { map, report } = mapColumns(headers, EMP_COLUMNS);
+  const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
 
-  console.log('  หัวคอลัมน์ที่อ่านได้:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
+  // หาแถวหัวตารางจริง (ชีทนี้มีหัวรวมกลุ่มสองชั้น แถวแรกเป็นชื่อกลุ่ม ไม่ใช่ชื่อคอลัมน์)
+  const picked = HEADER_ROW > 0 ? { row: HEADER_ROW - 1, score: -1 } : pickHeaderRow(all, EMP_COLUMNS);
+  if (picked.row < 0) {
+    console.log('  หาแถวหัวตารางไม่เจอเลย — ลองดูโครงสร้างชีทด้วย --inspect');
+    dumpRows(all);
+    throw new Error('อ่านชีทพนักงานไม่ได้: หาแถวหัวตารางไม่เจอ');
+  }
+
+  const headers = all[picked.row].map(str);
+  const rows = all.slice(picked.row + 1);
+  console.log(`  ใช้แถวที่ ${picked.row + 1} เป็นหัวตาราง${picked.score >= 0 ? ` (ตรงกับที่ต้องการ ${picked.score}/${EMP_COLUMNS.length} คอลัมน์)` : ' (สั่งมาเองด้วย --header-row)'}`);
+  console.log('  หัวคอลัมน์:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
+
+  const { map, report } = mapColumns(headers, EMP_COLUMNS);
   console.log('  จับคอลัมน์ได้ดังนี้ — ตรวจให้ตรงก่อนย้ายจริง');
   report.forEach((line) => console.log(line));
 
@@ -246,6 +298,13 @@ async function migrateEmployees() {
     });
   }
   const data = [...byCode.values()];
+  if (data.length === 0) {
+    console.log('  อ่านได้ 0 คน — คอลัมน์ที่จับได้อาจไม่ตรง หรือชี้ผิดแท็บ');
+    console.log('  ข้อมูล 6 แถวแรกของชีท (ไว้ตรวจว่าคอลัมน์ไหนคืออะไร):');
+    dumpRows(all);
+  } else {
+    console.log(`  ตัวอย่างคนแรกที่อ่านได้: ${JSON.stringify(data[0])}`);
+  }
   await runBatch('พนักงาน', data, (row) => ({
     text: `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
              USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
@@ -286,8 +345,12 @@ async function migrateEmployees() {
 // ชีทนี้ Apps Script เป็นคนเขียนเองทั้งหมด ลำดับคอลัมน์จึงคงที่ ใช้ตำแหน่งตรงๆ ได้
 async function migrateTimesheet() {
   console.log(`\n[2/2] ตารางงาน (ย้อนหลัง ${MONTHS} เดือน ตั้งแต่ ${fmtDate(cutoff)})`);
-  const { headers, rows } = await fetchSheet(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
-  console.log('  หัวคอลัมน์ที่อ่านได้:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
+  const all = await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+
+  // ชีทนี้ Apps Script เขียนเอง หัวตารางเป็นแถวเดียวและขึ้นต้นด้วย Timestamp เสมอ
+  const hasHeader = all.length > 0 && /timestamp|วันที่ลงงาน/i.test(str(all[0][0]) + str(all[0][1]));
+  const rows = hasHeader ? all.slice(1) : all;
+  console.log(`  หัวตาราง: ${hasHeader ? all[0].map(str).filter(Boolean).join(' | ') : '(ไม่มีแถวหัว อ่านทุกแถวเป็นข้อมูล)'}`);
 
   // ชีทเป็น log ต่อท้าย — เก็บเฉพาะแถวล่าสุดของแต่ละ (วันที่, สาขา, รหัส) เหมือนที่ Apps Script อ่าน
   const latest = new Map();
@@ -403,6 +466,16 @@ async function main() {
     console.error('ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD');
     process.exit(1);
   }
+  // โหมดส่องชีท: พิมพ์แถวแรกๆ ออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร ไม่แตะฐานข้อมูล
+  if (INSPECT) {
+    console.log(`\n[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
+    dumpRows(await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET), 8);
+    console.log(`\n[ส่องชีทลงตารางงาน] แท็บ "${LOG_SHEET_NAME}"`);
+    dumpRows(await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME), 3);
+    console.log('\nดูโครงสร้างเสร็จแล้ว (ไม่ได้แตะฐานข้อมูล)');
+    return;
+  }
+
   if (!DRY_RUN) await getPool(); // ต่อฐานข้อมูลให้พังตั้งแต่ต้นถ้าต่อไม่ได้ จะได้ไม่เสียเวลาอ่านชีท
 
   // พนักงานต้องมาก่อนตารางงานเสมอ (รายชื่อสาขาถูกสร้างจากพนักงาน)
@@ -410,11 +483,13 @@ async function main() {
   if (wants('timesheet')) await migrateTimesheet();
 
   console.log('\nเสร็จเรียบร้อย');
-  process.exit(0);
 }
 
-main().catch((err) => {
-  console.error('\nย้ายข้อมูลไม่สำเร็จ:', describeDbError(err));
-  if (process.env.DEBUG) console.error(err);
-  process.exit(1);
-});
+main()
+  .then(() => closePool())
+  .catch(async (err) => {
+    console.error('\nย้ายข้อมูลไม่สำเร็จ:', describeDbError(err));
+    if (process.env.DEBUG) console.error(err);
+    await closePool();
+    process.exitCode = 1;
+  });
