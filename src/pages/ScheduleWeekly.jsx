@@ -598,7 +598,8 @@ export default function ScheduleWeekly() {
         return;
       }
 
-      await apiCall('saveTimesheet', { logs });
+      // actor ใช้บันทึกว่าใครเป็นคนลง (ตาราง hr_timesheet_log ฝั่ง SQL) — Apps Script เดิมไม่ได้เก็บไว้
+      await apiCall('saveTimesheet', { logs, actor: user?.username || '' });
       toast.success(`บันทึกตารางงานเรียบร้อยแล้ว (${logs.length} รายการ)`);
       setDirtyKeys(new Set());
     } catch (err) {

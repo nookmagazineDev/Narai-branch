@@ -193,7 +193,8 @@ export default function StockList() {
     setMenuTables(prev => ({ ...prev, [menuName]: { loading: true, rows: [] } }));
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}&menu=${encodeURIComponent(menuName)}`;
-      const res = await tryGetJson(`/api/usagebytable?${qs}`);
+      // โหมด bytable ของ /api/usagemenu (เดิมเป็น /api/usagebytable แยกไฟล์ ยุบรวมเพราะ Vercel จำกัด 12 ฟังก์ชัน)
+      const res = await tryGetJson(`/api/usagemenu?bytable=1&${qs}`);
       setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: res.status === 'success' ? (res.data || []) : [] } }));
     } catch {
       setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: [] } }));
