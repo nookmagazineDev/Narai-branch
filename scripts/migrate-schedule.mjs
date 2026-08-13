@@ -34,7 +34,26 @@
  */
 
 import process from 'node:process';
-import { sql, getPool, closePool, withTransaction, describeDbError } from '../lib/mssql.js';
+
+/* โหลด driver ฐานข้อมูลแบบ lazy
+   โหมด --inspect และ --dry-run แค่อ่านชีทอย่างเดียว ไม่ได้แตะฐานข้อมูล
+   จึงไม่ควรบังคับให้ npm install ก่อน (เครื่องที่รันสคริปต์นี้บางเครื่องลง package ไม่ได้)
+   ตัวแปรพวกนี้จะมีค่าก็ต่อเมื่อเรียก loadDb() แล้วเท่านั้น */
+let sql;
+let getPool;
+let closePool;
+let withTransaction;
+let describeDbError = (err) => err?.message || String(err);
+
+async function loadDb() {
+  if (sql) return;
+  const m = await import('../lib/mssql.js');
+  sql = m.sql;
+  getPool = m.getPool;
+  closePool = m.closePool;
+  withTransaction = m.withTransaction;
+  describeDbError = m.describeDbError;
+}
 
 /* ---- ไอดีชีทต้นทาง ----
    ชีทพนักงานย้ายไฟล์มาแล้ว ไม่ใช่ไฟล์เดียวกับที่ Apps Script เดิมชี้ไว้
@@ -460,15 +479,10 @@ async function migrateTimesheet() {
 /* --------------------------------- main --------------------------------- */
 
 async function main() {
-  console.log(`ย้ายข้อมูลตารางงาน -> ${process.env.HR_DB_HOST || '203.154.185.48'}/${process.env.HR_DB_NAME || 'narai_hr'}`);
-  if (DRY_RUN) console.log('โหมด dry-run: อ่านชีทและสรุปผลเท่านั้น ไม่เขียนลงฐานข้อมูล');
-  if (!DRY_RUN && (!process.env.HR_DB_USER || !process.env.HR_DB_PASSWORD)) {
-    console.error('ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD');
-    process.exit(1);
-  }
-  // โหมดส่องชีท: พิมพ์แถวแรกๆ ออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร ไม่แตะฐานข้อมูล
+  // โหมดส่องชีท: พิมพ์แถวแรกๆ ออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร
+  // ไม่แตะฐานข้อมูลเลย จึงไม่ต้องมีรหัสผ่านและไม่ต้อง npm install ก่อน
   if (INSPECT) {
-    console.log(`\n[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
+    console.log(`[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
     dumpRows(await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET), 8);
     console.log(`\n[ส่องชีทลงตารางงาน] แท็บ "${LOG_SHEET_NAME}"`);
     dumpRows(await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME), 3);
@@ -476,7 +490,17 @@ async function main() {
     return;
   }
 
-  if (!DRY_RUN) await getPool(); // ต่อฐานข้อมูลให้พังตั้งแต่ต้นถ้าต่อไม่ได้ จะได้ไม่เสียเวลาอ่านชีท
+  console.log(`ย้ายข้อมูลตารางงาน -> ${process.env.HR_DB_HOST || '203.154.185.48'}/${process.env.HR_DB_NAME || 'narai_hr'}`);
+  if (DRY_RUN) console.log('โหมด dry-run: อ่านชีทและสรุปผลเท่านั้น ไม่เขียนลงฐานข้อมูล');
+
+  // ต่อฐานข้อมูลให้พังตั้งแต่ต้นถ้าต่อไม่ได้ จะได้ไม่เสียเวลาอ่านชีท
+  if (!DRY_RUN) {
+    if (!process.env.HR_DB_USER || !process.env.HR_DB_PASSWORD) {
+      throw new Error('ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD');
+    }
+    await loadDb();
+    await getPool();
+  }
 
   // พนักงานต้องมาก่อนตารางงานเสมอ (รายชื่อสาขาถูกสร้างจากพนักงาน)
   if (wants('employees')) await migrateEmployees();
@@ -486,10 +510,10 @@ async function main() {
 }
 
 main()
-  .then(() => closePool())
+  .then(() => closePool?.())
   .catch(async (err) => {
     console.error('\nย้ายข้อมูลไม่สำเร็จ:', describeDbError(err));
     if (process.env.DEBUG) console.error(err);
-    await closePool();
+    await closePool?.();
     process.exitCode = 1;
   });
