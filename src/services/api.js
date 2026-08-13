@@ -23,6 +23,24 @@ const SQL_ACTIONS = new Set([
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
 
 // ---------------------------------------------------------------------------
+// ผู้ใช้ที่ล็อกอินไว้ตั้งแต่แรก — ฝั่ง SQL ไม่มีการล็อกอินซ้อนอีกชั้น
+// login ยังทำที่เดิม (Apps Script) แล้วเก็บ user ไว้ที่ localStorage 'hr_user'
+// (ดู src/contexts/AuthContext.jsx) ทุกคำสั่งที่วิ่งไป SQL จะแนบ user คนนี้ไปด้วยอัตโนมัติ
+// เพื่อใช้เป็น "คนที่กดบันทึก" และใช้จำกัดสาขาฝั่งเซิร์ฟเวอร์ หน้าเว็บจึงไม่ต้องส่งเอง
+// ---------------------------------------------------------------------------
+const sessionUser = () => {
+  try {
+    const raw = localStorage.getItem('hr_user');
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    if (!u || !u.username) return null;
+    return { username: String(u.username), branch: String(u.branch || ''), name: String(u.name || '') };
+  } catch {
+    return null; // localStorage อ่านไม่ได้/ข้อมูลเสีย — ปล่อยให้เซิร์ฟเวอร์ปฏิเสธเอง
+  }
+};
+
+// ---------------------------------------------------------------------------
 // ทำไมถึงชอบขึ้น "ติดต่อเซิร์ฟเวอร์ไม่ได้"
 // 1) Google Apps Script จำกัดจำนวน execution ที่วิ่งพร้อมกันต่อบัญชี ถ้าหลายสาขายิงพร้อมกัน
 //    (หน้าเดียวยิง 2-5 request รวด) จะโดนคิว/โดนปฏิเสธ แล้วตอบกลับเป็น "หน้า HTML" ไม่ใช่ JSON
@@ -87,7 +105,8 @@ const requestOnce = async (action, payload, timeoutMs) => {
       // Apps Script: ไม่ใส่ Content-Type ตั้งใจ ให้เป็น text/plain เบราว์เซอร์จะได้ไม่ยิง preflight (GAS ไม่รองรับ)
       // /api/schedule: เป็น origin เดียวกัน ไม่มี preflight อยู่แล้ว จึงส่ง JSON ตรงๆ ให้ Vercel parse body ให้เลย
       headers: toSql ? { 'Content-Type': 'application/json' } : undefined,
-      body: JSON.stringify({ action, ...payload }),
+      // _user = คนที่ล็อกอินไว้ตั้งแต่แรก แนบไปให้ฝั่ง SQL เอง จะได้ไม่ต้องล็อกอินซ้อนอีกชั้น
+      body: JSON.stringify(toSql ? { action, ...payload, _user: sessionUser() } : { action, ...payload }),
       redirect: 'follow', // GAS ตอบ 302 ไป script.googleusercontent.com เสมอ
       signal: controller.signal,
     });

@@ -31,6 +31,38 @@ const isDateStr = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const timeOrNull = (v) => (/^\d{1,2}:\d{2}$/.test(str(v)) ? str(v).padStart(5, '0') : null);
 const textOrNull = (v) => (str(v) === '' ? null : str(v));
 
+/* ---------------------------- ผู้ใช้ที่ล็อกอินไว้ ----------------------------
+   ไม่มีการล็อกอินซ้อนอีกชั้นที่นี่ — ใช้ user เดิมที่ล็อกอินเข้าระบบมาตั้งแต่แรก
+   ฝั่งเว็บแนบมาให้ในฟิลด์ _user อัตโนมัติทุกคำสั่ง (ดู src/services/api.js)
+
+   ข้อจำกัดที่ต้องรู้: _user มาจาก localStorage ของเบราว์เซอร์ ผู้ใช้แก้เองได้
+   จึงกันได้แค่การกดผิดสาขาโดยไม่ตั้งใจ ไม่ใช่การกันคนที่ตั้งใจปลอม
+   ถ้าต้องการกันจริงต้องให้ตอน login ออก token ที่เซ็นชื่อไว้แล้วตรวจที่นี่
+   (ตอนนี้ Apps Script เดิมก็เชื่อสาขาที่ฝั่งเว็บส่งมาแบบเดียวกัน)
+------------------------------------------------------------------------- */
+function sessionOf(body) {
+  const u = body && typeof body._user === 'object' ? body._user : null;
+  const username = str(u?.username);
+  if (!username) return null;
+  const branch = str(u?.branch);
+  return { username, branch, isAll: branch.toLowerCase() === 'all' };
+}
+
+/**
+ * สาขาที่คำสั่งนี้ทำงานด้วยได้จริง
+ * user สิทธิ์ all เลือกสาขาไหนก็ได้ นอกนั้นถูกล็อกไว้ที่สาขาตัวเองเสมอ
+ * (หน้าเว็บล็อกไว้อยู่แล้ว ตรงนี้กันซ้ำอีกชั้นเผื่อเรียก API ตรงๆ)
+ */
+function branchFor(session, requested) {
+  const want = str(requested);
+  if (!session) return want;
+  if (session.isAll) return want;
+  if (want && want.toLowerCase() !== session.branch.toLowerCase()) {
+    throw Object.assign(new Error(`ไม่มีสิทธิ์ดูข้อมูลของสาขา ${want}`), { forbidden: true });
+  }
+  return session.branch;
+}
+
 /** แปลงแถวในตารางเป็นรูปแบบเดียวกับที่ Apps Script เคยตอบ ฝั่งเว็บจะได้ไม่ต้องแก้ */
 function toHistoryRow(r) {
   const d = r.work_date instanceof Date ? r.work_date : new Date(r.work_date);
@@ -70,16 +102,19 @@ const HISTORY_COLUMNS = `
 /* ------------------------------- actions -------------------------------- */
 
 /** รายชื่อสาขา — ตอบเป็น [{name, outletId}] ให้ตรงกับที่หน้าเว็บอ่าน (br.name) */
-async function getBranches() {
+async function getBranches(body, session) {
   const rows = await queryRead(
     `SELECT branch, branch_name, outlet_id FROM dbo.hr_branch WHERE is_active = 1 ORDER BY branch`
   );
-  return rows.map((r) => ({ name: r.branch, fullName: r.branch_name || r.branch, outletId: r.outlet_id ?? null }));
+  return rows
+    // user ที่ไม่ใช่สิทธิ์ all เห็นแค่สาขาตัวเอง
+    .filter((r) => !session || session.isAll || str(r.branch).toLowerCase() === session.branch.toLowerCase())
+    .map((r) => ({ name: r.branch, fullName: r.branch_name || r.branch, outletId: r.outlet_id ?? null }));
 }
 
 /** พนักงานที่ยังทำงานอยู่ของสาขานั้น เรียงตามลำดับตำแหน่งแบบเดิม */
-async function getScheduleEmployees(body) {
-  const branch = str(body.branch);
+async function getScheduleEmployees(body, session) {
+  const branch = branchFor(session, body.branch);
   if (!branch) return [];
   const rows = await queryRead(
     `SELECT hr_code, full_name, branch, emp_type, position, daily_wage
@@ -101,8 +136,8 @@ async function getScheduleEmployees(body) {
 }
 
 /** เป้าขาย/ค่าแรงสูงสุดต่อวันของสาขา */
-async function getBranchStats(body) {
-  const branch = str(body.branch);
+async function getBranchStats(body, session) {
+  const branch = branchFor(session, body.branch);
   const rows = await queryRead(
     `SELECT daily_target, monthly_target, max_wage FROM dbo.hr_branch WHERE branch = @branch`,
     { branch: { type: sql.NVarChar(50), value: branch } }
@@ -116,8 +151,8 @@ async function getBranchStats(body) {
 }
 
 /** ยอดขายของวัน (หน้าประวัติใช้เทียบกับค่าแรง) */
-async function getDailySales(body) {
-  const branch = str(body.searchBranch || body.branch);
+async function getDailySales(body, session) {
+  const branch = branchFor(session, body.searchBranch || body.branch);
   const date = str(body.searchDateStr || body.searchDate || body.date);
   if (!isDateStr(date)) return { sales: 0 };
   const rows = await queryRead(
@@ -132,8 +167,8 @@ async function getDailySales(body) {
  *   { branch, startDate, endDate } ช่วงสัปดาห์ (หน้าลงตาราง)
  *   { branch, searchDate }         วันเดียว (หน้าประวัติ)
  */
-async function getHistoryData(body) {
-  const branch = str(body.branch || body.searchBranch);
+async function getHistoryData(body, session) {
+  const branch = branchFor(session, body.branch || body.searchBranch);
   if (!branch) return [];
 
   const single = str(body.searchDate);
@@ -168,12 +203,13 @@ async function getHistoryData(body) {
  * และถ้า otherNote === 'ล้างข้อมูล' คือสั่งลบแถวนั้นจริงๆ
  * ทั้งชุดอยู่ใน transaction เดียว — บันทึกทั้งสัปดาห์แล้วพลาดกลางคันจะไม่เหลือข้อมูลครึ่งๆ
  */
-async function saveTimesheet(body) {
+async function saveTimesheet(body, session) {
   const logs = Array.isArray(body.logs) ? body.logs : [];
   if (logs.length === 0) {
     throw Object.assign(new Error('ไม่มีข้อมูลที่จะบันทึก'), { badRequest: true });
   }
-  const actor = textOrNull(body.actor || body.username);
+  // คนที่กดบันทึก = user ที่ล็อกอินไว้ ไม่ได้เอาค่าที่หน้าเว็บส่งมาเอง
+  const actor = textOrNull(session?.username);
 
   let saved = 0;
   let cleared = 0;
@@ -181,7 +217,7 @@ async function saveTimesheet(body) {
   await withTransaction(async (run) => {
     for (const item of logs) {
       const workDate = str(item.workDate);
-      const branch = str(item.branch);
+      const branch = branchFor(session, item.branch);
       const hrCode = str(item.hrCode);
       if (!isDateStr(workDate) || !branch || !hrCode) continue;
 
@@ -268,11 +304,12 @@ async function saveTimesheet(body) {
  * อนุมัติ OT ทั้งวันของสาขา — ติ๊ก = ใส่ชื่อผู้อนุมัติ, ไม่ติ๊ก = ล้างชื่อทิ้ง
  * จับคู่ด้วย hrCode ถ้ามี (ชีทเดิมจับด้วยชื่อ พนักงานชื่อซ้ำกันจะโดนอนุมัติพร้อมกันทั้งคู่)
  */
-async function updateOTApprovalBulk(body) {
+async function updateOTApprovalBulk(body, session) {
   const dateStr = str(body.dateStr);
-  const branch = str(body.branch);
+  const branch = branchFor(session, body.branch);
   const updates = Array.isArray(body.updates) ? body.updates : [];
-  const approver = str(body.approverName) || 'Admin';
+  // ผู้อนุมัติ = user ที่ล็อกอินไว้เสมอ จะได้ปลอมชื่อผู้อนุมัติจากหน้าเว็บไม่ได้
+  const approver = str(session?.username) || str(body.approverName) || 'Admin';
 
   if (!isDateStr(dateStr) || !branch) {
     throw Object.assign(new Error('ระบุวันที่หรือสาขาไม่ถูกต้อง'), { badRequest: true });
@@ -319,9 +356,9 @@ async function updateOTApprovalBulk(body) {
 }
 
 /** จุดปฏิบัติงานของวัน (ยังไม่มีหน้าไหนเรียก แต่ระบบเดิมมี จึงย้ายมาด้วยกัน) */
-async function updateWorkStation(body) {
+async function updateWorkStation(body, session) {
   const dateStr = str(body.dateStr);
-  const branch = str(body.branch);
+  const branch = branchFor(session, body.branch);
   const updates = Array.isArray(body.updates) ? body.updates : [];
   if (!isDateStr(dateStr) || !branch) {
     throw Object.assign(new Error('ระบุวันที่หรือสาขาไม่ถูกต้อง'), { badRequest: true });
@@ -394,12 +431,22 @@ export default async function handler(req, res) {
     });
   }
 
+  // ใช้ user ที่ล็อกอินเข้าระบบมาตั้งแต่แรก ไม่มีการล็อกอินซ้ำที่นี่
+  // ถ้า session หลุด (ล้าง localStorage / ยังไม่ได้ล็อกอิน) ให้บอกไปตรงๆ ว่าต้องเข้าสู่ระบบใหม่
+  const session = sessionOf(body);
+  if (!session) {
+    return res.status(401).json({ status: 'error', message: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' });
+  }
+
   try {
-    const data = await run(body);
+    const data = await run(body, session);
     return res.status(200).json({ status: 'success', data });
   } catch (error) {
     if (error?.badRequest) {
       return res.status(400).json({ status: 'error', message: error.message });
+    }
+    if (error?.forbidden) {
+      return res.status(403).json({ status: 'error', message: error.message });
     }
     return replyDbError(res, error, `schedule:${action}`);
   }

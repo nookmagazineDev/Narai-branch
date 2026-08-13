@@ -112,11 +112,11 @@ export default function ScheduleHistory() {
           isApproved: !!otApprovals[rowKey(item)]
         }));
 
+      // ชื่อผู้อนุมัติมาจาก user ที่ล็อกอินไว้ (apiCall แนบไปให้) ไม่ได้ส่งจากหน้าเว็บแล้ว
       await apiCall('updateOTApprovalBulk', {
         dateStr: historyDate,
         branch: selectedBranch,
-        updates: updates,
-        approverName: user?.username || 'Admin'
+        updates: updates
       });
 
       toast.success('บันทึกการอนุมัติ OT เรียบร้อย');
