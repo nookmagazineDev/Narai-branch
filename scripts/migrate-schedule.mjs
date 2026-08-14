@@ -184,20 +184,31 @@ function verifyColumns(map, rows, defs, sampleSize = 80) {
   return notes;
 }
 
-/** โหมด --find: หาว่าค่าที่ระบุอยู่คอลัมน์ไหนของชีท ใช้ยืนยันว่ารหัสพนักงานคือคอลัมน์อะไร */
+/**
+ * โหมด --find: หาว่าค่าที่ระบุอยู่คอลัมน์ไหนของชีท ใช้ยืนยันว่ารหัสพนักงานคือคอลัมน์อะไร
+ * ลองแบบตรงตัวก่อน ถ้าไม่เจอค่อยหาแบบมีคำนั้นอยู่ข้างใน (ค้นด้วยชื่อคนได้โดยไม่ต้องรู้รหัส)
+ */
 function findValue(rows, needle) {
   const target = str(needle).toLowerCase();
-  const hits = new Map(); // คอลัมน์ -> จำนวนครั้งที่เจอ
-  let firstRow = -1;
-  for (let i = 0; i < rows.length; i++) {
-    for (let j = 0; j < rows[i].length; j++) {
-      if (str(rows[i][j]).toLowerCase() === target) {
-        hits.set(j, (hits.get(j) || 0) + 1);
-        if (firstRow < 0) firstRow = i;
+  const scan = (test) => {
+    const hits = new Map(); // คอลัมน์ -> จำนวนครั้งที่เจอ
+    const rowsFound = [];
+    for (let i = 0; i < rows.length; i++) {
+      let hitInRow = false;
+      for (let j = 0; j < rows[i].length; j++) {
+        if (test(str(rows[i][j]).toLowerCase())) {
+          hits.set(j, (hits.get(j) || 0) + 1);
+          hitInRow = true;
+        }
       }
+      if (hitInRow) rowsFound.push(i);
     }
-  }
-  return { hits, firstRow };
+    return { hits, rowsFound };
+  };
+
+  const exact = scan((v) => v === target);
+  if (exact.hits.size > 0) return { ...exact, mode: 'ตรงตัว' };
+  return { ...scan((v) => v !== '' && v.includes(target)), mode: 'มีคำนี้อยู่ข้างใน' };
 }
 
 /**
@@ -613,15 +624,18 @@ async function main() {
     const rows = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
     console.log(`[หาค่าในชีทพนักงาน] ${rows.length} แถว`);
     for (const needle of needles) {
-      const { hits, firstRow } = findValue(rows, needle);
+      const { hits, rowsFound, mode } = findValue(rows, needle);
       if (hits.size === 0) {
         console.log(`\n  "${needle}" : ไม่พบในชีทพนักงานเลย`);
         continue;
       }
-      const where = [...hits.entries()].map(([col, n]) => `${colName(col)} (เจอ ${n} ครั้ง)`).join(', ');
-      console.log(`\n  "${needle}" : อยู่คอลัมน์ ${where}`);
-      console.log('  แถวที่เจอ:');
-      dumpRows([rows[firstRow]], 1);
+      const where = [...hits.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([col, n]) => `${colName(col)} (${n} ครั้ง)`)
+        .join(', ');
+      console.log(`\n  "${needle}" : เจอแบบ${mode} ที่คอลัมน์ ${where}`);
+      console.log(`  แสดง ${Math.min(rowsFound.length, 3)} จาก ${rowsFound.length} แถวที่เจอ:`);
+      dumpRows(rowsFound.slice(0, 3).map((i) => rows[i]), 3);
     }
     return;
   }
