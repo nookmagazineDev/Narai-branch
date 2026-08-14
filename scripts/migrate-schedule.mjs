@@ -22,6 +22,7 @@
  *   --keys            วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
  *   --find=1234,5678  ค้นว่าค่านั้นอยู่คอลัมน์ไหนของชีทพนักงาน
  *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
+ *   --gid=238875059   เลือกแท็บด้วย gid (เลขท้าย URL ตอนเปิดแท็บนั้น) แม่นกว่าชื่อแท็บ
  *   --emp-id=<ID>     ชี้ไปชีทพนักงานไฟล์อื่น (วาง URL ทั้งเส้นก็ได้)
  *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
@@ -77,6 +78,8 @@ const ONLY = String(argVal('only', '')).split(',').map((s) => s.trim()).filter(B
 const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
 // แท็บของชีทพนักงาน (เว้นว่าง = แท็บแรก) และแถวหัวตาราง (0 = ให้หาเอง)
 const EMP_SHEET = argVal('sheet', '');
+// gid = เลขท้าย URL ตอนเปิดแท็บนั้น (แม่นกว่าชื่อแท็บ ไม่ต้องพิมพ์ภาษาไทยให้ตรงเป๊ะ)
+const EMP_GID = argVal('gid', '');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
 const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
 const KEYS = args.includes('--keys'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
@@ -112,10 +115,11 @@ const cutoff = (() => {
  * ถ้าปล่อยให้ gviz เดา มันจะหยิบชั้นบน (หัวกลุ่ม) มาเป็นชื่อคอลัมน์ แล้วจับคอลัมน์ผิดทั้งแถบ
  * เราหาแถวหัวจริงเองด้วย pickHeaderRow() แทน
  */
-async function fetchRows(spreadsheetId, sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&headers=0${
-    sheetName ? `&sheet=${encodeURIComponent(sheetName)}` : ''
-  }`;
+async function fetchRows(spreadsheetId, sheetName, gid) {
+  // ระบุแท็บได้ 2 แบบ: gid (เลขท้าย URL ตอนเปิดแท็บนั้น) หรือชื่อแท็บ
+  // gid แม่นกว่าเพราะไม่ต้องพิมพ์ชื่อภาษาไทยให้ตรงเป๊ะ
+  const target = gid ? `&gid=${encodeURIComponent(gid)}` : sheetName ? `&sheet=${encodeURIComponent(sheetName)}` : '';
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&headers=0${target}`;
   const res = await fetch(url, { redirect: 'follow' });
   const text = await res.text();
   const start = text.indexOf('{');
@@ -161,7 +165,8 @@ function pickHeaderRow(rows, defs, maxScan = 15) {
     const cells = rows[i].map(str);
     let score = 0;
     for (const def of defs) {
-      if (cells.some((c) => c && def.match.test(c) && !(def.avoid && def.avoid.test(c)))) score++;
+      // def.match เป็นลิสต์ของ pattern (เรียงตามลำดับความสำคัญ) — ตรงตัวไหนก็นับว่าเจอ
+      if (cells.some((c) => c && def.match.some((p) => p.test(c)) && !(def.avoid && def.avoid.test(c)))) score++;
     }
     if (score > best.score) best = { row: i, score };
   }
@@ -366,7 +371,7 @@ const EMP_COLUMNS = [
 
 async function migrateEmployees() {
   console.log('\n[1/2] พนักงาน');
-  const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
+  const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
 
   // หาแถวหัวตารางจริง (ชีทนี้มีหัวรวมกลุ่มสองชั้น แถวแรกเป็นชื่อกลุ่ม ไม่ใช่ชื่อคอลัมน์)
   const picked = HEADER_ROW > 0 ? { row: HEADER_ROW - 1, score: -1 } : pickHeaderRow(all, EMP_COLUMNS);
@@ -572,7 +577,7 @@ async function main() {
   // โหมดวิเคราะห์รหัส: รหัสในชีทลงตารางงานไม่มีในชีทพนักงานเลย (คนละชุดกัน)
   // โหมดนี้ตอบสองคำถาม — คอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
   if (KEYS) {
-    const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
+    const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
     const picked = pickHeaderRow(all, EMP_COLUMNS);
     const headers = all[picked.row].map(str);
     const rows = all.slice(picked.row + 1);
@@ -628,7 +633,7 @@ async function main() {
   // ใช้ยืนยันว่า "รหัส HR" ในชีทลงตารางงาน ตรงกับคอลัมน์ไหนของชีทพนักงานกันแน่
   if (FIND) {
     const needles = FIND.split(',').map((s) => s.trim()).filter(Boolean);
-    const rows = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
+    const rows = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
     console.log(`[หาค่าในชีทพนักงาน] ${rows.length} แถว`);
     for (const needle of needles) {
       const { hits, rowsFound, mode } = findValue(rows, needle);
@@ -651,7 +656,7 @@ async function main() {
   // ไม่แตะฐานข้อมูลเลย จึงไม่ต้องมีรหัสผ่านและไม่ต้อง npm install ก่อน
   if (INSPECT) {
     console.log(`[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
-    dumpRows(await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET), 8);
+    dumpRows(await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID), 8);
     console.log(`\n[ส่องชีทลงตารางงาน] แท็บ "${LOG_SHEET_NAME}"`);
     dumpRows(await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME), 3);
     console.log('\nดูโครงสร้างเสร็จแล้ว (ไม่ได้แตะฐานข้อมูล)');
