@@ -10,14 +10,23 @@ export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPt
 // รอย้ายพร้อมกลุ่มของหน้านั้นๆ จะได้ทดสอบพร้อมกัน — /api/schedule รองรับ action นี้ไว้แล้ว
 // ---------------------------------------------------------------------------
 const SQL_ENDPOINT = '/api/schedule';
+
+// ⚠️ ปิดไว้ทั้งหมดจนกว่าจะย้ายข้อมูลเข้า SQL เสร็จและตรวจแล้ว
+//
+// เคยเปิด getScheduleEmployees ไว้ทั้งที่ตาราง hr_employee ยังว่าง ผลคือ
+// "หน้านับสต๊อก/ขอเบิก" ที่ใช้ action เดียวกันดึงรายชื่อผู้เบิก-ผู้นับ กลายเป็นดรอปดาวน์ว่าง
+// ใช้งานไม่ได้ทั้งหน้า — action นี้ไม่ได้ใช้แค่หน้าตารางงาน ต้องดูให้ครบก่อนเปิด
+//
+// ลำดับที่ถูกต้องคือ: ย้ายข้อมูลให้เสร็จ -> ตรวจว่าข้อมูลครบ -> ค่อยเปิดทีละ action
+// เปิดโดยใส่ชื่อ action กลับเข้าลิสต์นี้ แล้ว deploy (ดู docs/hr-sql-migration.md)
 const SQL_ACTIONS = new Set([
-  'getScheduleEmployees',
-  'getBranchStats',
-  'getDailySales',
-  'getHistoryData',
-  'saveTimesheet',
-  'updateOTApprovalBulk',
-  'updateWorkStation',
+  // 'getScheduleEmployees',   // ใช้ที่หน้าตารางงาน + หน้านับสต๊อก/ขอเบิก
+  // 'getBranchStats',
+  // 'getDailySales',
+  // 'getHistoryData',
+  // 'saveTimesheet',
+  // 'updateOTApprovalBulk',
+  // 'updateWorkStation',
 ]);
 
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
