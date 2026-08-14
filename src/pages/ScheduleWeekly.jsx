@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
-import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Printer } from 'lucide-react';
+import { apiCall, errMessage } from '../services/api';
+import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 
@@ -20,13 +20,43 @@ function formatDateLocal(date) {
   return `${year}-${month}-${day}`;
 }
 
-// วันหยุดนักขัตฤกษ์ ปี 2026
-const publicHolidays = [
-  '2026-01-01', '2026-03-03', '2026-04-13', '2026-04-14',
-  '2026-04-15', '2026-05-01', '2026-06-03', '2026-07-28',
-  '2026-08-12', '2026-10-13', '2026-10-23', '2026-12-05',
-  '2026-12-31'
+// วันหยุดนักขัตฤกษ์
+// เดิม hardcode ไว้เฉพาะปี 2026 พอขึ้นปีใหม่ดาวจะหายทั้งปีโดยไม่มีใครรู้
+// - วันที่ตายตัวทุกปี เก็บเป็น MM-DD ใช้ได้ตลอดไม่ต้องแก้โค้ด
+// - วันพระใหญ่ยึดจันทรคติ เลื่อนทุกปี ต้องเติมรายปีเอง ปีไหนยังไม่เติมก็แค่ไม่ขึ้นดาว ไม่พัง
+const FIXED_HOLIDAYS_MMDD = [
+  '01-01', '04-13', '04-14', '04-15', '05-01',
+  '07-28', '08-12', '10-13', '10-23', '12-05', '12-31'
 ];
+const LUNAR_HOLIDAYS_BY_YEAR = {
+  2026: ['2026-03-03', '2026-06-03']
+};
+
+function isPublicHoliday(dateStr) {
+  if (!dateStr || dateStr.length < 10) return false;
+  if (FIXED_HOLIDAYS_MMDD.includes(dateStr.slice(5, 10))) return true;
+  return (LUNAR_HOLIDAYS_BY_YEAR[dateStr.slice(0, 4)] || []).includes(dateStr);
+}
+
+const EMPTY_CELL = {
+  isStop: false,
+  checkInHr: '', checkInMin: '',
+  checkOutHr: '', checkOutMin: '',
+  breakDur: '', breakStartHr: '', breakStartMin: '',
+  ot: '', otAccum: '',
+  leave1: '', leave2: '',
+  hrLeave: '', useAccum: '',
+  otherNote: ''
+};
+
+// ช่องที่ไม่มีข้อมูลอะไรเหลือแล้ว = สั่งล้างข้อมูลของวันนั้น
+function isCellCleared(data) {
+  if (!data) return true;
+  const ota = data.otAccum || '0';
+  return !data.checkInHr && !data.checkOutHr && !data.isStop &&
+    !data.leave1 && !data.leave2 && (!ota || ota === '0') &&
+    !data.hrLeave && !data.useAccum && !data.otherNote;
+}
 
 function formatNumber(num) {
   const v = parseFloat(num);
@@ -48,9 +78,16 @@ export default function ScheduleWeekly() {
   const [weekStartDate, setWeekStartDate] = useState(getStartOfWeek(new Date()));
   const [scheduleData, setScheduleData] = useState({});
   const [isSaving, setIsSaving] = useState(false);
+  // เก็บเฉพาะช่องที่ถูกแก้จริงในรอบนี้ — เดิมกดบันทึกทีเดียวส่งทั้งสัปดาห์ รวมช่องที่โหลดมาจากประวัติ
+  // ทำให้ชีทมีแถวซ้ำเพิ่มขึ้นทุกครั้งที่กดบันทึก
+  const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
+  const hasUnsaved = dirtyKeys.size > 0;
 
   // Helpers for options
-  const hrOpts = Array.from({length: 17}, (_, i) => String(i + 8).padStart(2, '0'));
+  // เวลาเข้า/เบรค 00-23 และเวลาออกถึง 24 — เดิมมีแค่ 08-24 ทำให้กะที่เลิกหลังเที่ยงคืน
+  // (ระบบคำนวณออกมาเป็น 01:20) ไม่ตรงกับ option ไหนเลย select เลยโชว์เป็นช่องว่าง
+  const hrOpts = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+  const hrOutOpts = Array.from({ length: 25 }, (_, i) => String(i).padStart(2, '0'));
   const minOpts = ['00', '10', '20', '30', '40', '50'];
   const breakOpts = [
     { value: '0', label: 'ไม่เบรค' },
@@ -65,16 +102,7 @@ export default function ScheduleWeekly() {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeCell, setActiveCell] = useState(null);
-  const [cellData, setCellData] = useState({
-    isStop: false,
-    checkInHr: '', checkInMin: '',
-    checkOutHr: '', checkOutMin: '',
-    breakDur: '', breakStartHr: '', breakStartMin: '',
-    ot: '', otAccum: '',
-    leave1: '', leave2: '',
-    hrLeave: '', useAccum: '',
-    otherNote: ''
-  });
+  const [cellData, setCellData] = useState(EMPTY_CELL);
 
   // Auto calculate checkOut time
   useEffect(() => {
@@ -124,6 +152,28 @@ export default function ScheduleWeekly() {
   ]);
 
 
+  // ปิด modal ด้วยปุ่ม ESC
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const onKeyDown = (e) => { if (e.key === 'Escape') setIsModalOpen(false); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isModalOpen]);
+
+  // เตือนก่อนปิดแท็บ/รีเฟรช ถ้ายังมีช่องที่แก้แล้วไม่ได้กดบันทึก
+  useEffect(() => {
+    if (!hasUnsaved) return;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsaved]);
+
+  // ยืนยันก่อนทิ้งข้อมูลที่ยังไม่บันทึก (ตอนเปลี่ยนสัปดาห์/เปลี่ยนสาขา)
+  const confirmDiscard = () => {
+    if (!hasUnsaved) return true;
+    return window.confirm('ยังมีช่องที่แก้ไขแล้วแต่ยังไม่ได้กดบันทึกตาราง ถ้าไปต่อข้อมูลจะหาย ต้องการไปต่อหรือไม่?');
+  };
+
   const exportScheduleToImage = async () => {
     const b = effectiveBranch;
     if (!b || employees.length === 0) {
@@ -135,17 +185,30 @@ export default function ScheduleWeekly() {
     if (!tableEl) return;
     
     const loadingToast = toast.loading('กำลังสร้างรูปภาพ...');
-    
+
+    // การ์ดครอบตารางตั้ง overflow-hidden ไว้ ถ้าไม่ปลดด้วย ภาพที่ได้จะโดนตัดเท่าที่มองเห็นบนจอ
+    const cardEl = tableEl.parentElement;
+    const saved = [tableEl, cardEl].filter(Boolean).map(el => ({
+      el,
+      maxHeight: el.style.maxHeight,
+      overflow: el.style.overflow,
+      width: el.style.width,
+    }));
+    const restore = () => saved.forEach(s => {
+      s.el.style.maxHeight = s.maxHeight;
+      s.el.style.overflow = s.overflow;
+      s.el.style.width = s.width;
+    });
+
+    let titleEl;
     try {
-      const originalMaxHeight = tableEl.style.maxHeight;
-      const originalOverflow = tableEl.style.overflow;
-      const originalWidth = tableEl.style.width;
-      
-      tableEl.style.maxHeight = 'none';
-      tableEl.style.overflow = 'visible';
+      saved.forEach(s => {
+        s.el.style.maxHeight = 'none';
+        s.el.style.overflow = 'visible';
+      });
       tableEl.style.width = tableEl.scrollWidth + 'px';
-      
-      const titleEl = document.createElement('h4');
+
+      titleEl = document.createElement('h4');
       titleEl.className = 'text-center mb-3 mt-2 font-bold text-gray-800 text-lg';
       
       const end = new Date(weekStartDate);
@@ -171,28 +234,33 @@ export default function ScheduleWeekly() {
           clonedDoc.body.style.setProperty('color', '#111111', 'important');
         },
       });
-      
-      tableEl.style.maxHeight = originalMaxHeight;
-      tableEl.style.overflow = originalOverflow;
-      tableEl.style.width = originalWidth;
-      titleEl.remove();
-      
+
       const link = document.createElement('a');
       link.download = `ตารางงาน_${b}_${weekStr.replace(/ /g, '_')}.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
-      
+
       toast.success('บันทึกรูปภาพสำเร็จ', { id: loadingToast });
     } catch (err) {
       console.error(err);
       toast.error('เกิดข้อผิดพลาดในการสร้างรูปภาพ', { id: loadingToast });
+    } finally {
+      // ต้องคืนค่าสไตล์เสมอ ไม่งั้นถ้า html2canvas พัง ตารางจะค้างในสภาพกางเต็มหน้าจอ
+      restore();
+      if (titleEl) titleEl.remove();
     }
   };
 
   const changeWeek = (weeks) => {
+    if (!confirmDiscard()) return;
     const newDate = new Date(weekStartDate);
     newDate.setDate(newDate.getDate() + (weeks * 7));
     setWeekStartDate(newDate);
+  };
+
+  const changeBranch = (branch) => {
+    if (!confirmDiscard()) return;
+    setSelectedBranch(branch);
   };
 
   const daysOfWeek = Array.from({ length: 7 }, (_, i) => {
@@ -201,6 +269,7 @@ export default function ScheduleWeekly() {
     const dateStr = formatDateLocal(d);
     return {
       dateStr,
+      isHoliday: isPublicHoliday(dateStr),
       dayName: d.toLocaleDateString('th-TH', { weekday: 'short' }),
       shortDate: `${d.getDate()} ${d.toLocaleDateString('th-TH', { month: 'short' })}`
     };
@@ -210,8 +279,8 @@ export default function ScheduleWeekly() {
   useEffect(() => {
     if (isAll && branches.length === 0) {
       apiCall('getBranches', {})
-        .then(res => { if (res.status === 'success') setBranches(res.data || []); })
-        .catch(() => {});
+        .then(res => setBranches(res.data || []))
+        .catch(err => toast.error(errMessage(err, 'โหลดรายชื่อสาขาไม่สำเร็จ')));
     }
   }, [isAll]);
 
@@ -220,28 +289,25 @@ export default function ScheduleWeekly() {
       setLoading(true);
       const branch = effectiveBranch || '';
 
+      // หมายเหตุ: apiCall จะ throw เมื่อเซิร์ฟเวอร์ตอบว่าไม่สำเร็จ (ไม่ได้ return status ให้เช็ค)
+      // จึงต้องอ่านสาเหตุจริงจาก errMessage(err) ไม่ใช่โยนข้อความรวมๆ ทับจนหาต้นเหตุไม่เจอ
+
       // 1) พนักงาน (สำคัญสุด) — โหลดแยกอิสระ ไม่ให้ API อื่นล้มแล้วทำพนักงานหาย
       try {
         const empRes = await apiCall('getScheduleEmployees', { branch });
-        setEmployees(empRes.status === 'success' ? (empRes.data || []) : []);
-        if (empRes.status !== 'success') toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+        setEmployees(empRes.data || []);
       } catch (err) {
         setEmployees([]);
-        toast.error('ไม่สามารถโหลดข้อมูลพนักงานได้');
+        toast.error(errMessage(err, 'ไม่สามารถโหลดข้อมูลพนักงานได้'));
       }
 
       // 2) เป้าขาย / ค่าแรง Max — ไม่บังคับ ถ้าล้มต้องไม่บล็อกการแสดงตาราง
       try {
         const statsRes = await apiCall('getBranchStats', { branch });
-        if (statsRes.status === 'success') {
-          const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
-          const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
-          setWeeklyTarget(dTarget * 7);
-          setWeeklyMaxWage(dMax * 7);
-        } else {
-          setWeeklyTarget(0);
-          setWeeklyMaxWage(0);
-        }
+        const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
+        const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
+        setWeeklyTarget(dTarget * 7);
+        setWeeklyMaxWage(dMax * 7);
       } catch (err) {
         setWeeklyTarget(0);
         setWeeklyMaxWage(0);
@@ -259,49 +325,47 @@ export default function ScheduleWeekly() {
           endDate: formatDateLocal(end)
         });
 
-        if (schedRes.status === 'success') {
-          const newScheduleData = {};
-          const sortedHistory = (schedRes.data || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        const newScheduleData = {};
+        const sortedHistory = (schedRes.data || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-          sortedHistory.forEach(record => {
-            if (record.otherNote === 'ล้างข้อมูล') {
-               delete newScheduleData[`${record.hrCode}_${record.workDate}`];
-               return;
-            }
+        sortedHistory.forEach(record => {
+          if (record.otherNote === 'ล้างข้อมูล') {
+            delete newScheduleData[`${record.hrCode}_${record.workDate}`];
+            return;
+          }
 
-            let brDur = '';
-            if (record.breakTime === 'ไม่เบรค') {
-              brDur = '0';
-            } else if (record.breakTime && String(record.breakTime).includes('ชม.')) {
-              brDur = String(parseFloat(record.breakTime) * 60);
-            }
+          let brDur = '';
+          if (record.breakTime === 'ไม่เบรค') {
+            brDur = '0';
+          } else if (record.breakTime && String(record.breakTime).includes('ชม.')) {
+            brDur = String(parseFloat(record.breakTime) * 60);
+          }
 
-            newScheduleData[`${record.hrCode}_${record.workDate}`] = {
-              isStop: record.status === 'หยุด',
-              checkInHr: record.checkIn ? record.checkIn.split(':')[0] : '',
-              checkInMin: record.checkIn ? record.checkIn.split(':')[1] : '',
-              checkOutHr: record.checkOut ? record.checkOut.split(':')[0] : '',
-              checkOutMin: record.checkOut ? record.checkOut.split(':')[1] : '',
-              breakDur: brDur,
-              breakStartHr: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[0] : '',
-              breakStartMin: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[1] : '',
-              ot: String(record.ot || ''),
-              otAccum: String(record.otAccumulated || ''),
-              leave1: record.leaveNote || '',
-              leave2: record.unpaidLeave || '',
-              hrLeave: String(record.hourlyLeave || ''),
-              useAccum: String(record.useAccumulatedHours || ''),
-              otherNote: record.otherNote || ''
-            };
-          });
+          newScheduleData[`${record.hrCode}_${record.workDate}`] = {
+            isStop: record.status === 'หยุด',
+            checkInHr: record.checkIn ? record.checkIn.split(':')[0] : '',
+            checkInMin: record.checkIn ? record.checkIn.split(':')[1] : '',
+            checkOutHr: record.checkOut ? record.checkOut.split(':')[0] : '',
+            checkOutMin: record.checkOut ? record.checkOut.split(':')[1] : '',
+            breakDur: brDur,
+            breakStartHr: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[0] : '',
+            breakStartMin: record.breakTimeRange ? record.breakTimeRange.split('-')[0].split(':')[1] : '',
+            ot: String(record.ot || ''),
+            otAccum: String(record.otAccumulated || ''),
+            leave1: record.leaveNote || '',
+            leave2: record.unpaidLeave || '',
+            hrLeave: String(record.hourlyLeave || ''),
+            useAccum: String(record.useAccumulatedHours || ''),
+            otherNote: record.otherNote || ''
+          };
+        });
 
-          setScheduleData(newScheduleData);
-        } else {
-          setScheduleData({});
-        }
+        setScheduleData(newScheduleData);
       } catch (err) {
         setScheduleData({});
+        toast.error(errMessage(err, 'โหลดตารางของสัปดาห์นี้ไม่สำเร็จ'));
       } finally {
+        setDirtyKeys(new Set());
         setLoading(false);
       }
     };
@@ -311,32 +375,48 @@ export default function ScheduleWeekly() {
       // user สิทธิ์ all ที่ยังไม่ได้เลือกสาขา — เคลียร์ข้อมูล รอเลือกสาขาก่อน
       setEmployees([]);
       setScheduleData({});
+      setDirtyKeys(new Set());
       setLoading(false);
     }
   }, [effectiveBranch, weekStartDate]);
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;
-    const existingData = scheduleData[key] || {
-      isStop: false,
-      checkInHr: '', checkInMin: '',
-      checkOutHr: '', checkOutMin: '',
-      breakDur: '', breakStartHr: '', breakStartMin: '',
-      ot: '', otAccum: '',
-      leave1: '', leave2: '',
-      hrLeave: '', useAccum: '',
-      otherNote: ''
-    };
     setActiveCell({ ...emp, dateStr, key });
-    setCellData(existingData);
+    setCellData(scheduleData[key] || EMPTY_CELL);
     setIsModalOpen(true);
   };
 
+  const markDirty = (key) => {
+    setDirtyKeys(prev => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
+
   const saveCellData = () => {
+    // ป้ายบอกว่าเวลาเข้าจำเป็น แต่เดิมกดตกลงผ่านได้โดยไม่กรอก
+    const cleared = isCellCleared(cellData);
+    if (!cleared && !cellData.isStop && !cellData.leave1 && !cellData.leave2 && !cellData.checkInHr) {
+      toast.error('กรุณาระบุเวลาเข้า หรือเลือกว่าเป็นวันหยุด/วันลา');
+      return;
+    }
     setScheduleData(prev => ({
       ...prev,
       [activeCell.key]: cellData
     }));
+    markDirty(activeCell.key);
+    setIsModalOpen(false);
+  };
+
+  // ล้างข้อมูลของช่องนี้ — เก็บช่องว่างไว้ใน state เพื่อให้ตอนบันทึกส่ง 'ล้างข้อมูล' ไปลบของเดิมในชีท
+  const clearCellData = () => {
+    setScheduleData(prev => ({
+      ...prev,
+      [activeCell.key]: { ...EMPTY_CELL }
+    }));
+    markDirty(activeCell.key);
     setIsModalOpen(false);
   };
 
@@ -351,18 +431,10 @@ export default function ScheduleWeekly() {
     const l1 = data.leave1 || '';
     const l2 = data.leave2 || '';
     const hl = data.hrLeave || '';
-    const ua = data.useAccum || '';
-    const ota = data.otAccum || '0';
-    const noteInput = data.otherNote || '';
     const finalStop = data.isStop || (l1 !== '') || (l2 !== '');
     const brDur = data.breakDur;
-    
-    let isCleared = false;
-    if (!ci && !co && !finalStop && !l1 && !l2 && (!ota || ota === '0') && !hl && !ua && !noteInput) {
-      isCleared = true;
-    }
 
-    if (isCleared) {
+    if (isCellCleared(data)) {
       if (empType === 'F/T') wage = rate; else wage = 0;
     } else {
       if (l2 !== '') {
@@ -419,7 +491,7 @@ export default function ScheduleWeekly() {
       const baseWage = parseFloat(emp.dailyWage) || 0;
       dates.forEach(ds => {
         const data = scheduleData[`${emp.hrCode}_${ds}`];
-        if (data && data.otherNote !== 'ล้างข้อมูล') {
+        if (data && !isCellCleared(data)) {
           const w = calculateCellWage(emp, data);
           const isStop = data.isStop || data.leave1 || data.leave2;
           if (!isStop && data.checkInHr) {
@@ -446,19 +518,24 @@ export default function ScheduleWeekly() {
   }, [scheduleData, employees, weeklyTarget, weekStartDate]);
 
   const handleSaveSchedule = async () => {
-    if (Object.keys(scheduleData).length === 0) {
-      toast.error('ยังไม่มีข้อมูลให้บันทึก');
+    if (dirtyKeys.size === 0) {
+      toast.error('ยังไม่มีการแก้ไขที่ต้องบันทึก');
       return;
     }
 
     setIsSaving(true);
     try {
       const logs = [];
-      Object.entries(scheduleData).forEach(([key, data]) => {
-        // Find the employee by matching the start of the key, since key is hrCode + '_' + dateStr
-        const emp = employees.find(e => key.startsWith(e.hrCode + '_'));
-        const dateStr = emp ? key.replace(emp.hrCode + '_', '') : '';
-        
+      // ส่งเฉพาะช่องที่แก้ในรอบนี้ ไม่ส่งช่องที่โหลดมาจากประวัติแล้วไม่ได้แตะ (กันแถวซ้ำในชีท)
+      dirtyKeys.forEach(key => {
+        const data = scheduleData[key];
+        if (!data) return;
+        // key = `${hrCode}_${YYYY-MM-DD}` — ตัดจากท้ายเสมอ
+        // เดิมใช้ startsWith(hrCode + '_') ซึ่งจับผิดคนได้ถ้ามีรหัสที่เป็นคำนำหน้าของอีกรหัส (เช่น 12 กับ 123)
+        const dateStr = key.slice(-10);
+        const hrCode = key.slice(0, -11);
+        const emp = employees.find(e => String(e.hrCode) === hrCode);
+
         if (emp) {
           const ci = data.checkInHr ? `${data.checkInHr}:${data.checkInMin || '00'}` : '';
           const co = data.checkOutHr ? `${data.checkOutHr}:${data.checkOutMin || '00'}` : '';
@@ -482,10 +559,7 @@ export default function ScheduleWeekly() {
             brRange = `${bs}-${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`;
           }
 
-          let isCleared = false;
-          if (!ci && !co && !finalStop && !l1 && !l2 && (!ota || ota === '0') && !hl && !ua && !noteInput) {
-            isCleared = true;
-          }
+          const isCleared = isCellCleared(data);
 
           let wage = calculateCellWage(emp, data);
 
@@ -518,23 +592,19 @@ export default function ScheduleWeekly() {
         }
       });
 
-      // Filter out 'ล้างข้อมูล' if there's no existing entry we are actually clearing
-      // In this case we just send everything because apps-script will handle 'ล้างข้อมูล' correctly (actually apps-script appending won't delete old data right now, but it matches the new structure)
-      
       if (logs.length === 0) {
         toast.error('รหัสพนักงานไม่ตรงกัน หรือไม่พบข้อมูลที่จะบันทึก');
         setIsSaving(false);
         return;
       }
 
-      const res = await apiCall('saveTimesheet', { logs });
-      if (res.status === 'success') {
-        toast.success('บันทึกตารางงานเรียบร้อยแล้ว');
-      } else {
-        toast.error('บันทึกไม่สำเร็จ: ' + res.message);
-      }
+      // ไม่ต้องส่งชื่อคนบันทึกเอง — apiCall แนบ user ที่ล็อกอินไว้ไปให้อัตโนมัติ
+      // แล้วฝั่ง SQL เก็บลง hr_timesheet_log ให้ (Apps Script เดิมไม่ได้เก็บไว้)
+      await apiCall('saveTimesheet', { logs });
+      toast.success(`บันทึกตารางงานเรียบร้อยแล้ว (${logs.length} รายการ)`);
+      setDirtyKeys(new Set());
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการบันทึก');
+      toast.error(errMessage(err, 'เกิดข้อผิดพลาดในการบันทึก'));
     } finally {
       setIsSaving(false);
     }
@@ -543,9 +613,9 @@ export default function ScheduleWeekly() {
   // สร้างการ์ดกะในแต่ละช่อง (เลียนแบบดีไซน์เดิม: badge ประเภทกะ/OT/ลา/นักขัตฤกษ์)
   const renderCell = (emp, dateStr) => {
     const cell = scheduleData[`${emp.hrCode}_${dateStr}`];
-    const isHoliday = publicHolidays.includes(dateStr);
+    const isHoliday = isPublicHoliday(dateStr);
 
-    if (!cell) {
+    if (!cell || isCellCleared(cell)) {
       return (
         <div className="min-h-[55px] rounded-md border border-dashed border-gray-300 text-gray-400 flex items-center justify-center text-xs gap-1 hover:border-purple-400 hover:text-purple-600 transition-colors">
           <span className="text-base leading-none">+</span> เพิ่มกะ
@@ -623,7 +693,7 @@ export default function ScheduleWeekly() {
             {isAll && (
               <select
                 value={selectedBranch}
-                onChange={(e) => setSelectedBranch(e.target.value)}
+                onChange={(e) => changeBranch(e.target.value)}
                 className="px-3 py-2 border border-gray-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-purple-400 outline-none text-gray-700 min-w-[160px]"
               >
                 <option value="">-- เลือกสาขา --</option>
@@ -645,12 +715,25 @@ export default function ScheduleWeekly() {
             </div>
             
             <button
+              onClick={exportScheduleToImage}
+              disabled={!effectiveBranch || employees.length === 0}
+              title="บันทึกตารางเป็นรูปภาพ"
+              className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium disabled:opacity-50"
+            >
+              <Download className="w-5 h-5" />
+              บันทึกรูปภาพ
+            </button>
+
+            <button
               onClick={handleSaveSchedule}
               disabled={isSaving || !effectiveBranch}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50"
+              className="relative flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
               บันทึกตาราง
+              {hasUnsaved && (
+                <span className="ml-1 bg-white text-purple-700 rounded-full px-1.5 text-xs font-bold">{dirtyKeys.size}</span>
+              )}
             </button>
           </div>
         </div>
@@ -699,16 +782,15 @@ export default function ScheduleWeekly() {
             ไม่พบข้อมูลพนักงานที่ทำงานในสาขานี้
           </div>
         ) : (
-          <div className="overflow-auto flex-1">
+          <div id="weekly-schedule-table-container" className="overflow-auto flex-1 bg-white">
             <table className="w-full text-sm text-left border-collapse">
               <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="px-4 py-3 border-b border-r bg-gray-50 min-w-[200px] sticky left-0 z-20">พนักงาน | ตำแหน่ง</th>
                   {daysOfWeek.map(d => {
-                    const isHoliday = publicHolidays.includes(d.dateStr);
                     return (
                       <th key={d.dateStr} className="px-2 py-3 border-b border-r text-center min-w-[120px] align-top">
-                        <div className="font-bold">{d.dayName}{isHoliday && <span title="วันนักขัตฤกษ์"> ⭐</span>}</div>
+                        <div className="font-bold">{d.dayName}{d.isHoliday && <span title="วันนักขัตฤกษ์"> ⭐</span>}</div>
                         <div className="text-gray-500 font-normal">{d.shortDate}</div>
                         <div className="mt-1 inline-block bg-emerald-500 text-white rounded px-1.5 py-0.5 text-[11px] font-normal">฿ {formatNumber(summary.dailyWage?.[d.dateStr] || 0)}</div>
                         <div className="mt-1"><span className="inline-block bg-cyan-100 text-cyan-700 rounded px-1.5 py-0.5 text-[11px] font-normal">👤 {summary.dailyCount?.[d.dateStr] || 0} คน</span></div>
@@ -747,8 +829,11 @@ export default function ScheduleWeekly() {
 
       {/* Edit Cell Modal */}
       {isModalOpen && activeCell && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
               <h3 className="font-bold text-gray-800">
                 ลงเวลา: {activeCell.name}
@@ -803,7 +888,7 @@ export default function ScheduleWeekly() {
                           onChange={(e) => setCellData({...cellData, checkOutHr: e.target.value})}
                         >
                           <option value="">-</option>
-                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                          {hrOutOpts.map(h => <option key={h} value={h}>{h}</option>)}
                         </select>
                         <span className="font-bold">:</span>
                         <select 
@@ -960,7 +1045,15 @@ export default function ScheduleWeekly() {
             </div>
 
             <div className="p-3 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
-              <button 
+              <button
+                onClick={clearCellData}
+                title="ล้างข้อมูลของวันนี้"
+                className="mr-auto flex items-center gap-1 px-3 py-1.5 text-red-600 hover:bg-red-50 rounded transition-colors text-sm font-medium"
+              >
+                <Trash2 className="w-4 h-4" />
+                ล้างข้อมูลช่องนี้
+              </button>
+              <button
                 onClick={() => setIsModalOpen(false)}
                 className="px-4 py-1.5 text-gray-600 hover:bg-gray-200 rounded transition-colors text-sm font-medium"
               >

@@ -1,6 +1,46 @@
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
 // ---------------------------------------------------------------------------
+// การย้ายจาก Google Apps Script ไป SQL Server (เครื่อง 203.154.185.48)
+// action ที่อยู่ในลิสต์นี้จะถูกส่งไปที่ /api/schedule (ต่อ MS SQL ตรง) แทน Apps Script
+// ที่เหลือยังวิ่งไปชีทเหมือนเดิม — ย้ายทีละกลุ่มได้โดยไม่ต้องแก้หน้าเว็บสักหน้า
+// รูปแบบ request/response เหมือนกันทั้งสองทาง หน้าเว็บจึงไม่รู้ว่าข้อมูลมาจากไหน
+//
+// ยังไม่ย้าย getBranches: อีก 7 หน้าที่ไม่เกี่ยวกับตารางงานใช้อยู่ (และบางหน้าอ่าน outletId ด้วย)
+// รอย้ายพร้อมกลุ่มของหน้านั้นๆ จะได้ทดสอบพร้อมกัน — /api/schedule รองรับ action นี้ไว้แล้ว
+// ---------------------------------------------------------------------------
+const SQL_ENDPOINT = '/api/schedule';
+const SQL_ACTIONS = new Set([
+  'getScheduleEmployees',
+  'getBranchStats',
+  'getDailySales',
+  'getHistoryData',
+  'saveTimesheet',
+  'updateOTApprovalBulk',
+  'updateWorkStation',
+]);
+
+export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
+
+// ---------------------------------------------------------------------------
+// ผู้ใช้ที่ล็อกอินไว้ตั้งแต่แรก — ฝั่ง SQL ไม่มีการล็อกอินซ้อนอีกชั้น
+// login ยังทำที่เดิม (Apps Script) แล้วเก็บ user ไว้ที่ localStorage 'hr_user'
+// (ดู src/contexts/AuthContext.jsx) ทุกคำสั่งที่วิ่งไป SQL จะแนบ user คนนี้ไปด้วยอัตโนมัติ
+// เพื่อใช้เป็น "คนที่กดบันทึก" และใช้จำกัดสาขาฝั่งเซิร์ฟเวอร์ หน้าเว็บจึงไม่ต้องส่งเอง
+// ---------------------------------------------------------------------------
+const sessionUser = () => {
+  try {
+    const raw = localStorage.getItem('hr_user');
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    if (!u || !u.username) return null;
+    return { username: String(u.username), branch: String(u.branch || ''), name: String(u.name || '') };
+  } catch {
+    return null; // localStorage อ่านไม่ได้/ข้อมูลเสีย — ปล่อยให้เซิร์ฟเวอร์ปฏิเสธเอง
+  }
+};
+
+// ---------------------------------------------------------------------------
 // ทำไมถึงชอบขึ้น "ติดต่อเซิร์ฟเวอร์ไม่ได้"
 // 1) Google Apps Script จำกัดจำนวน execution ที่วิ่งพร้อมกันต่อบัญชี ถ้าหลายสาขายิงพร้อมกัน
 //    (หน้าเดียวยิง 2-5 request รวด) จะโดนคิว/โดนปฏิเสธ แล้วตอบกลับเป็น "หน้า HTML" ไม่ใช่ JSON
@@ -56,13 +96,17 @@ const release = () => { active--; pump(); };
 const requestOnce = async (action, payload, timeoutMs) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const toSql = SQL_ACTIONS.has(action);
 
   let response;
   try {
-    response = await fetch(SCRIPT_URL, {
+    response = await fetch(toSql ? SQL_ENDPOINT : SCRIPT_URL, {
       method: 'POST',
-      // ไม่ใส่ Content-Type ตั้งใจ: ให้เป็น text/plain เพื่อไม่ให้เบราว์เซอร์ยิง preflight (GAS ไม่รองรับ)
-      body: JSON.stringify({ action, ...payload }),
+      // Apps Script: ไม่ใส่ Content-Type ตั้งใจ ให้เป็น text/plain เบราว์เซอร์จะได้ไม่ยิง preflight (GAS ไม่รองรับ)
+      // /api/schedule: เป็น origin เดียวกัน ไม่มี preflight อยู่แล้ว จึงส่ง JSON ตรงๆ ให้ Vercel parse body ให้เลย
+      headers: toSql ? { 'Content-Type': 'application/json' } : undefined,
+      // _user = คนที่ล็อกอินไว้ตั้งแต่แรก แนบไปให้ฝั่ง SQL เอง จะได้ไม่ต้องล็อกอินซ้อนอีกชั้น
+      body: JSON.stringify(toSql ? { action, ...payload, _user: sessionUser() } : { action, ...payload }),
       redirect: 'follow', // GAS ตอบ 302 ไป script.googleusercontent.com เสมอ
       signal: controller.signal,
     });

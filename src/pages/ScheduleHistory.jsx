@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, errMessage } from '../services/api';
 import { Loader2, Search, CheckCircle, ChevronLeft, ChevronRight, Calendar, Users, DollarSign, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+// แถวหนึ่งของประวัติ = พนักงานหนึ่งคน ยึด hrCode เป็นหลัก
+// เดิมใช้ "ชื่อ" เป็นคีย์ พนักงานชื่อซ้ำกันจะติ๊กอนุมัติ OT พร้อมกันทั้งคู่
+const rowKey = (item) => String(item.hrCode || item.name || '');
+
 export default function ScheduleHistory() {
   const { user } = useAuth();
+  const isAll = user?.branch?.toLowerCase() === 'all';
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   
@@ -24,15 +29,24 @@ export default function ScheduleHistory() {
   // Record hrCode to boolean
   const [otApprovals, setOtApprovals] = useState({});
 
+  // โหลดรายชื่อสาขาเฉพาะ user สิทธิ์ all — สาขาอื่นถูกล็อกไว้ที่สาขาตัวเอง
+  // เดิมทุกคนเลือกสาขาไหนก็ได้ = เปิดดูค่าแรง/OT ของสาขาอื่นได้
   useEffect(() => {
-    const fetchBranches = async () => {
-      const res = await apiCall('getBranchList');
-      if (res.status === 'success') {
-        setBranches(res.data);
-      }
-    };
-    fetchBranches();
-  }, []);
+    if (!isAll) {
+      setSelectedBranch(user?.branch || '');
+      return;
+    }
+    // ใช้ getBranches ให้ตรงกับหน้าอื่นทั้งระบบ (เดิมหน้านี้เรียก getBranchList อยู่หน้าเดียว)
+    apiCall('getBranches', {})
+      .then(res => {
+        const list = (res.data || [])
+          .map(b => (typeof b === 'string' ? b : String(b?.name || '')).trim())
+          .filter(Boolean);
+        setBranches([...new Set(list)].sort());
+      })
+      // เดิมไม่มี catch — apiCall throw แล้วกลายเป็น unhandled rejection ดรอปดาวน์ว่างโดยไม่มีอะไรแจ้ง
+      .catch(err => toast.error(errMessage(err, 'โหลดรายชื่อสาขาไม่สำเร็จ')));
+  }, [isAll, user?.branch]);
 
   const adjustDate = (days) => {
     const d = new Date(historyDate);
@@ -52,48 +66,30 @@ export default function ScheduleHistory() {
     }
     
     setLoading(true);
-    try {
-      // Fetch History Data
-      const res = await apiCall('getHistoryData', {
-        searchDate: historyDate,
-        branch: selectedBranch
-      });
-      
-      // Fetch Daily Sales
-      const salesRes = await apiCall('getDailySales', {
-        searchDateStr: historyDate,
-        searchBranch: selectedBranch
-      });
+    // ยอดขายเป็นข้อมูลเสริม ถ้าล้มต้องไม่ทำให้ประวัติทั้งหน้าหาย จึงแยกผลลัพธ์กัน
+    const [histResult, salesResult] = await Promise.allSettled([
+      apiCall('getHistoryData', { searchDate: historyDate, branch: selectedBranch }),
+      apiCall('getDailySales', { searchDateStr: historyDate, searchBranch: selectedBranch })
+    ]);
 
-      if (salesRes.status === 'success') {
-        setDailySales(salesRes.data.sales);
-      } else {
-        setDailySales(0);
-      }
+    setDailySales(salesResult.status === 'fulfilled' ? (salesResult.value.data?.sales || 0) : 0);
 
-      if (res.status === 'success') {
-        // Filter out records that are completely empty / 'ล้างข้อมูล'
-        const validData = res.data.filter(r => r.otherNote !== 'ล้างข้อมูล');
-        
-        // Prepare local OT approval state
-        const initialApprovals = {};
-        validData.forEach(item => {
-          // Check if approver is set in the data (meaning it is already approved)
-          initialApprovals[item.name] = !!item.otApprover;
-        });
-        
-        setHistoryData(validData);
-        setOtApprovals(initialApprovals);
-      } else {
-        toast.error('เกิดข้อผิดพลาดในการดึงประวัติ');
-        setHistoryData([]);
-      }
-    } catch (err) {
-      console.error(err);
-      toast.error('การเชื่อมต่อขัดข้อง');
-    } finally {
-      setLoading(false);
+    if (histResult.status === 'fulfilled') {
+      // Filter out records that are completely empty / 'ล้างข้อมูล'
+      const validData = (histResult.value.data || []).filter(r => r.otherNote !== 'ล้างข้อมูล');
+
+      // ติ๊กไว้ล่วงหน้าถ้ามีชื่อผู้อนุมัติอยู่แล้ว
+      const initialApprovals = {};
+      validData.forEach(item => { initialApprovals[rowKey(item)] = !!item.otApprover; });
+
+      setHistoryData(validData);
+      setOtApprovals(initialApprovals);
+    } else {
+      // แสดงสาเหตุจริงจากเซิร์ฟเวอร์ ไม่ใช่ 'การเชื่อมต่อขัดข้อง' รวมๆ ที่กลบต้นเหตุ
+      toast.error(errMessage(histResult.reason, 'เกิดข้อผิดพลาดในการดึงประวัติ'));
+      setHistoryData([]);
     }
+    setLoading(false);
   };
 
   const saveOTApproval = async () => {
@@ -111,35 +107,31 @@ export default function ScheduleHistory() {
       const updates = historyData
         .filter(item => parseFloat(item.ot) > 0)
         .map(item => ({
+          hrCode: item.hrCode || '',
           name: item.name,
-          isApproved: otApprovals[item.name]
+          isApproved: !!otApprovals[rowKey(item)]
         }));
-        
-      const res = await apiCall('updateOTApprovalBulk', {
+
+      // ชื่อผู้อนุมัติมาจาก user ที่ล็อกอินไว้ (apiCall แนบไปให้) ไม่ได้ส่งจากหน้าเว็บแล้ว
+      await apiCall('updateOTApprovalBulk', {
         dateStr: historyDate,
         branch: selectedBranch,
-        updates: updates,
-        approverName: user?.username || 'Admin'
+        updates: updates
       });
-      
-      if (res.status === 'success') {
-        toast.success('บันทึกการอนุมัติ OT เรียบร้อย');
-        searchHistory(); // Refresh
-      } else {
-        toast.error(res.message || 'เกิดข้อผิดพลาด');
-      }
+
+      toast.success('บันทึกการอนุมัติ OT เรียบร้อย');
+      searchHistory(); // Refresh
     } catch (err) {
-      console.error(err);
-      toast.error('การเชื่อมต่อขัดข้อง');
+      toast.error(errMessage(err, 'บันทึกการอนุมัติ OT ไม่สำเร็จ'));
     } finally {
       setSaving(false);
     }
   };
 
-  const toggleApproval = (name) => {
+  const toggleApproval = (key) => {
     setOtApprovals(prev => ({
       ...prev,
-      [name]: !prev[name]
+      [key]: !prev[key]
     }));
   };
 
@@ -185,14 +177,20 @@ export default function ScheduleHistory() {
           
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-2">เลือกสาขา:</label>
-            <select 
-              className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
-            >
-              <option value="" disabled>-- เลือกสาขา --</option>
-              {branches.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
+            {isAll ? (
+              <select
+                className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={selectedBranch}
+                onChange={(e) => setSelectedBranch(e.target.value)}
+              >
+                <option value="">-- เลือกสาขา --</option>
+                {branches.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            ) : (
+              <div className="w-full border border-gray-200 bg-gray-50 rounded-lg p-2.5 text-sm text-gray-700 font-medium">
+                {user?.branch || '-'}
+              </div>
+            )}
           </div>
           
           <div className="flex flex-col gap-3 justify-end">
@@ -289,10 +287,11 @@ export default function ScheduleHistory() {
               ) : (
                 historyData.map((item, index) => {
                   const hasOT = parseFloat(item.ot) > 0;
-                  const isApproved = otApprovals[item.name] || false;
-                  
+                  const key = rowKey(item);
+                  const isApproved = otApprovals[key] || false;
+
                   return (
-                    <tr key={index} className="hover:bg-gray-50 transition-colors">
+                    <tr key={key || index} className="hover:bg-gray-50 transition-colors">
                       <td className="px-3 py-2 text-center text-gray-500">{index + 1}</td>
                       <td className="px-4 py-2 font-medium text-gray-900">{item.name}</td>
                       <td className="px-3 py-2 text-center text-gray-600">{item.position}</td>
@@ -315,7 +314,7 @@ export default function ScheduleHistory() {
                           <input 
                             type="checkbox"
                             checked={isApproved}
-                            onChange={() => toggleApproval(item.name)}
+                            onChange={() => toggleApproval(key)}
                             className={`w-5 h-5 rounded cursor-pointer transition-all ${
                               isApproved 
                                 ? 'text-green-600 focus:ring-green-500' 
