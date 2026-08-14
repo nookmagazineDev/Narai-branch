@@ -24,6 +24,8 @@
  *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
  *   --gid=238875059   เลือกแท็บด้วย gid (เลขท้าย URL ตอนเปิดแท็บนั้น) แม่นกว่าชื่อแท็บ
  *   --emp-id=<ID>     ชี้ไปชีทพนักงานไฟล์อื่น (วาง URL ทั้งเส้นก็ได้)
+ *   --log-gid=<gid>   gid ของแท็บลงตารางงาน (จำเป็นเมื่อใช้ --csv)
+ *   --csv             ดึงผ่าน export CSV แทน gviz — ต้องใส่เสมอถ้าชีทมีตัวกรองเปิดค้างไว้
  *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
  * ข้อควรรู้
@@ -35,6 +37,9 @@
  *   สคริปต์จึงหยิบ "แถวล่าสุด" ตาม Timestamp เหมือนที่ Apps Script ทำตอนอ่าน
  *   และแถวที่หมายเหตุเป็น 'ล้างข้อมูล' = ถือว่าถูกลบ ไม่ย้ายเข้า SQL
  * - รันซ้ำได้ ใช้ MERGE ทับของเดิม ไม่เกิดข้อมูลซ้ำ
+ * - ระวังตัวกรองในชีท: gviz ส่งกลับมาเฉพาะแถวที่ผ่านตัวกรองที่เปิดค้างไว้
+ *   ชีทลงตารางงานมีตัวกรองอยู่จริง (เห็นจาก --inspect ได้ 496 แถวจากหมื่นกว่าแถว)
+ *   ตอนย้ายจริงจึงต้องใส่ --csv เสมอ เพราะ export CSV ไม่สนใจตัวกรอง
  */
 
 import process from 'node:process';
@@ -80,6 +85,9 @@ const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
 const EMP_SHEET = argVal('sheet', '');
 // gid = เลขท้าย URL ตอนเปิดแท็บนั้น (แม่นกว่าชื่อแท็บ ไม่ต้องพิมพ์ภาษาไทยให้ตรงเป๊ะ)
 const EMP_GID = argVal('gid', '');
+// gid ของแท็บ "ลงตารางงาน" — จำเป็นตอนใช้ --csv เพราะ export CSV ระบุแท็บด้วยชื่อไม่ได้
+const LOG_GID = argVal('log-gid', '');
+const USE_CSV = args.includes('--csv');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
 const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
 const KEYS = args.includes('--keys'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
@@ -153,6 +161,58 @@ async function fetchRows(spreadsheetId, sheetName, gid) {
       return cell.v;
     })
   );
+}
+
+/**
+ * แยกข้อความ CSV เป็นตาราง (รองรับค่าที่มีเครื่องหมายคำพูด ลูกน้ำ และขึ้นบรรทัดใหม่ข้างใน)
+ */
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }  // "" = เครื่องหมายคำพูดจริงหนึ่งตัว
+        else quoted = false;
+      } else field += c;
+      continue;
+    }
+    if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (c !== '\r') field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/**
+ * ดึงชีทผ่านช่องทาง export CSV แทน gviz
+ *
+ * ทำไมต้องมีสองทาง: gviz ส่งกลับมาเฉพาะแถวที่ผ่าน "ตัวกรอง" ที่เปิดค้างไว้ในชีท
+ * ชีทลงตารางงานมีตัวกรองเปิดอยู่จริง ทำให้ gviz เห็นแค่ไม่กี่ร้อยแถวจากหมื่นกว่าแถว
+ * ถ้าย้ายตามนั้นข้อมูลจะหายเกือบหมดโดยไม่มีอะไรฟ้อง — export CSV ไม่สนใจตัวกรอง
+ * ข้อแลกเปลี่ยนคือได้ค่าตามรูปแบบที่ "แสดงผล" อยู่ จึงต้องพึ่ง toDateKey/timeText ที่ยืดหยุ่นอยู่แล้ว
+ */
+async function fetchRowsCsv(spreadsheetId, gid) {
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv${gid ? `&gid=${encodeURIComponent(gid)}` : ''}`;
+  const res = await fetch(url, { redirect: 'follow' });
+  const text = await res.text();
+  if (/^\s*</.test(text)) {
+    throw new Error(
+      `ดึง CSV ไม่ได้ (${spreadsheetId}${gid ? ` gid=${gid}` : ''}) — ` +
+        'ตรวจว่าตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง'
+    );
+  }
+  return parseCsv(text);
+}
+
+/** เลือกช่องทางดึงข้อมูลตามตัวเลือก --csv */
+async function fetchSheetRows(spreadsheetId, sheetName, gid) {
+  return USE_CSV ? fetchRowsCsv(spreadsheetId, gid) : fetchRows(spreadsheetId, sheetName, gid);
 }
 
 /**
@@ -371,7 +431,7 @@ const EMP_COLUMNS = [
 
 async function migrateEmployees() {
   console.log('\n[1/2] พนักงาน');
-  const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
+  const all = await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
 
   // หาแถวหัวตารางจริง (ชีทนี้มีหัวรวมกลุ่มสองชั้น แถวแรกเป็นชื่อกลุ่ม ไม่ใช่ชื่อคอลัมน์)
   const picked = HEADER_ROW > 0 ? { row: HEADER_ROW - 1, score: -1 } : pickHeaderRow(all, EMP_COLUMNS);
@@ -459,7 +519,7 @@ async function migrateEmployees() {
 // ชีทนี้ Apps Script เป็นคนเขียนเองทั้งหมด ลำดับคอลัมน์จึงคงที่ ใช้ตำแหน่งตรงๆ ได้
 async function migrateTimesheet() {
   console.log(`\n[2/2] ตารางงาน (ย้อนหลัง ${MONTHS} เดือน ตั้งแต่ ${fmtDate(cutoff)})`);
-  const all = await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+  const all = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID);
 
   // ชีทนี้ Apps Script เขียนเอง หัวตารางเป็นแถวเดียวและขึ้นต้นด้วย Timestamp เสมอ
   const hasHeader = all.length > 0 && /timestamp|วันที่ลงงาน/i.test(str(all[0][0]) + str(all[0][1]));
@@ -577,7 +637,7 @@ async function main() {
   // โหมดวิเคราะห์รหัส: รหัสในชีทลงตารางงานไม่มีในชีทพนักงานเลย (คนละชุดกัน)
   // โหมดนี้ตอบสองคำถาม — คอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
   if (KEYS) {
-    const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
+    const all = await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
     const picked = pickHeaderRow(all, EMP_COLUMNS);
     const headers = all[picked.row].map(str);
     const rows = all.slice(picked.row + 1);
@@ -608,7 +668,7 @@ async function main() {
     for (const r of staff) {
       empByName.set(`${str(r[map.branch]).toLowerCase()}|${normName(r[map.name])}`, r);
     }
-    const ts = await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+    const ts = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID);
     const tsRows = /timestamp|วันที่ลงงาน/i.test(str(ts[0]?.[0]) + str(ts[0]?.[1])) ? ts.slice(1) : ts;
     const people = new Map(); // สาขา|ชื่อ -> รหัสในชีทตารางงาน
     for (const r of tsRows) {
@@ -633,7 +693,7 @@ async function main() {
   // ใช้ยืนยันว่า "รหัส HR" ในชีทลงตารางงาน ตรงกับคอลัมน์ไหนของชีทพนักงานกันแน่
   if (FIND) {
     const needles = FIND.split(',').map((s) => s.trim()).filter(Boolean);
-    const rows = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
+    const rows = await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
     console.log(`[หาค่าในชีทพนักงาน] ${rows.length} แถว`);
     for (const needle of needles) {
       const { hits, rowsFound, mode } = findValue(rows, needle);
@@ -655,10 +715,33 @@ async function main() {
   // โหมดส่องชีท: พิมพ์แถวแรกๆ ออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร
   // ไม่แตะฐานข้อมูลเลย จึงไม่ต้องมีรหัสผ่านและไม่ต้อง npm install ก่อน
   if (INSPECT) {
-    console.log(`[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
-    dumpRows(await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID), 8);
-    console.log(`\n[ส่องชีทลงตารางงาน] แท็บ "${LOG_SHEET_NAME}"`);
-    dumpRows(await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME), 3);
+    const via = USE_CSV ? 'export CSV' : 'gviz';
+    console.log(`ดึงข้อมูลผ่าน: ${via}`);
+    console.log(`\n[ส่องชีทพนักงาน] ${SOURCE_SPREADSHEET_ID}${EMP_GID ? ` gid=${EMP_GID}` : EMP_SHEET ? ` แท็บ "${EMP_SHEET}"` : ' (แท็บแรก)'}`);
+    dumpRows(await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID), 8);
+    console.log(`\n[ส่องชีทลงตารางงาน] ${LOG_GID ? `gid=${LOG_GID}` : `แท็บ "${LOG_SHEET_NAME}"`}`);
+    dumpRows(await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID), 3);
+
+    // เทียบจำนวนแถวสองช่องทาง — ถ้า CSV ได้มากกว่ามาก แปลว่าชีทมีตัวกรองเปิดค้างอยู่
+    // แล้ว gviz เห็นแค่แถวที่ผ่านตัวกรอง ถ้าย้ายตามนั้นข้อมูลจะหายโดยไม่มีอะไรฟ้อง
+    if (LOG_GID) {
+      console.log('\n[เทียบจำนวนแถวของแท็บลงตารางงาน]');
+      const counts = {};
+      for (const [name, fn] of [['gviz', () => fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID)], ['export CSV', () => fetchRowsCsv(DESTINATION_SPREADSHEET_ID, LOG_GID)]]) {
+        try {
+          counts[name] = (await fn()).length;
+          console.log(`  ${name.padEnd(11)} : ${counts[name]} แถว`);
+        } catch (err) {
+          console.log(`  ${name.padEnd(11)} : ดึงไม่ได้ (${err.message})`);
+        }
+      }
+      if (counts.gviz && counts['export CSV'] && counts['export CSV'] > counts.gviz * 1.2) {
+        console.log(`  => ชีทมีตัวกรองเปิดค้างอยู่ gviz เห็นไม่ครบ ให้ใส่ --csv ตอนย้ายจริงเสมอ`);
+      }
+    } else {
+      console.log('\n(ใส่ --log-gid=<เลข gid ของแท็บลงตารางงาน> เพื่อเทียบจำนวนแถวสองช่องทาง)');
+    }
+
     console.log('\nดูโครงสร้างเสร็จแล้ว (ไม่ได้แตะฐานข้อมูล)');
     return;
   }
