@@ -19,6 +19,8 @@
  *   --only=timesheet  ย้ายเฉพาะบางส่วน: employees | timesheet (คั่นด้วย ,)
  *   --dry-run         อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *   --inspect         พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร (ไม่แตะฐานข้อมูล)
+ *   --keys            วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
+ *   --find=1234,5678  ค้นว่าค่านั้นอยู่คอลัมน์ไหนของชีทพนักงาน
  *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
  *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
@@ -76,6 +78,7 @@ const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
 const EMP_SHEET = argVal('sheet', '');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
 const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
+const KEYS = args.includes('--keys'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -195,6 +198,18 @@ function findValue(rows, needle) {
     }
   }
   return { hits, firstRow };
+}
+
+/**
+ * ตัดคำนำหน้าและช่องว่างซ้ำออก เพื่อเทียบชื่อข้ามสองชีท
+ * ชีทลงตารางงานเขียน "นาย นัตพล  ศรีบุญเรือง" (เว้นวรรคสองครั้ง)
+ * ชีทพนักงานเขียน "นาย THIHA ZAW" — ต้องล้างให้เหลือรูปเดียวกันก่อนเทียบ
+ */
+function normName(v) {
+  return str(v)
+    .replace(/^(นาย|นาง\s*สาว|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.?|mrs\.?|ms\.?|miss)\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 /** โหมด --inspect: พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ พร้อมชื่อคอลัมน์ ไว้ดูโครงสร้างจริง */
@@ -536,6 +551,61 @@ async function migrateTimesheet() {
 /* --------------------------------- main --------------------------------- */
 
 async function main() {
+  // โหมดวิเคราะห์รหัส: รหัสในชีทลงตารางงานไม่มีในชีทพนักงานเลย (คนละชุดกัน)
+  // โหมดนี้ตอบสองคำถาม — คอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
+  if (KEYS) {
+    const all = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
+    const picked = pickHeaderRow(all, EMP_COLUMNS);
+    const headers = all[picked.row].map(str);
+    const rows = all.slice(picked.row + 1);
+    const { map } = mapColumns(headers, EMP_COLUMNS);
+    verifyColumns(map, rows, EMP_COLUMNS);
+
+    const staff = rows.filter((r) => str(r[map.name]) !== '');
+    const working = staff.filter((r) => str(r[map.status]) === 'ทำงาน');
+    console.log(`[ชีทพนักงาน] มีชื่อ ${staff.length} คน | สถานะ "ทำงาน" ${working.length} คน`);
+
+    // 1) คอลัมน์ไหนกรอกครบและไม่ซ้ำ = ใช้เป็นรหัสประจำตัวได้
+    console.log('\n— คอลัมน์ที่ใช้เป็นรหัสประจำตัวได้ (กรอกครบ + ไม่ซ้ำกันเลย) —');
+    const width = Math.max(...staff.map((r) => r.length));
+    let found = 0;
+    for (let c = 0; c < width; c++) {
+      const vals = staff.map((r) => str(r[c])).filter(Boolean);
+      const uniq = new Set(vals).size;
+      const filledPct = Math.round((vals.length / staff.length) * 100);
+      if (filledPct < 90 || uniq !== vals.length) continue;
+      if (vals.some((v) => v.length > 24 || /\s/.test(v))) continue; // ตัดคอลัมน์ที่เป็นข้อความยาว
+      found++;
+      console.log(`  ${colName(c).padEnd(3)} "${(headers[c] || '(ไม่มีหัวตาราง)').slice(0, 24)}" — กรอก ${filledPct}% ไม่ซ้ำ ${uniq} ค่า | ตัวอย่าง: ${vals.slice(0, 3).join(', ')}`);
+    }
+    if (!found) console.log('  ไม่มีคอลัมน์ไหนที่กรอกครบและไม่ซ้ำเลย');
+
+    // 2) เชื่อมด้วยชื่อ+สาขาได้กี่ % — ถ้าสูงพอ ใช้ชื่อเป็นสะพานตอนย้ายได้
+    const empByName = new Map();
+    for (const r of staff) {
+      empByName.set(`${str(r[map.branch]).toLowerCase()}|${normName(r[map.name])}`, r);
+    }
+    const ts = await fetchRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME);
+    const tsRows = /timestamp|วันที่ลงงาน/i.test(str(ts[0]?.[0]) + str(ts[0]?.[1])) ? ts.slice(1) : ts;
+    const people = new Map(); // สาขา|ชื่อ -> รหัสในชีทตารางงาน
+    for (const r of tsRows) {
+      const branch = str(r[2]);
+      const name = str(r[4]);
+      if (!branch || !name) continue;
+      people.set(`${branch.toLowerCase()}|${normName(name)}`, str(r[3]));
+    }
+    const matched = [...people.keys()].filter((k) => empByName.has(k));
+    const missing = [...people.keys()].filter((k) => !empByName.has(k));
+    console.log(`\n— เชื่อมสองชีทด้วย "สาขา + ชื่อ" —`);
+    console.log(`  ชีทลงตารางงานมีพนักงาน ${people.size} คน (จาก ${tsRows.length} แถว)`);
+    console.log(`  จับคู่กับชีทพนักงานได้ ${matched.length} คน (${Math.round((matched.length / people.size) * 100)}%)`);
+    if (missing.length) {
+      console.log(`  จับคู่ไม่ได้ ${missing.length} คน เช่น:`);
+      missing.slice(0, 10).forEach((k) => console.log(`    ${k.split('|')[0].toUpperCase()} : ${k.split('|')[1]}`));
+    }
+    return;
+  }
+
   // โหมดหาค่า: บอกว่าค่าที่ระบุอยู่คอลัมน์ไหนของชีทพนักงาน
   // ใช้ยืนยันว่า "รหัส HR" ในชีทลงตารางงาน ตรงกับคอลัมน์ไหนของชีทพนักงานกันแน่
   if (FIND) {
