@@ -75,6 +75,7 @@ const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
 // แท็บของชีทพนักงาน (เว้นว่าง = แท็บแรก) และแถวหัวตาราง (0 = ให้หาเอง)
 const EMP_SHEET = argVal('sheet', '');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
+const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -121,10 +122,18 @@ async function fetchRows(spreadsheetId, sheetName) {
     cols.map((_, i) => {
       const cell = row.c && row.c[i];
       if (!cell) return '';
-      // gviz ส่งวันที่มาเป็นข้อความ "Date(2026,7,13)" (เดือนเริ่มที่ 0)
+      // gviz ส่งวันที่/เวลามาเป็นข้อความ "Date(2026,5,21,14,30,0)" (เดือนเริ่มที่ 0)
       if (typeof cell.v === 'string') {
-        const m = cell.v.match(/^Date\((\d+),(\d+),(\d+)/);
-        if (m) return `${m[1]}-${pad(Number(m[2]) + 1)}-${pad(Number(m[3]))}`;
+        const m = cell.v.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?/);
+        if (m) {
+          const [, y, mo, d, h, mi, s] = m;
+          // ช่องที่เก็บ "เวลาล้วน" Google ใส่วันที่เป็น 30/12/1899 มาให้ (epoch ของสเปรดชีต)
+          // ถ้าแปลงเป็นวันที่ตามปกติ เวลาเข้า-ออกจะหายหมดทั้งชีท
+          if (Number(y) <= 1900) return `${pad(Number(h || 0))}:${pad(Number(mi || 0))}`;
+          const date = `${y}-${pad(Number(mo) + 1)}-${pad(Number(d))}`;
+          // Timestamp ต้องเก็บเวลาไว้ด้วย ไม่งั้นแยกไม่ออกว่าการบันทึกครั้งไหนใหม่กว่ากันในวันเดียวกัน
+          return h === undefined ? date : `${date} ${pad(Number(h))}:${pad(Number(mi))}:${pad(Number(s || 0))}`;
+        }
       }
       if (cell.v === null || cell.v === undefined) return '';
       return cell.v;
@@ -147,6 +156,45 @@ function pickHeaderRow(rows, defs, maxScan = 15) {
     if (score > best.score) best = { row: i, score };
   }
   return best;
+}
+
+/**
+ * ตรวจว่าคอลัมน์ที่จับได้มีข้อมูลจริงไหม
+ * ชีทนี้มีหัวคอลัมน์ที่ตั้งไว้แต่ไม่เคยกรอก (เช่น "เรทรายวัน") ถ้าเชื่อหัวอย่างเดียว
+ * จะได้คอลัมน์ว่างมาแทนคอลัมน์ที่มีข้อมูลจริง แล้วค่าแรงกลายเป็น 0 ทั้งระบบเงียบๆ
+ */
+function verifyColumns(map, rows, defs, sampleSize = 80) {
+  const sample = rows.slice(0, sampleSize);
+  const filledCount = (idx) => sample.filter((r) => str(r[idx]) !== '').length;
+  const notes = [];
+  for (const def of defs) {
+    const idx = map[def.key];
+    if (idx === def.fallback || filledCount(idx) > 0) continue;
+    const fbFilled = filledCount(def.fallback);
+    if (fbFilled > 0) {
+      notes.push(
+        `  ${def.key.padEnd(11)} : ${colName(idx)} ว่างทั้งคอลัมน์ -> เปลี่ยนไปใช้ ${colName(def.fallback)} (มีข้อมูล ${fbFilled}/${sample.length} แถว)`
+      );
+      map[def.key] = def.fallback;
+    }
+  }
+  return notes;
+}
+
+/** โหมด --find: หาว่าค่าที่ระบุอยู่คอลัมน์ไหนของชีท ใช้ยืนยันว่ารหัสพนักงานคือคอลัมน์อะไร */
+function findValue(rows, needle) {
+  const target = str(needle).toLowerCase();
+  const hits = new Map(); // คอลัมน์ -> จำนวนครั้งที่เจอ
+  let firstRow = -1;
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = 0; j < rows[i].length; j++) {
+      if (str(rows[i][j]).toLowerCase() === target) {
+        hits.set(j, (hits.get(j) || 0) + 1);
+        if (firstRow < 0) firstRow = i;
+      }
+    }
+  }
+  return { hits, firstRow };
 }
 
 /** โหมด --inspect: พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ พร้อมชื่อคอลัมน์ ไว้ดูโครงสร้างจริง */
@@ -267,16 +315,20 @@ async function runBatch(label, rows, buildStatement) {
 /* ชีทพนักงานเปลี่ยนไฟล์มาแล้วครั้งหนึ่ง ตำแหน่งคอลัมน์จึงเชื่อไม่ได้
    จับจากชื่อหัวตารางก่อน ไม่เจอค่อยถอยไปใช้ตำแหน่งเดิมของ Apps Script */
 const EMP_COLUMNS = [
-  // รหัสตัวนี้ต้องเป็นรหัสเดียวกับที่ชีทลงตารางงานใช้ (คอลัมน์ "รหัส HR")
-  // ชีทมี "รหัส POS" อยู่ด้วยซึ่งเป็นคนละรหัสกัน จึงกันไว้ใน avoid
-  { key: 'hrCode',     match: [/รหัส\s*hr/i, /รหัส.*พนักงาน/, /^รหัส$/, /^hr.?code$/i, /รหัส/], avoid: /สาขา|บัตร|ผ่าน|pos|ประชาชน/i, fallback: 2 },
-  { key: 'branch',     match: [/^สาขา$/, /สาขา/],                fallback: 4 },
-  { key: 'name',       match: [/ชื่อ.*สกุล/, /ชื่อ/],            avoid: /สาขา|เล่น|ผู้|บัญชี/, fallback: 3 },
-  { key: 'empType',    match: [/ประเภท/],                        fallback: 5 },
-  { key: 'status',     match: [/^สถานะ$/, /สถานะ/],              fallback: 6 },
-  { key: 'position',   match: [/ตำแหน่ง/],                       fallback: 8 },
-  { key: 'dailyWage',  match: [/ค่าแรง.*วัน/, /ค่าจ้าง.*วัน/, /ค่าแรง/, /ค่าจ้าง/, /เรท/], avoid: /เดือน|รวม|ล่วงเวลา/, fallback: 9 },
-  { key: 'resignDate', match: [/ลาออก/, /วันที่ออก/],            fallback: 14 },
+  // รหัสตัวนี้ต้องเป็นรหัสเดียวกับคอลัมน์ D ("รหัส HR") ของชีทลงตารางงาน
+  // ชีทมี "รหัส POS" กับ "รหัสทางเงินเดือน" ปนอยู่ ซึ่งเป็นคนละรหัสกัน จึงกันไว้ใน avoid
+  { key: 'hrCode',     match: [/รหัส\s*hr/i, /รหัส.*พนักงาน/, /^รหัส$/, /^hr.?code$/i],
+    avoid: /สาขา|บัตร|ผ่าน|pos|ประชาชน|เงินเดือน|ภาษี|โลก้า/i, fallback: 2 },
+  { key: 'branch',     match: [/^สาขา$/, /^สังกัด$/, /สาขา|สังกัด/],  fallback: 4 },
+  { key: 'name',       match: [/ชื่อ.*สกุล/, /ชื่อ/],                 avoid: /สาขา|เล่น|ผู้|บัญชี/, fallback: 3 },
+  { key: 'empType',    match: [/^ประเภท$/, /ประเภท/],                 avoid: /ภาษี|ยื่น/, fallback: 5 },
+  // หัวคอลัมน์สถานะในชีทนี้ชื่อ "การทำงาน" — ห้าม match กว้างๆ ว่า /ทำงาน/
+  // เพราะมีหัวกลุ่มชื่อ "ทำงาน" (สถิติการมาทำงาน) อยู่อีกฝั่งของชีท
+  { key: 'status',     match: [/^การทำงาน$/, /^สถานะ$/, /สถานะ/],     avoid: /สมรส/, fallback: 6 },
+  { key: 'position',   match: [/ตำแหน่ง/],                            fallback: 8 },
+  { key: 'dailyWage',  match: [/ค่าแรง.*วัน/, /ค่าจ้าง.*วัน/, /เรทรายวัน/, /ค่าแรง/, /ค่าจ้าง/],
+    avoid: /เดือน|รวม|ล่วงเวลา/, fallback: 9 },
+  { key: 'resignDate', match: [/ลาออก/, /วันที่ออก/, /วันสุดท้าย/],   fallback: 14 },
 ];
 
 async function migrateEmployees() {
@@ -297,8 +349,13 @@ async function migrateEmployees() {
   console.log('  หัวคอลัมน์:', headers.filter(Boolean).join(' | ') || '(ไม่มี)');
 
   const { map, report } = mapColumns(headers, EMP_COLUMNS);
+  const notes = verifyColumns(map, rows, EMP_COLUMNS);
   console.log('  จับคอลัมน์ได้ดังนี้ — ตรวจให้ตรงก่อนย้ายจริง');
   report.forEach((line) => console.log(line));
+  if (notes.length) {
+    console.log('  ปรับให้อัตโนมัติเพราะคอลัมน์ที่จับได้ไม่มีข้อมูล:');
+    notes.forEach((line) => console.log(line));
+  }
 
   const byCode = new Map();
   for (const r of rows) {
@@ -479,6 +536,26 @@ async function migrateTimesheet() {
 /* --------------------------------- main --------------------------------- */
 
 async function main() {
+  // โหมดหาค่า: บอกว่าค่าที่ระบุอยู่คอลัมน์ไหนของชีทพนักงาน
+  // ใช้ยืนยันว่า "รหัส HR" ในชีทลงตารางงาน ตรงกับคอลัมน์ไหนของชีทพนักงานกันแน่
+  if (FIND) {
+    const needles = FIND.split(',').map((s) => s.trim()).filter(Boolean);
+    const rows = await fetchRows(SOURCE_SPREADSHEET_ID, EMP_SHEET);
+    console.log(`[หาค่าในชีทพนักงาน] ${rows.length} แถว`);
+    for (const needle of needles) {
+      const { hits, firstRow } = findValue(rows, needle);
+      if (hits.size === 0) {
+        console.log(`\n  "${needle}" : ไม่พบในชีทพนักงานเลย`);
+        continue;
+      }
+      const where = [...hits.entries()].map(([col, n]) => `${colName(col)} (เจอ ${n} ครั้ง)`).join(', ');
+      console.log(`\n  "${needle}" : อยู่คอลัมน์ ${where}`);
+      console.log('  แถวที่เจอ:');
+      dumpRows([rows[firstRow]], 1);
+    }
+    return;
+  }
+
   // โหมดส่องชีท: พิมพ์แถวแรกๆ ออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร
   // ไม่แตะฐานข้อมูลเลย จึงไม่ต้องมีรหัสผ่านและไม่ต้อง npm install ก่อน
   if (INSPECT) {
