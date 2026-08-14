@@ -22,6 +22,7 @@
  *   --keys            วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
  *   --find=1234,5678  ค้นว่าค่านั้นอยู่คอลัมน์ไหนของชีทพนักงาน
  *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
+ *   --emp-id=<ID>     ชี้ไปชีทพนักงานไฟล์อื่น (วาง URL ทั้งเส้นก็ได้)
  *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
  * ข้อควรรู้
@@ -60,7 +61,7 @@ async function loadDb() {
 /* ---- ไอดีชีทต้นทาง ----
    ชีทพนักงานย้ายไฟล์มาแล้ว ไม่ใช่ไฟล์เดียวกับที่ Apps Script เดิมชี้ไว้
    ส่วนชีท Details (เป้าขาย) และ "ยอดขายสาขา" เลิกใช้แล้ว จึงไม่ย้าย */
-const SOURCE_SPREADSHEET_ID = '1Abot2hKLUO6_z8NRW6c9A0m0ggra3ZE7Yq10kcUPr7Y'; // พนักงาน (ชีทแรก)
+const DEFAULT_SOURCE_ID = '1Abot2hKLUO6_z8NRW6c9A0m0ggra3ZE7Yq10kcUPr7Y'; // พนักงาน (แท็บแรก)
 const DESTINATION_SPREADSHEET_ID = '1bGSENQjSmmYv8V84aInyqk-K7r4niSXFlPqv0zEFQ1U'; // ลงตารางงาน
 const LOG_SHEET_NAME = 'ลงตารางงาน';
 
@@ -79,6 +80,12 @@ const EMP_SHEET = argVal('sheet', '');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
 const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
 const KEYS = args.includes('--keys'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
+// ชี้ไปชีทพนักงานไฟล์อื่นได้ ใส่ได้ทั้ง ID ล้วนหรือวาง URL มาทั้งเส้น
+const SOURCE_SPREADSHEET_ID = (() => {
+  const raw = argVal('emp-id', DEFAULT_SOURCE_ID);
+  const m = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : raw;
+})();
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
