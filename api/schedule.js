@@ -519,7 +519,34 @@ async function updateWorkStation(body, session) {
   return { updated };
 }
 
+/**
+ * เช็คสุขภาพการเชื่อมต่อ — ไม่แตะข้อมูลเลย ใช้ตอนเจออาการ "บันทึกไม่ได้" แล้วต้องรู้ว่าติดที่ชั้นไหน
+ *
+ * readMs = เส้นทางอ่าน (มีต่อใหม่แล้วลองซ้ำให้อยู่แล้ว)
+ * txMs   = เส้นทางเขียนจริง (poolForWrite + begin/commit) แต่ไม่เขียนอะไร
+ * ถ้า readMs ปกติแต่ txMs พัง แปลว่าปัญหาอยู่ที่ transaction/พูล ไม่ใช่เน็ตหรือไฟร์วอลล์
+ */
+async function ping() {
+  const t0 = Date.now();
+  const rows = await queryRead('SELECT SYSDATETIME() AS server_time, DB_NAME() AS db_name');
+  const readMs = Date.now() - t0;
+
+  const t1 = Date.now();
+  await withTransaction(async (run) => {
+    await run('SELECT 1 AS ok');
+  });
+  const txMs = Date.now() - t1;
+
+  return {
+    serverTime: rows[0]?.server_time ?? null,
+    database: rows[0]?.db_name ?? null,
+    readMs,
+    txMs,
+  };
+}
+
 const ACTIONS = {
+  ping,
   getBranches,
   getBranchList: getBranches,
   getScheduleEmployees,
