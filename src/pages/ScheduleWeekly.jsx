@@ -79,6 +79,8 @@ export default function ScheduleWeekly() {
   const [weekStartDate, setWeekStartDate] = useState(getStartOfWeek(new Date()));
   const [scheduleData, setScheduleData] = useState({});
   const [isSaving, setIsSaving] = useState(false);
+  // แยกสถานะโหลดกะของสัปดาห์ออกจากการโหลดพนักงาน — เปลี่ยนสัปดาห์จะได้ไม่ต้องล้างตารางทั้งหน้า
+  const [loadingWeek, setLoadingWeek] = useState(false);
   // เก็บเฉพาะช่องที่ถูกแก้จริงในรอบนี้ — เดิมกดบันทึกทีเดียวส่งทั้งสัปดาห์ รวมช่องที่โหลดมาจากประวัติ
   // ทำให้ชีทมีแถวซ้ำเพิ่มขึ้นทุกครั้งที่กดบันทึก
   const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
@@ -285,48 +287,85 @@ export default function ScheduleWeekly() {
     }
   }, [isAll]);
 
+  // ---------------------------------------------------------------------------
+  // แยกการโหลดเป็นสองก้อนตามสิ่งที่มันขึ้นอยู่กับจริงๆ
+  //
+  // เดิมรวมสามคำขอไว้ใน effect เดียวที่ผูกกับ [สาขา, สัปดาห์] และ await ต่อกันเป็นทอด
+  // ผลคือกดเปลี่ยนสัปดาห์ทีนึงต้องรอครบทั้งสามรอบ รวมถึงการดึงรายชื่อพนักงาน
+  // จาก Apps Script (ช้าสุด เพราะต้องเปิดสเปรดชีตทั้งไฟล์) ทั้งที่รายชื่อพนักงาน
+  // ไม่ได้เปลี่ยนตามสัปดาห์เลย — เสียเวลาฟรีทุกครั้งที่กดลูกศร
+  //
+  // ก้อนที่ 1 (พนักงาน + เป้าขาย) ผูกกับสาขาเท่านั้น และยิงพร้อมกันสองคำขอ
+  // ก้อนที่ 2 (กะของสัปดาห์) ผูกกับสาขา+สัปดาห์ อ่านจาก SQL ตอบไว
+  // ---------------------------------------------------------------------------
+
+  // ก้อนที่ 1 — พนักงาน + เป้าขาย/ค่าแรงสูงสุด (เปลี่ยนสัปดาห์ไม่ต้องโหลดซ้ำ)
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      const branch = effectiveBranch || '';
+    if (!effectiveBranch) {
+      setEmployees([]);
+      setWeeklyTarget(0);
+      setWeeklyMaxWage(0);
+      setLoading(false);
+      return;
+    }
 
-      // หมายเหตุ: apiCall จะ throw เมื่อเซิร์ฟเวอร์ตอบว่าไม่สำเร็จ (ไม่ได้ return status ให้เช็ค)
-      // จึงต้องอ่านสาเหตุจริงจาก errMessage(err) ไม่ใช่โยนข้อความรวมๆ ทับจนหาต้นเหตุไม่เจอ
+    let alive = true; // กันคำตอบของสาขาเก่ามาถึงช้าแล้วเขียนทับสาขาใหม่
+    setLoading(true);
+    const branch = effectiveBranch;
 
-      // 1) พนักงาน (สำคัญสุด) — โหลดแยกอิสระ ไม่ให้ API อื่นล้มแล้วทำพนักงานหาย
-      try {
-        const empRes = await apiCall('getScheduleEmployees', { branch });
-        setEmployees(empRes.data || []);
-      } catch (err) {
+    // allSettled: เป้าขายล้มต้องไม่ทำให้รายชื่อพนักงานหายไปด้วย
+    Promise.allSettled([
+      apiCall('getScheduleEmployees', { branch }),
+      apiCall('getBranchStats', { branch }),
+    ]).then(([empRes, statsRes]) => {
+      if (!alive) return;
+
+      if (empRes.status === 'fulfilled') {
+        setEmployees(empRes.value.data || []);
+      } else {
         setEmployees([]);
-        toast.error(errMessage(err, 'ไม่สามารถโหลดข้อมูลพนักงานได้'));
+        toast.error(errMessage(empRes.reason, 'ไม่สามารถโหลดข้อมูลพนักงานได้'));
       }
 
-      // 2) เป้าขาย / ค่าแรง Max — ไม่บังคับ ถ้าล้มต้องไม่บล็อกการแสดงตาราง
-      try {
-        const statsRes = await apiCall('getBranchStats', { branch });
-        const dTarget = parseFloat(String(statsRes.data.dailyTarget).replace(/,/g, '')) || 0;
-        const dMax = parseFloat(String(statsRes.data.maxWage).replace(/,/g, '')) || 0;
-        setWeeklyTarget(dTarget * 7);
-        setWeeklyMaxWage(dMax * 7);
-      } catch (err) {
+      if (statsRes.status === 'fulfilled') {
+        const d = statsRes.value.data || {};
+        setWeeklyTarget((parseFloat(String(d.dailyTarget).replace(/,/g, '')) || 0) * 7);
+        setWeeklyMaxWage((parseFloat(String(d.maxWage).replace(/,/g, '')) || 0) * 7);
+      } else {
         setWeeklyTarget(0);
         setWeeklyMaxWage(0);
       }
 
-      // 3) ข้อมูลกะของสัปดาห์
-      try {
-        const start = new Date(weekStartDate);
-        const end = new Date(weekStartDate);
-        end.setDate(end.getDate() + 6);
+      setLoading(false);
+    });
 
-        const schedRes = await apiCall('getHistoryData', {
-          branch,
-          startDate: formatDateLocal(start),
-          endDate: formatDateLocal(end)
-        });
+    return () => { alive = false; };
+  }, [effectiveBranch]);
 
+  // ก้อนที่ 2 — กะของสัปดาห์ที่เลือก
+  useEffect(() => {
+    if (!effectiveBranch) {
+      setScheduleData({});
+      setDirtyKeys(new Set());
+      return;
+    }
+
+    let alive = true;
+    setLoadingWeek(true);
+    const branch = effectiveBranch;
+    const start = new Date(weekStartDate);
+    const end = new Date(weekStartDate);
+    end.setDate(end.getDate() + 6);
+
+    apiCall('getHistoryData', {
+      branch,
+      startDate: formatDateLocal(start),
+      endDate: formatDateLocal(end),
+    })
+      .then((schedRes) => {
+        if (!alive) return;
         const newScheduleData = {};
+        // เรียงตาม timestamp ก่อน เพราะแถวที่บันทึกทีหลังต้องทับแถวเก่าของวันเดียวกัน
         const sortedHistory = (schedRes.data || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         sortedHistory.forEach(record => {
@@ -362,23 +401,19 @@ export default function ScheduleWeekly() {
         });
 
         setScheduleData(newScheduleData);
-      } catch (err) {
+      })
+      .catch((err) => {
+        if (!alive) return;
         setScheduleData({});
         toast.error(errMessage(err, 'โหลดตารางของสัปดาห์นี้ไม่สำเร็จ'));
-      } finally {
+      })
+      .finally(() => {
+        if (!alive) return;
         setDirtyKeys(new Set());
-        setLoading(false);
-      }
-    };
-    if (effectiveBranch) {
-      fetchData();
-    } else {
-      // user สิทธิ์ all ที่ยังไม่ได้เลือกสาขา — เคลียร์ข้อมูล รอเลือกสาขาก่อน
-      setEmployees([]);
-      setScheduleData({});
-      setDirtyKeys(new Set());
-      setLoading(false);
-    }
+        setLoadingWeek(false);
+      });
+
+    return () => { alive = false; };
   }, [effectiveBranch, weekStartDate]);
 
   const handleCellClick = (emp, dateStr) => {
@@ -711,7 +746,11 @@ export default function ScheduleWeekly() {
                 <ChevronLeft className="w-5 h-5" />
               </button>
               <div className="px-4 font-medium text-gray-800 text-sm">
-                {daysOfWeek[0].shortDate} - {daysOfWeek[6].shortDate}
+                <span className="inline-flex items-center gap-1.5">
+                  {daysOfWeek[0].shortDate} - {daysOfWeek[6].shortDate}
+                  {/* หมุนเล็กๆ ตรงนี้พอ ไม่ต้องล้างตารางทั้งหน้าเวลาเปลี่ยนสัปดาห์ */}
+                  {loadingWeek && <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-500" />}
+                </span>
               </div>
               <button onClick={() => changeWeek(1)} className="p-2 hover:bg-white rounded-md text-gray-600 transition-colors">
                 <ChevronRight className="w-5 h-5" />
