@@ -38,6 +38,28 @@ function isPublicHoliday(dateStr) {
   return (LUNAR_HOLIDAYS_BY_YEAR[dateStr.slice(0, 4)] || []).includes(dateStr);
 }
 
+/* ประเภทการลา — เก็บลงฐานข้อมูลเป็น "รหัส ชื่อ" ทั้งก้อน
+   เก็บรหัสไว้ด้วยเพราะเป็นรหัสที่ฝ่ายบุคคลใช้คิดเงินเดือน และทำให้แยกออกว่า
+   "13 ป่วย" (รับค่าแรง) กับ "21 ป่วย" (ไม่รับค่าแรง) เป็นคนละอย่างกัน
+   ถ้าเก็บแค่ชื่อจะแยกไม่ออกเลยเวลาเอาไปทำรายงาน */
+const PAID_LEAVE_OPTS = [
+  '10 หยุด',
+  '11 ชดเชย',
+  '12 V',
+  '13 ป่วย',
+  '14 กิจ',
+  '15 cd off',
+  '16 M, ประชุม',
+  '17 คลอด',
+  '19 อบรม',
+  '80 8hr',
+];
+const UNPAID_LEAVE_OPTS = [
+  '21 ป่วย',
+  '22 กิจ',
+  '23 ขาดงาน',
+];
+
 const EMPTY_CELL = {
   isStop: false,
   checkInHr: '', checkInMin: '',
@@ -438,6 +460,9 @@ export default function ScheduleWeekly() {
       if (empType === 'F/T') wage = rate; else wage = 0;
     } else {
       if (l2 !== '') {
+        // ตัวเลือก "หยุด (ไม่รับค่าแรง)" ชุดใหม่ (21 ป่วย / 22 กิจ / 23 ขาดงาน) ได้ค่าแรง 0 ทั้งหมด
+        // เงื่อนไข 'วันหยุดธรรมดา' เก็บไว้เพื่อข้อมูลเก่าที่บันทึกด้วยตัวเลือกชุดก่อน
+        // ถ้าเอาออก ยอดค่าแรงรวมของสัปดาห์ที่ผ่านมาแล้วจะเปลี่ยนย้อนหลัง
         if (l2 === 'วันหยุดธรรมดา' && empType === 'F/T') {
           wage = rate;
         } else {
@@ -975,17 +1000,7 @@ export default function ScheduleWeekly() {
                         onChange={(e) => setCellData({...cellData, leave1: e.target.value})}
                       >
                         <option value="">-</option>
-                        <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
-                        <option value="ลากิจ">🟠 ลากิจ</option>
-                        <option value="ลาป่วย">🔴 ลาป่วย</option>
-                        <option value="ลารายชั่วโมง">⏱ ลารายชั่วโมง</option>
-                        <option value="ใช้ Extra">⭐ ใช้ Extra (หยุดชดเชย)</option>
-                        <option value="พักร้อน">🔵 พักร้อน</option>
-                        <option value="ใช้สะสม">🟣 ใช้สะสม</option>
-                        <option value="ประชุม">🟤 ประชุม</option>
-                        <option value="อบรม">🔵 อบรม</option>
-                        <option value="คลอด">💖 คลอด</option>
-                        <option value="ชดเชย 8 ชั่วโมง">ชดเชย 8 ชั่วโมง</option>
+                        {PAID_LEAVE_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
                       </select>
                     </div>
                     <div>
@@ -996,10 +1011,7 @@ export default function ScheduleWeekly() {
                         onChange={(e) => setCellData({...cellData, leave2: e.target.value})}
                       >
                         <option value="">-</option>
-                        <option value="วันหยุดธรรมดา">⚪ วันหยุดธรรมดา</option>
-                        <option value="ป่วยไม่มีใบรับรอง">🤒 ป่วยไม่มีใบรับรอง</option>
-                        <option value="ลากิจ">🏃 ลากิจ</option>
-                        <option value="ขาดงาน">❌ ขาดงาน</option>
+                        {UNPAID_LEAVE_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
                       </select>
                     </div>
                   </div>
