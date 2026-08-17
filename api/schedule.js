@@ -172,44 +172,41 @@ async function syncEmployees(body, session) {
 
   let resigned = 0;
   await withTransaction(async (run) => {
-    for (const e of rows) {
-      await run(
-        `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-           USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
-         WHEN MATCHED THEN UPDATE SET
-           full_name = @name, branch = @branch, emp_type = @empType, position = @position,
-           daily_wage = @dailyWage, status = N'ทำงาน', resign_date = NULL, updated_at = SYSDATETIME()
-         WHEN NOT MATCHED THEN
-           INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status)
-           VALUES (@hrCode, @name, @branch, @empType, @position, @dailyWage, N'ทำงาน');`,
-        {
-          hrCode: { type: sql.NVarChar(30), value: e.hrCode },
-          name: { type: sql.NVarChar(150), value: e.name },
-          branch: { type: sql.NVarChar(50), value: branch },
-          empType: { type: sql.NVarChar(20), value: textOrNull(e.empType) },
-          position: { type: sql.NVarChar(100), value: textOrNull(e.position) },
-          dailyWage: { type: sql.Decimal(12, 2), value: e.dailyWage },
-        }
-      );
-    }
+    // ส่งทั้งรายชื่อไปเป็น JSON ก้อนเดียว ให้ SQL Server แตกเองด้วย OPENJSON
+    // เดิมวนยิง MERGE ทีละคน + สร้างตารางชั่วคราวแล้ว INSERT ทีละแถว
+    // สาขาละ 20 คนกลายเป็น 40+ รอบข้ามประเทศ และ action นี้ทำงานทุกครั้งที่เปิดหน้า
+    // จึงไปแย่งคอนเนคชันกับตอนผู้ใช้กดบันทึกตาราง ทำให้ทั้งสองฝั่งช้าและ timeout
+    const rowsJson = { type: sql.NVarChar(sql.MAX), value: JSON.stringify(rows) };
+
+    await run(
+      `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
+         USING (SELECT * FROM OPENJSON(@rows) WITH (
+                  hr_code NVARCHAR(30) '$.hrCode',
+                  full_name NVARCHAR(150) '$.name',
+                  emp_type NVARCHAR(20) '$.empType',
+                  position NVARCHAR(100) '$.position',
+                  daily_wage DECIMAL(12,2) '$.dailyWage'
+                )) AS s
+            ON t.hr_code = s.hr_code
+       WHEN MATCHED THEN UPDATE SET
+            full_name = s.full_name, branch = @branch, emp_type = s.emp_type,
+            position = s.position, daily_wage = s.daily_wage,
+            status = N'ทำงาน', resign_date = NULL, updated_at = SYSDATETIME()
+       WHEN NOT MATCHED THEN
+            INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status)
+            VALUES (s.hr_code, s.full_name, @branch, s.emp_type, s.position, s.daily_wage, N'ทำงาน');`,
+      { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
+    );
 
     if (safeToRetire) {
-      // ใช้ตารางชั่วคราวเทียบรายชื่อ เลี่ยงการต่อสตริง IN (...) ที่ยาวและเสี่ยง
-      await run(`CREATE TABLE #keep (hr_code NVARCHAR(30) PRIMARY KEY);`);
-      for (const e of rows) {
-        await run(`INSERT INTO #keep (hr_code) SELECT @hrCode WHERE NOT EXISTS (SELECT 1 FROM #keep WHERE hr_code = @hrCode);`, {
-          hrCode: { type: sql.NVarChar(30), value: e.hrCode },
-        });
-      }
       const r = await run(
         `UPDATE dbo.hr_employee
             SET status = N'ลาออก', updated_at = SYSDATETIME()
           WHERE branch = @branch AND status = N'ทำงาน'
-            AND hr_code NOT IN (SELECT hr_code FROM #keep);`,
-        { branch: { type: sql.NVarChar(50), value: branch } }
+            AND hr_code NOT IN (SELECT hr_code FROM OPENJSON(@rows) WITH (hr_code NVARCHAR(30) '$.hrCode'));`,
+        { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
       );
       resigned = r.rowsAffected?.[0] || 0;
-      await run(`DROP TABLE #keep;`);
     }
   });
 
@@ -296,93 +293,141 @@ async function saveTimesheet(body, session) {
   // คนที่กดบันทึก = user ที่ล็อกอินไว้ ไม่ได้เอาค่าที่หน้าเว็บส่งมาเอง
   const actor = textOrNull(session?.username);
 
-  let saved = 0;
-  let cleared = 0;
+  // แยกเป็นสองกอง: ที่ต้องเขียน กับที่สั่งล้าง
+  const upserts = [];
+  const clears = [];
+  const logRows = [];
+  for (const item of logs) {
+    const workDate = str(item.workDate);
+    const branch = branchFor(session, item.branch);
+    const hrCode = str(item.hrCode);
+    if (!isDateStr(workDate) || !branch || !hrCode) continue;
+
+    const isClear = str(item.otherNote) === CLEAR_NOTE;
+    const base = { workDate, branch, hrCode };
+    if (isClear) {
+      clears.push(base);
+    } else {
+      upserts.push({
+        ...base,
+        name: textOrNull(item.name),
+        position: textOrNull(item.position),
+        empType: textOrNull(item.empType),
+        checkIn: timeOrNull(item.checkIn),
+        checkOut: timeOrNull(item.checkOut),
+        breakTime: textOrNull(item.breakTime),
+        breakRange: textOrNull(item.breakTimeRange),
+        ot: num(item.ot),
+        otAcc: num(item.otAccumulated),
+        useAcc: num(item.useAccumulatedHours),
+        hourlyLeave: num(item.hourlyLeave),
+        wage: num(item.wage),
+        status: str(item.status) || (item.isStop ? 'หยุด' : 'มาทำงาน'),
+        leaveNote: textOrNull(item.leaveNote),
+        unpaidLeave: textOrNull(item.unpaidLeave),
+        otherNote: textOrNull(item.otherNote),
+        workStation: textOrNull(item.workStation),
+      });
+    }
+    logRows.push({ ...base, action: isClear ? 'clear' : 'save', payload: JSON.stringify(item) });
+  }
+
+  if (upserts.length === 0 && clears.length === 0) {
+    throw Object.assign(new Error('ไม่มีข้อมูลที่จะบันทึก'), { badRequest: true });
+  }
 
   await withTransaction(async (run) => {
-    for (const item of logs) {
-      const workDate = str(item.workDate);
-      const branch = branchFor(session, item.branch);
-      const hrCode = str(item.hrCode);
-      if (!isDateStr(workDate) || !branch || !hrCode) continue;
-
-      const key = {
-        d: { type: sql.Date, value: workDate },
-        branch: { type: sql.NVarChar(50), value: branch },
-        hrCode: { type: sql.NVarChar(30), value: hrCode },
-      };
-      const isClear = str(item.otherNote) === CLEAR_NOTE;
-
-      if (isClear) {
-        await run(
-          `DELETE FROM dbo.hr_timesheet WHERE work_date = @d AND branch = @branch AND hr_code = @hrCode`,
-          key
-        );
-        cleared++;
-      } else {
-        await run(
-          `MERGE dbo.hr_timesheet WITH (HOLDLOCK) AS t
-             USING (SELECT @d AS work_date, @branch AS branch, @hrCode AS hr_code) AS s
-                ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code
-           WHEN MATCHED THEN UPDATE SET
-                emp_name = @name, position = @position, emp_type = @empType,
-                check_in = @checkIn, check_out = @checkOut,
-                break_time = @breakTime, break_range = @breakRange,
-                ot_hours = @ot, ot_accumulated = @otAcc,
-                use_accumulated_hours = @useAcc, hourly_leave = @hourlyLeave,
-                wage = @wage, status = @status,
-                leave_note = @leaveNote, unpaid_leave = @unpaidLeave,
-                other_note = @otherNote, work_station = @workStation,
-                updated_at = SYSDATETIME(), updated_by = @actor
-           WHEN NOT MATCHED THEN INSERT (
-                work_date, branch, hr_code, emp_name, position, emp_type,
-                check_in, check_out, break_time, break_range,
-                ot_hours, ot_accumulated, use_accumulated_hours, hourly_leave,
-                wage, status, leave_note, unpaid_leave, other_note, work_station, updated_by)
-           VALUES (
-                @d, @branch, @hrCode, @name, @position, @empType,
-                @checkIn, @checkOut, @breakTime, @breakRange,
-                @ot, @otAcc, @useAcc, @hourlyLeave,
-                @wage, @status, @leaveNote, @unpaidLeave, @otherNote, @workStation, @actor);`,
-          {
-            ...key,
-            name: { type: sql.NVarChar(150), value: textOrNull(item.name) },
-            position: { type: sql.NVarChar(100), value: textOrNull(item.position) },
-            empType: { type: sql.NVarChar(20), value: textOrNull(item.empType) },
-            checkIn: { type: sql.VarChar(5), value: timeOrNull(item.checkIn) },
-            checkOut: { type: sql.VarChar(5), value: timeOrNull(item.checkOut) },
-            breakTime: { type: sql.NVarChar(20), value: textOrNull(item.breakTime) },
-            breakRange: { type: sql.VarChar(20), value: textOrNull(item.breakTimeRange) },
-            ot: { type: sql.Decimal(5, 2), value: num(item.ot) },
-            otAcc: { type: sql.Decimal(5, 2), value: num(item.otAccumulated) },
-            useAcc: { type: sql.Decimal(5, 2), value: num(item.useAccumulatedHours) },
-            hourlyLeave: { type: sql.Decimal(5, 2), value: num(item.hourlyLeave) },
-            wage: { type: sql.Decimal(12, 2), value: num(item.wage) },
-            status: { type: sql.NVarChar(20), value: str(item.status) || (item.isStop ? 'หยุด' : 'มาทำงาน') },
-            leaveNote: { type: sql.NVarChar(100), value: textOrNull(item.leaveNote) },
-            unpaidLeave: { type: sql.NVarChar(100), value: textOrNull(item.unpaidLeave) },
-            otherNote: { type: sql.NVarChar(255), value: textOrNull(item.otherNote) },
-            workStation: { type: sql.NVarChar(100), value: textOrNull(item.workStation) },
-            actor: { type: sql.NVarChar(100), value: actor },
-          }
-        );
-        saved++;
-      }
-
+    // ส่งทุกแถวไปเป็น JSON ก้อนเดียวแล้วให้ SQL Server แตกเองด้วย OPENJSON
+    //
+    // เดิมวนยิงทีละแถว (MERGE + INSERT log = 2 รอบต่อช่อง) บันทึก 15 ช่องกลายเป็น 30 รอบ
+    // แต่ละรอบวิ่งจาก Vercel ข้ามประเทศมาที่เซิร์ฟเวอร์ที่ออฟฟิศ รวมกันแล้วเกินเวลา
+    // จนขึ้น "เชื่อมต่อฐานข้อมูล HR ไม่ทันเวลา" ทั้งที่ฐานข้อมูลปกติดี
+    // ตอนนี้เหลือ 3 รอบคงที่ ไม่ว่าจะบันทึกกี่ช่อง
+    if (upserts.length) {
       await run(
-        `INSERT INTO dbo.hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
-         VALUES (@action, @d, @branch, @hrCode, @actor, @payload)`,
+        `MERGE dbo.hr_timesheet WITH (HOLDLOCK) AS t
+           USING (SELECT * FROM OPENJSON(@rows) WITH (
+                    work_date DATE '$.workDate',
+                    branch NVARCHAR(50) '$.branch',
+                    hr_code NVARCHAR(30) '$.hrCode',
+                    emp_name NVARCHAR(150) '$.name',
+                    position NVARCHAR(100) '$.position',
+                    emp_type NVARCHAR(20) '$.empType',
+                    check_in VARCHAR(5) '$.checkIn',
+                    check_out VARCHAR(5) '$.checkOut',
+                    break_time NVARCHAR(20) '$.breakTime',
+                    break_range VARCHAR(20) '$.breakRange',
+                    ot_hours DECIMAL(5,2) '$.ot',
+                    ot_accumulated DECIMAL(5,2) '$.otAcc',
+                    use_accumulated_hours DECIMAL(5,2) '$.useAcc',
+                    hourly_leave DECIMAL(5,2) '$.hourlyLeave',
+                    wage DECIMAL(12,2) '$.wage',
+                    status NVARCHAR(20) '$.status',
+                    leave_note NVARCHAR(100) '$.leaveNote',
+                    unpaid_leave NVARCHAR(100) '$.unpaidLeave',
+                    other_note NVARCHAR(255) '$.otherNote',
+                    work_station NVARCHAR(100) '$.workStation'
+                  )) AS s
+              ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code
+         WHEN MATCHED THEN UPDATE SET
+              emp_name = s.emp_name, position = s.position, emp_type = s.emp_type,
+              check_in = s.check_in, check_out = s.check_out,
+              break_time = s.break_time, break_range = s.break_range,
+              ot_hours = s.ot_hours, ot_accumulated = s.ot_accumulated,
+              use_accumulated_hours = s.use_accumulated_hours, hourly_leave = s.hourly_leave,
+              wage = s.wage, status = s.status,
+              leave_note = s.leave_note, unpaid_leave = s.unpaid_leave,
+              other_note = s.other_note, work_station = s.work_station,
+              updated_at = SYSDATETIME(), updated_by = @actor
+         WHEN NOT MATCHED THEN INSERT (
+              work_date, branch, hr_code, emp_name, position, emp_type,
+              check_in, check_out, break_time, break_range,
+              ot_hours, ot_accumulated, use_accumulated_hours, hourly_leave,
+              wage, status, leave_note, unpaid_leave, other_note, work_station, updated_by)
+         VALUES (
+              s.work_date, s.branch, s.hr_code, s.emp_name, s.position, s.emp_type,
+              s.check_in, s.check_out, s.break_time, s.break_range,
+              s.ot_hours, s.ot_accumulated, s.use_accumulated_hours, s.hourly_leave,
+              s.wage, s.status, s.leave_note, s.unpaid_leave, s.other_note, s.work_station, @actor);`,
         {
-          ...key,
-          action: { type: sql.VarChar(10), value: isClear ? 'clear' : 'save' },
+          rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(upserts) },
           actor: { type: sql.NVarChar(100), value: actor },
-          payload: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(item) },
         }
       );
     }
+
+    if (clears.length) {
+      await run(
+        `DELETE t
+           FROM dbo.hr_timesheet t
+           JOIN OPENJSON(@rows) WITH (
+                  work_date DATE '$.workDate',
+                  branch NVARCHAR(50) '$.branch',
+                  hr_code NVARCHAR(30) '$.hrCode'
+                ) s
+             ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code;`,
+        { rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(clears) } }
+      );
+    }
+
+    await run(
+      `INSERT INTO dbo.hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
+       SELECT s.action, s.work_date, s.branch, s.hr_code, @actor, s.payload
+         FROM OPENJSON(@rows) WITH (
+                action VARCHAR(10) '$.action',
+                work_date DATE '$.workDate',
+                branch NVARCHAR(50) '$.branch',
+                hr_code NVARCHAR(30) '$.hrCode',
+                payload NVARCHAR(MAX) '$.payload'
+              ) s;`,
+      {
+        rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(logRows) },
+        actor: { type: sql.NVarChar(100), value: actor },
+      }
+    );
   });
 
-  return { saved, cleared };
+  return { saved: upserts.length, cleared: clears.length };
 }
 
 /**
