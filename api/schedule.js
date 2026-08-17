@@ -135,6 +135,91 @@ async function getScheduleEmployees(body, session) {
     .sort((a, b) => positionPriority(a.position) - positionPriority(b.position));
 }
 
+/**
+ * คัดลอกรายชื่อพนักงานของสาขาหนึ่งจาก Google Sheet มาเก็บใน hr_employee
+ *
+ * Google Sheet เป็นตัวหลัก (เพิ่มคน/ให้ลาออก/แก้ค่าแรง ทำที่หน้ารายชื่อพนักงานเหมือนเดิม)
+ * ฝั่งเว็บจะเรียก action นี้ให้เองทุกครั้งที่ดึงรายชื่อพนักงานสำเร็จ (ดู MIRROR_TO_SQL)
+ * SQL จึงได้รหัสพนักงานชุดเดียวกับที่หน้าเว็บใช้เป๊ะ ไม่ต้องเดาว่ารหัสไหนถูก
+ *
+ * คนที่หายไปจากรายชื่อ = ลาออกแล้ว จึงตั้ง status เป็น 'ลาออก' ให้ (ไม่ลบ เพราะกะเก่ายังอ้างอิงอยู่)
+ * แต่มีกันพลาดไว้: ถ้ารายชื่อที่ส่งมาน้อยกว่าครึ่งของที่มีอยู่ จะไม่ตั้งใครเป็นลาออกเลย
+ * เพราะกรณีนั้นน่าจะเป็นชีทตอบมาไม่ครบ ไม่ใช่คนลาออกยกสาขา
+ */
+async function syncEmployees(body, session) {
+  const branch = branchFor(session, body.branch);
+  const list = Array.isArray(body.employees) ? body.employees : [];
+  if (!branch || list.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีข้อมูล' };
+
+  const rows = list
+    .map((e) => ({
+      hrCode: str(e.hrCode),
+      name: str(e.name),
+      empType: str(e.type || e.empType),
+      position: str(e.position),
+      dailyWage: num(e.dailyWage),
+    }))
+    .filter((e) => e.hrCode && e.name);
+  if (rows.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีรหัส/ชื่อที่ใช้ได้' };
+
+  const activeNow = await queryRead(
+    `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE branch = @branch AND status = N'ทำงาน'`,
+    { branch: { type: sql.NVarChar(50), value: branch } }
+  );
+  const before = Number(activeNow[0]?.n || 0);
+  // รายชื่อหดลงเกินครึ่ง = น่าจะได้ข้อมูลมาไม่ครบ อย่าไปตั้งใครเป็นลาออก
+  const safeToRetire = rows.length * 2 >= before;
+
+  let resigned = 0;
+  await withTransaction(async (run) => {
+    for (const e of rows) {
+      await run(
+        `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
+           USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
+         WHEN MATCHED THEN UPDATE SET
+           full_name = @name, branch = @branch, emp_type = @empType, position = @position,
+           daily_wage = @dailyWage, status = N'ทำงาน', resign_date = NULL, updated_at = SYSDATETIME()
+         WHEN NOT MATCHED THEN
+           INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status)
+           VALUES (@hrCode, @name, @branch, @empType, @position, @dailyWage, N'ทำงาน');`,
+        {
+          hrCode: { type: sql.NVarChar(30), value: e.hrCode },
+          name: { type: sql.NVarChar(150), value: e.name },
+          branch: { type: sql.NVarChar(50), value: branch },
+          empType: { type: sql.NVarChar(20), value: textOrNull(e.empType) },
+          position: { type: sql.NVarChar(100), value: textOrNull(e.position) },
+          dailyWage: { type: sql.Decimal(12, 2), value: e.dailyWage },
+        }
+      );
+    }
+
+    if (safeToRetire) {
+      // ใช้ตารางชั่วคราวเทียบรายชื่อ เลี่ยงการต่อสตริง IN (...) ที่ยาวและเสี่ยง
+      await run(`CREATE TABLE #keep (hr_code NVARCHAR(30) PRIMARY KEY);`);
+      for (const e of rows) {
+        await run(`INSERT INTO #keep (hr_code) SELECT @hrCode WHERE NOT EXISTS (SELECT 1 FROM #keep WHERE hr_code = @hrCode);`, {
+          hrCode: { type: sql.NVarChar(30), value: e.hrCode },
+        });
+      }
+      const r = await run(
+        `UPDATE dbo.hr_employee
+            SET status = N'ลาออก', updated_at = SYSDATETIME()
+          WHERE branch = @branch AND status = N'ทำงาน'
+            AND hr_code NOT IN (SELECT hr_code FROM #keep);`,
+        { branch: { type: sql.NVarChar(50), value: branch } }
+      );
+      resigned = r.rowsAffected?.[0] || 0;
+      await run(`DROP TABLE #keep;`);
+    }
+  });
+
+  return {
+    upserted: rows.length,
+    resigned,
+    skippedRetire: safeToRetire ? undefined : `รายชื่อที่ส่งมา ${rows.length} คน น้อยกว่าครึ่งของ ${before} คนที่มีอยู่ จึงไม่ตั้งใครเป็นลาออก`,
+  };
+}
+
 /** เป้าขาย/ค่าแรงสูงสุดต่อวันของสาขา */
 async function getBranchStats(body, session) {
   const branch = branchFor(session, body.branch);
@@ -393,6 +478,7 @@ const ACTIONS = {
   getBranches,
   getBranchList: getBranches,
   getScheduleEmployees,
+  syncEmployees,
   getBranchStats,
   getDailySales,
   getHistoryData,

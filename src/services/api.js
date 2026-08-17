@@ -28,9 +28,54 @@ const SQL_ACTIONS = new Set([
   'getBranchStats',        // ScheduleWeekly (การ์ดเป้าขาย)
   'getDailySales',         // ScheduleHistory (การ์ดยอดขาย)
 
-  // กลุ่มที่ 2 — รอเปิดหลังทดสอบกลุ่มแรกผ่าน
+  // กลุ่มที่ 2 — ไม่ย้าย แต่ให้ SQL คัดลอกตามอัตโนมัติ (ดู MIRROR_TO_SQL ข้างล่าง)
   // 'getScheduleEmployees',  // ⚠️ ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
 ]);
+
+// ---------------------------------------------------------------------------
+// รายชื่อพนักงาน: Google Sheet เป็นตัวหลัก SQL คัดลอกตามให้อัตโนมัติ
+//
+// เพิ่มพนักงาน / ให้ลาออก / แก้ค่าแรง ยังทำที่เดิมทุกอย่าง (หน้ารายชื่อพนักงาน -> ชีท)
+// แล้วทุกครั้งที่หน้าไหนดึงรายชื่อพนักงาน ผลลัพธ์จะถูกส่งไปเก็บใน hr_employee ด้วย
+// ฝั่ง SQL จะปรับตามให้เอง: คนใหม่ -> เพิ่ม, คนที่หายไปจากรายชื่อ -> ตั้งเป็นลาออก
+//
+// ข้อดีที่สำคัญกว่าความสะดวก: SQL จะได้ "รหัสพนักงานชุดเดียวกับที่หน้าเว็บใช้" เป๊ะ
+// ไม่ต้องเดาว่ารหัสในชีท HR (0808001) กับในตารางงาน (740808001) ตัวไหนถูก
+// ซึ่งเป็นปัญหาที่ทำให้ตอนย้ายข้อมูลครั้งแรกกะ 72% หาเจ้าของไม่เจอ
+//
+// ยิงแบบไม่รอผล ถ้าคัดลอกไม่สำเร็จก็ไม่กระทบผู้ใช้ (ชีทเป็นตัวหลักอยู่แล้ว)
+// ---------------------------------------------------------------------------
+const MIRROR_TO_SQL = new Set(['getScheduleEmployees']);
+
+const mirrorToSql = (action, payload, result) => {
+  if (!Array.isArray(result?.data) || result.data.length === 0) return;
+  const branch = String(payload?.branch || '').trim();
+  if (!branch) return;
+
+  fetch(SQL_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'syncEmployees',
+      branch,
+      employees: result.data,
+      _user: sessionUser(),
+    }),
+    keepalive: true, // ให้ยิงจบแม้ผู้ใช้เปลี่ยนหน้าไปแล้ว
+  })
+    .then((res) => res.json())
+    .then((res) => {
+      if (res?.status === 'success') {
+        const d = res.data || {};
+        if (d.added || d.resigned) {
+          console.info(`ซิงก์พนักงานสาขา ${branch} -> SQL: เพิ่ม/อัปเดต ${d.upserted ?? 0}, ตั้งเป็นลาออก ${d.resigned ?? 0}`);
+        }
+      } else {
+        console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, res?.message);
+      }
+    })
+    .catch((err) => console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, err?.message || err));
+};
 
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
 
@@ -190,7 +235,10 @@ export const apiCall = async (action, payload, options = {}) => {
         // ตัด timeout ของรอบนี้ไม่ให้ล้ำ deadline รวม — เดิมทุกรอบใช้ 30 วิเต็มโดยไม่สนเวลาที่ใช้ไปแล้ว
         // ทำให้ 3 รอบรวมกันเป็น ~93 วิ ทั้งที่ตั้ง deadline ไว้ 70 วิ (ผู้ใช้นั่งรอค้างเกินจริงเกือบครึ่งนาที)
         const remaining = deadline - Date.now();
-        return await requestOnce(action, payload, Math.min(timeoutMs, remaining));
+        const result = await requestOnce(action, payload, Math.min(timeoutMs, remaining));
+        // คัดลอกรายชื่อพนักงานไปเก็บใน SQL ด้วย — ไม่รอผล ไม่ให้กระทบเวลาโหลดหน้า
+        if (MIRROR_TO_SQL.has(action) && !SQL_ACTIONS.has(action)) mirrorToSql(action, payload, result);
+        return result;
       } catch (err) {
         // เซิร์ฟเวอร์ตอบมาแล้วว่าทำไม่ได้ (เช่น รหัสผ่านผิด, ไม่พบข้อมูล) — ลองใหม่ก็ได้ผลเดิม
         const delay = RETRY_DELAYS[Math.min(attempt, RETRY_DELAYS.length - 1)];
