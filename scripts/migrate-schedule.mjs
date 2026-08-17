@@ -20,12 +20,17 @@
  *   --dry-run         อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *   --inspect         พิมพ์แถวแรกๆ ของชีทออกมาดิบๆ ไว้ดูว่าคอลัมน์ไหนคืออะไร (ไม่แตะฐานข้อมูล)
  *   --keys            วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้ และเชื่อมสองชีทด้วยชื่อได้กี่ %
+ *   --branches        นับว่าแต่ละชีทมีสาขาอะไรบ้าง สาขาละกี่คน
  *   --find=1234,5678  ค้นว่าค่านั้นอยู่คอลัมน์ไหนของชีทพนักงาน
  *   --sheet=ชื่อแท็บ   เลือกแท็บของชีทพนักงาน (ค่าเริ่มต้น = แท็บแรก)
  *   --gid=238875059   เลือกแท็บด้วย gid (เลขท้าย URL ตอนเปิดแท็บนั้น) แม่นกว่าชื่อแท็บ
  *   --emp-id=<ID>     ชี้ไปชีทพนักงานไฟล์อื่น (วาง URL ทั้งเส้นก็ได้)
  *   --log-gid=<gid>   gid ของแท็บลงตารางงาน (จำเป็นเมื่อใช้ --csv)
  *   --csv             ดึงผ่าน export CSV แทน gviz — ต้องใส่เสมอถ้าชีทมีตัวกรองเปิดค้างไว้
+ *   --keep-old-codes  ไม่ต้องรวมรหัสเก่า/ใหม่ของคนเดียวกัน (ปกติรวมให้อัตโนมัติ)
+ *   --employees-from-timesheet
+ *                     ถอดรายชื่อพนักงานจากชีทลงตารางงานเอง (ใช้เมื่อไม่มีชีทพนักงานที่ตรงกัน)
+ *                     ค่าแรงต่อวันจะเดาจากค่าแรงที่พบบ่อยที่สุด ต้องตรวจก่อนใช้จริง
  *   --header-row=3    สั่งเองว่าแถวไหนคือหัวตารางพนักงาน (ค่าเริ่มต้น = ให้สคริปต์หาเอง)
  *
  * ข้อควรรู้
@@ -88,9 +93,15 @@ const EMP_GID = argVal('gid', '');
 // gid ของแท็บ "ลงตารางงาน" — จำเป็นตอนใช้ --csv เพราะ export CSV ระบุแท็บด้วยชื่อไม่ได้
 const LOG_GID = argVal('log-gid', '');
 const USE_CSV = args.includes('--csv');
+// บริษัทเปลี่ยนระบบรหัสพนักงานกลางปี คนเดียวกันจึงมีหลายรหัสในชีท — รวมให้เหลือรหัสเดียวโดยปริยาย
+const UNIFY_CODES = !args.includes('--keep-old-codes');
 const HEADER_ROW = Number(argVal('header-row', '0')) || 0;
+// ถอดรายชื่อพนักงานจากชีทลงตารางงานเอง ใช้เมื่อหาชีทพนักงานที่ระบบใช้จริงไม่เจอ
+const EMP_FROM_TIMESHEET = args.includes('--employees-from-timesheet');
 const FIND = argVal('find', ''); // ค้นค่าในชีทพนักงาน คั่นหลายค่าด้วย ,
-const KEYS = args.includes('--keys'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
+const KEYS = args.includes('--keys');
+// นับว่าแต่ละชีทมีสาขาอะไรบ้าง คนละกี่คน — ใช้หาว่าพนักงานสาขาที่ขาดอยู่ไฟล์ไหน
+const BRANCHES = args.includes('--branches'); // วิเคราะห์ว่าคอลัมน์ไหนใช้เป็นรหัสประจำตัวได้
 // ชี้ไปชีทพนักงานไฟล์อื่นได้ ใส่ได้ทั้ง ID ล้วนหรือวาง URL มาทั้งเส้น
 const SOURCE_SPREADSHEET_ID = (() => {
   const raw = argVal('emp-id', DEFAULT_SOURCE_ID);
@@ -429,8 +440,161 @@ const EMP_COLUMNS = [
   { key: 'resignDate', match: [/ลาออก/, /วันที่ออก/, /วันสุดท้าย/],   fallback: 14 },
 ];
 
+/**
+ * สร้างรายชื่อพนักงานจากชีทลงตารางงานเอง (--employees-from-timesheet)
+ *
+ * ใช้เมื่อหาชีทพนักงานที่ระบบใช้จริงไม่เจอ — ชีทลงตารางงานบันทึก
+ * รหัส/ชื่อ/สาขา/ตำแหน่ง/ประเภท ไว้ทุกแถวอยู่แล้ว จึงถอดกลับมาเป็นทะเบียนพนักงานได้
+ * ยึดข้อมูลจากแถวที่ลงงานล่าสุดของแต่ละคน (ตำแหน่ง/สาขาอาจเปลี่ยนระหว่างทาง)
+ *
+ * ค่าแรงต่อวันไม่มีบอกตรงๆ ต้องเดาจากคอลัมน์ค่าแรงรายวัน จึงใช้ "ค่าที่พบบ่อยที่สุด"
+ * ของวันที่มาทำงานปกติ — ตัวเลขนี้ต้องให้คนตรวจก่อนใช้คำนวณเงินจริงเสมอ
+ */
+async function employeesFromTimesheet() {
+  const all = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID);
+  const hasHeader = all.length > 0 && /timestamp|วันที่ลงงาน/i.test(str(all[0][0]) + str(all[0][1]));
+  const rows = hasHeader ? all.slice(1) : all;
+
+  // จับกลุ่มด้วย สาขา + ชื่อ ไม่ใช่ สาขา + รหัส
+  // เพราะบริษัทเปลี่ยนระบบรหัสกลางปี ถ้าจับด้วยรหัสจะได้คนเดียวกันสองรายการ
+  // (รหัสเก่า + รหัสใหม่) แล้วหน้าลงตารางจะขึ้นชื่อซ้ำสองแถว แถวรหัสเก่าไม่มีกะเลย
+  // ต้องใช้เกณฑ์เดียวกับที่ migrateTimesheet() รวมรหัส ไม่งั้นสองตารางจะ join กันไม่ติด
+  const people = new Map(); // สาขา|ชื่อ -> ข้อมูลล่าสุด + สถิติค่าแรง
+  for (const r of rows) {
+    const workDate = toDateKey(r[1]);
+    const branch = str(r[2]);
+    const hrCode = str(r[3]);
+    const name = str(r[4]);
+    if (!workDate || !branch || !hrCode || !name) continue;
+
+    const key = `${branch}|${normName(name)}`;
+    if (!people.has(key)) {
+      people.set(key, { branch, lastDate: '', codes: new Map(), wages: new Map(), wagesAny: new Map() });
+    }
+    const p = people.get(key);
+
+    // รหัสที่ถูกใช้กับวันทำงานล่าสุด = รหัสปัจจุบันของคนนั้น
+    if (!p.codes.has(hrCode) || p.codes.get(hrCode) < workDate) p.codes.set(hrCode, workDate);
+    if (workDate > p.lastDate) {
+      p.lastDate = workDate;
+      p.name = name;
+      p.position = str(r[5]);
+      p.empType = str(r[13]);
+    }
+
+    const wage = num(r[10]);
+    if (wage > 0) {
+      // นับแยกสองชุด: วันทำงานปกติล้วนๆ (แม่นกว่า) และวันไหนก็ได้ที่มีค่าแรง (ไว้ใช้เมื่อชุดแรกว่าง)
+      p.wagesAny.set(wage, (p.wagesAny.get(wage) || 0) + 1);
+      if (str(r[11]) === 'มาทำงาน' && !str(r[12]) && !str(r[14]) && !num(r[16])) {
+        p.wages.set(wage, (p.wages.get(wage) || 0) + 1);
+      }
+    }
+  }
+
+  return [...people.values()].map((p) => {
+    // ค่าแรงที่พบบ่อยที่สุด = เรทประจำของคนนั้น (ตัดวันที่ได้ OT หรือโดนหักออกไป)
+    const pool = p.wages.size ? p.wages : p.wagesAny;
+    const common = [...pool.entries()].sort((a, b) => b[1] - a[1])[0];
+    const newest = [...p.codes.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1))[0][0];
+    return {
+      hrCode: newest,
+      name: p.name,
+      branch: p.branch,
+      empType: p.empType,
+      status: 'ทำงาน',
+      position: p.position,
+      dailyWage: common ? common[0] : 0,
+      resignDate: null,
+    };
+  });
+}
+
+
+/** เขียนรายชื่อพนักงานลงฐานข้อมูล พร้อมสร้างรายชื่อสาขาจากพนักงานที่มี */
+async function writeEmployees(data) {
+await runBatch('พนักงาน', data, (row) => ({
+    text: `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
+             USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
+           WHEN MATCHED THEN UPDATE SET
+             full_name = @name, branch = @branch, emp_type = @empType, position = @position,
+             daily_wage = @dailyWage, status = @status, resign_date = @resignDate,
+             updated_at = SYSDATETIME()
+           WHEN NOT MATCHED THEN
+             INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status, resign_date)
+             VALUES (@hrCode, @name, @branch, @empType, @position, @dailyWage, @status, @resignDate);`,
+    params: {
+      hrCode: { type: sql.NVarChar(30), value: row.hrCode },
+      name: { type: sql.NVarChar(150), value: row.name },
+      branch: { type: sql.NVarChar(50), value: row.branch },
+      empType: { type: sql.NVarChar(20), value: orNull(row.empType) },
+      position: { type: sql.NVarChar(100), value: orNull(row.position) },
+      dailyWage: { type: sql.Decimal(12, 2), value: row.dailyWage },
+      status: { type: sql.NVarChar(20), value: row.status },
+      resignDate: { type: sql.Date, value: row.resignDate },
+    },
+  }));
+
+  // รายชื่อสาขามาจากพนักงานล้วนๆ (ชีท Details เลิกใช้แล้ว)
+  // เป้าขาย/ค่าแรงสูงสุดจึงเป็น 0 ไปก่อน ต้องกรอกเองด้วย UPDATE dbo.hr_branch
+  const branches = [...new Set(data.map((d) => d.branch).filter(Boolean))].sort();
+  console.log(`  พบสาขา ${branches.length} สาขา: ${branches.join(', ') || '(ไม่มี)'}`);
+  await runBatch('สาขา', branches.map((b) => ({ branch: b })), (row) => ({
+    text: `IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch WHERE branch = @branch)
+             INSERT INTO dbo.hr_branch (branch, branch_name) VALUES (@branch, @branch);`,
+    params: { branch: { type: sql.NVarChar(50), value: row.branch } },
+  }));
+}
+
+/**
+ * อ่านตารางงานแล้วคืนแผนที่ "สาขา|ชื่อ" -> รหัสที่ใช้ล่าสุดของคนนั้น
+ * ใช้เกณฑ์เดียวกับที่ migrateTimesheet() รวมรหัส ทั้งสองตารางจะได้ join กันติด
+ */
+async function timesheetCodeIndex() {
+  const all = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID);
+  const hasHeader = all.length > 0 && /timestamp|วันที่ลงงาน/i.test(str(all[0][0]) + str(all[0][1]));
+  const rows = hasHeader ? all.slice(1) : all;
+
+  const byPerson = new Map(); // สาขา|ชื่อ -> Map(รหัส -> วันที่ล่าสุดที่ใช้)
+  for (const r of rows) {
+    const workDate = toDateKey(r[1]);
+    const branch = str(r[2]);
+    const hrCode = str(r[3]);
+    const name = str(r[4]);
+    if (!workDate || !branch || !hrCode || !name) continue;
+    const key = `${branch.toLowerCase()}|${normName(name)}`;
+    if (!byPerson.has(key)) byPerson.set(key, new Map());
+    const codes = byPerson.get(key);
+    if (!codes.has(hrCode) || codes.get(hrCode) < workDate) codes.set(hrCode, workDate);
+  }
+
+  const byName = new Map();
+  const byBranch = new Map(); // สาขา -> Set(รหัสที่ใช้ล่าสุดของทุกคนในสาขานั้น)
+  for (const [person, codes] of byPerson) {
+    const newest = [...codes.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1))[0][0];
+    byName.set(person, newest);
+    const branch = person.split('|')[0];
+    if (!byBranch.has(branch)) byBranch.set(branch, new Set());
+    byBranch.get(branch).add(newest);
+  }
+  return { byName, byBranch };
+}
+
 async function migrateEmployees() {
   console.log('\n[1/2] พนักงาน');
+
+  if (EMP_FROM_TIMESHEET) {
+    console.log('  แหล่งข้อมูล: ถอดจากชีทลงตารางงาน (ไม่ได้ใช้ชีทพนักงาน)');
+    const data = await employeesFromTimesheet();
+    const noWage = data.filter((d) => d.dailyWage === 0).length;
+    console.log(`  ได้พนักงาน ${data.length} คน (นับคนเดียวกันที่เปลี่ยนรหัสเป็นคนเดียว)`);
+    console.log(`  ค่าแรงต่อวันเดาจากค่าแรงที่พบบ่อยที่สุดของแต่ละคน — ต้องตรวจก่อนใช้คำนวณเงินจริง`);
+    if (noWage) console.log(`  หาค่าแรงไม่ได้ ${noWage} คน (จะเป็น 0 ต้องกรอกเองใน hr_employee)`);
+    if (data.length) console.log(`  ตัวอย่าง: ${JSON.stringify(data[0])}`);
+    await writeEmployees(data);
+    return;
+  }
+
   const all = await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
 
   // หาแถวหัวตารางจริง (ชีทนี้มีหัวรวมกลุ่มสองชั้น แถวแรกเป็นชื่อกลุ่ม ไม่ใช่ชื่อคอลัมน์)
@@ -476,40 +640,79 @@ async function migrateEmployees() {
     console.log('  อ่านได้ 0 คน — คอลัมน์ที่จับได้อาจไม่ตรง หรือชี้ผิดแท็บ');
     console.log('  ข้อมูล 6 แถวแรกของชีท (ไว้ตรวจว่าคอลัมน์ไหนคืออะไร):');
     dumpRows(all);
-  } else {
-    console.log(`  ตัวอย่างคนแรกที่อ่านได้: ${JSON.stringify(data[0])}`);
+    await writeEmployees(data);
+    return;
   }
-  await runBatch('พนักงาน', data, (row) => ({
-    text: `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-             USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
-           WHEN MATCHED THEN UPDATE SET
-             full_name = @name, branch = @branch, emp_type = @empType, position = @position,
-             daily_wage = @dailyWage, status = @status, resign_date = @resignDate,
-             updated_at = SYSDATETIME()
-           WHEN NOT MATCHED THEN
-             INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status, resign_date)
-             VALUES (@hrCode, @name, @branch, @empType, @position, @dailyWage, @status, @resignDate);`,
-    params: {
-      hrCode: { type: sql.NVarChar(30), value: row.hrCode },
-      name: { type: sql.NVarChar(150), value: row.name },
-      branch: { type: sql.NVarChar(50), value: row.branch },
-      empType: { type: sql.NVarChar(20), value: orNull(row.empType) },
-      position: { type: sql.NVarChar(100), value: orNull(row.position) },
-      dailyWage: { type: sql.Decimal(12, 2), value: row.dailyWage },
-      status: { type: sql.NVarChar(20), value: row.status },
-      resignDate: { type: sql.Date, value: row.resignDate },
-    },
-  }));
 
-  // รายชื่อสาขามาจากพนักงานล้วนๆ (ชีท Details เลิกใช้แล้ว)
-  // เป้าขาย/ค่าแรงสูงสุดจึงเป็น 0 ไปก่อน ต้องกรอกเองด้วย UPDATE dbo.hr_branch
-  const branches = [...new Set(data.map((d) => d.branch).filter(Boolean))].sort();
-  console.log(`  พบสาขา ${branches.length} สาขา: ${branches.join(', ') || '(ไม่มี)'}`);
-  await runBatch('สาขา', branches.map((b) => ({ branch: b })), (row) => ({
-    text: `IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch WHERE branch = @branch)
-             INSERT INTO dbo.hr_branch (branch, branch_name) VALUES (@branch, @branch);`,
-    params: { branch: { type: sql.NVarChar(50), value: row.branch } },
-  }));
+  // รหัสในชีทพนักงานกับในตารางงานไม่ใช่ตัวเดียวกัน
+  //   ชีท DATA คอลัมน์ "รหัส HR" ของ น.ส.ไพลิน = 0808001
+  //   ตารางงานใช้ 740808001 = "74" (รหัสสาขา ZBW) + 0808001
+  // ถ้าเขียนรหัสตามชีทตรงๆ พนักงานจะ join กับตารางงานไม่ติดสักแถว
+  // เปิดหน้ามาจะเห็นรายชื่อครบแต่ตารางว่างทั้งสัปดาห์
+  //
+  // แทนที่จะประกอบรหัสเอง (เดารหัสสาขาผิดเมื่อไหร่ก็พังเงียบๆ)
+  // ใช้วิธีจับคู่ด้วย สาขา+ชื่อ แล้วดึงรหัสจริงจากตารางงานมาใช้
+  // ตารางงานคือแหล่งความจริงของรหัส ส่วนชีทพนักงานคือแหล่งความจริงของค่าแรง/ตำแหน่ง/สถานะ
+  const { byName, byBranch } = await timesheetCodeIndex();
+  let hitName = 0;
+  let hitSuffix = 0;
+  const unmatched = [];
+  for (const emp of data) {
+    const branchKey = emp.branch.toLowerCase();
+
+    // วิธีที่ 1 — เทียบ สาขา+ชื่อ (ตรงที่สุดถ้าสะกดเหมือนกันทั้งสองชีท)
+    const byPerson = byName.get(`${branchKey}|${normName(emp.name)}`);
+    if (byPerson) {
+      emp.hrCode = byPerson;
+      hitName++;
+      continue;
+    }
+
+    // วิธีที่ 2 — เทียบจากตัวรหัสเอง
+    // รหัสตารางงาน = รหัสสาขา 2 หลัก + รหัสในชีท DATA (74 + 0808001 = 740808001)
+    // จึงหารหัสในสาขาเดียวกันที่ยาวกว่าพอดี 2 ตัวและลงท้ายด้วยรหัสของคนนี้
+    // แม่นกว่าเทียบชื่อ เพราะชื่อสองชีทสะกดต่างกันได้ (เว้นวรรค คำนำหน้า ตัวสะกด)
+    const raw = str(emp.hrCode);
+    const candidates = [...(byBranch.get(branchKey) || [])].filter(
+      (c) => c.length === raw.length + 2 && c.endsWith(raw)
+    );
+    if (candidates.length === 1) {
+      emp.hrCode = candidates[0];
+      hitSuffix++;
+      continue;
+    }
+    unmatched.push(emp);
+  }
+  console.log(`  จับคู่กับตารางงานได้ ${hitName + hitSuffix}/${data.length} คน (เทียบชื่อ ${hitName} + เทียบรหัส ${hitSuffix})`);
+  if (unmatched.length) {
+    console.log(`  อีก ${unmatched.length} คนไม่มีประวัติลงตาราง ใช้รหัสจากชีทพนักงานตามเดิม`);
+    console.log(`    เช่น ${unmatched.slice(0, 5).map((e) => `${e.branch}/${e.name}`).join(', ')}`);
+  }
+
+  // ชีท DATA มีคนที่ลงชื่อซ้ำสองแถว (คนละรหัส) พอจับคู่แล้วจะได้รหัสเดียวกัน
+  // ต้องยุบให้เหลือแถวเดียว ไม่งั้น MERGE จะเขียนทับกันเองแล้วเหลือข้อมูลของแถวหลังสุด
+  const byCodeFinal = new Map();
+  const merged = [];
+  for (const emp of data) {
+    const prev = byCodeFinal.get(emp.hrCode);
+    if (!prev) {
+      byCodeFinal.set(emp.hrCode, emp);
+      continue;
+    }
+    merged.push(`${emp.hrCode} ${emp.name}`);
+    // เก็บแถวที่ยังทำงานอยู่ไว้ก่อน ถ้าเท่ากันเอาแถวที่มีค่าแรง
+    const better = prev.status === 'ทำงาน' && emp.status !== 'ทำงาน' ? prev
+      : emp.status === 'ทำงาน' && prev.status !== 'ทำงาน' ? emp
+      : (prev.dailyWage || 0) >= (emp.dailyWage || 0) ? prev : emp;
+    byCodeFinal.set(emp.hrCode, better);
+  }
+  if (merged.length) {
+    console.log(`  ยุบแถวที่ได้รหัสซ้ำกัน ${merged.length} แถว: ${merged.slice(0, 5).join(', ')}`);
+  }
+
+  const finalData = [...byCodeFinal.values()];
+  console.log(`  ตัวอย่างคนแรกที่อ่านได้: ${JSON.stringify(finalData[0])}`);
+  await writeEmployees(finalData);
 }
 
 // ชีท "ลงตารางงาน" — คอลัมน์ A..V ตามที่ Apps Script เดิมเขียนไว้
@@ -526,11 +729,9 @@ async function migrateTimesheet() {
   const rows = hasHeader ? all.slice(1) : all;
   console.log(`  หัวตาราง: ${hasHeader ? all[0].map(str).filter(Boolean).join(' | ') : '(ไม่มีแถวหัว อ่านทุกแถวเป็นข้อมูล)'}`);
 
-  // ชีทเป็น log ต่อท้าย — เก็บเฉพาะแถวล่าสุดของแต่ละ (วันที่, สาขา, รหัส) เหมือนที่ Apps Script อ่าน
-  const latest = new Map();
+  // รอบที่ 1 — กรองช่วงวันที่ และเก็บว่าใครใช้รหัสอะไรบ้าง
+  const usable = [];
   let skippedOld = 0;
-  let cleared = 0;
-
   for (const r of rows) {
     const workDate = toDateKey(r[1]);
     const branch = str(r[2]);
@@ -540,12 +741,64 @@ async function migrateTimesheet() {
       skippedOld++;
       continue;
     }
-    const key = `${workDate}_${branch}_${hrCode}`;
-    const stamp = toStamp(r[0]);
-    const prev = latest.get(key);
-    if (prev && prev.stamp > stamp) continue;
-    latest.set(key, { stamp, row: r, workDate, branch, hrCode });
+    usable.push({ row: r, workDate, branch, hrCode, name: str(r[4]), stamp: toStamp(r[0]) });
   }
+
+  // รวมรหัสของคนเดียวกันให้เหลือรหัสเดียว
+  // บริษัทเปลี่ยนระบบรหัสพนักงานกลางปี คนเดียวกันจึงมีทั้งรหัสเก่าและใหม่ในชีท
+  // (เช่น น.ส.ไพลิน จั่นพงษ์ ZBW = 740000003 เมื่อ มี.ค. และ 740808001 เมื่อ มิ.ย.)
+  // ถ้าปล่อยไว้ คนคนเดียวจะกลายเป็นสองคนในระบบใหม่ ดูประวัติย้อนหลังไม่ต่อเนื่อง
+  // จึงยึด "รหัสที่ใช้ล่าสุด" ของแต่ละคน (เทียบจากสาขา+ชื่อ) แล้วเขียนทับรหัสเก่าให้เป็นตัวเดียวกัน
+  const remap = new Map(); // สาขา|ชื่อ|รหัสเก่า -> รหัสล่าสุด
+  if (UNIFY_CODES) {
+    const byPerson = new Map(); // สาขา|ชื่อ -> Map(รหัส -> วันที่ล่าสุดที่ใช้รหัสนั้น)
+    for (const u of usable) {
+      if (!u.name) continue;
+      const person = `${u.branch.toLowerCase()}|${normName(u.name)}`;
+      if (!byPerson.has(person)) byPerson.set(person, new Map());
+      const codes = byPerson.get(person);
+      if (!codes.has(u.hrCode) || codes.get(u.hrCode) < u.workDate) codes.set(u.hrCode, u.workDate);
+    }
+
+    const samples = [];
+    for (const [person, codes] of byPerson) {
+      if (codes.size < 2) continue;
+      // รหัสที่ถูกใช้กับวันทำงานล่าสุด = รหัสปัจจุบันของคนนั้น
+      const newest = [...codes.entries()].sort((a, b) => (a[1] < b[1] ? 1 : -1))[0][0];
+      for (const code of codes.keys()) {
+        if (code !== newest) remap.set(`${person}|${code}`, newest);
+      }
+      if (samples.length < 5) samples.push(`${person.split('|')[1]} : ${[...codes.keys()].join(' -> ')} (ใช้ ${newest})`);
+    }
+    if (remap.size) {
+      console.log(`  รวมรหัสซ้ำ: ${new Set([...remap.keys()].map((k) => k.split('|').slice(0, 2).join('|'))).size} คนมีมากกว่า 1 รหัส`);
+      samples.forEach((s) => console.log(`    ${s}`));
+    } else {
+      console.log('  รวมรหัสซ้ำ: ไม่มีใครมีรหัสมากกว่า 1 ตัว');
+    }
+  }
+
+  // รอบที่ 2 — ชีทเป็น log ต่อท้าย เก็บเฉพาะแถวล่าสุดของแต่ละ (วันที่, สาขา, รหัส)
+  // ต้องรวมรหัสให้เสร็จก่อน ไม่งั้นคนเดียวกันวันเดียวกันจะเหลือสองแถวเพราะรหัสไม่ตรงกัน
+  const latest = new Map();
+  let remapped = 0;
+  for (const u of usable) {
+    let hrCode = u.hrCode;
+    if (u.name) {
+      const to = remap.get(`${u.branch.toLowerCase()}|${normName(u.name)}|${hrCode}`);
+      if (to) {
+        hrCode = to;
+        remapped++;
+      }
+    }
+    const key = `${u.workDate}_${u.branch}_${hrCode}`;
+    const prev = latest.get(key);
+    if (prev && prev.stamp > u.stamp) continue;
+    latest.set(key, { stamp: u.stamp, row: u.row, workDate: u.workDate, branch: u.branch, hrCode });
+  }
+  if (remapped) console.log(`  เปลี่ยนรหัสเก่าเป็นรหัสปัจจุบัน ${remapped} แถว`);
+
+  let cleared = 0;
 
   const data = [];
   for (const { row: r, workDate, branch, hrCode } of latest.values()) {
@@ -685,6 +938,46 @@ async function main() {
     if (missing.length) {
       console.log(`  จับคู่ไม่ได้ ${missing.length} คน เช่น:`);
       missing.slice(0, 10).forEach((k) => console.log(`    ${k.split('|')[0].toUpperCase()} : ${k.split('|')[1]}`));
+    }
+    return;
+  }
+
+  // โหมดนับสาขา: ชีทลงตารางงานมีข้อมูลแค่ 8 สาขาจาก 16 สาขาที่มีจริง
+  // โหมดนี้บอกว่าแต่ละชีทมีสาขาอะไรบ้าง คนละกี่คน เพื่อหาว่าพนักงานอีก 8 สาขาอยู่ไหน
+  if (BRANCHES) {
+    const report = async (label, rows, branchCol, nameCol) => {
+      const byBranch = new Map();
+      for (const r of rows) {
+        const b = str(r[branchCol]);
+        const n = str(r[nameCol]);
+        if (!b || !n) continue;
+        if (!byBranch.has(b)) byBranch.set(b, new Set());
+        byBranch.get(b).add(normName(n));
+      }
+      console.log(`\n[${label}] ${rows.length} แถว | ${byBranch.size} สาขา`);
+      [...byBranch.entries()]
+        .sort((a, b) => b[1].size - a[1].size)
+        .forEach(([b, people]) => console.log(`  ${b.padEnd(10)} ${people.size} คน`));
+      return new Set(byBranch.keys());
+    };
+
+    const ts = await fetchSheetRows(DESTINATION_SPREADSHEET_ID, LOG_SHEET_NAME, LOG_GID);
+    const tsRows = /timestamp|วันที่ลงงาน/i.test(str(ts[0]?.[0]) + str(ts[0]?.[1])) ? ts.slice(1) : ts;
+    const inTimesheet = await report('ชีทลงตารางงาน', tsRows, 2, 4);
+
+    const emp = await fetchSheetRows(SOURCE_SPREADSHEET_ID, EMP_SHEET, EMP_GID);
+    const picked = HEADER_ROW > 0 ? { row: HEADER_ROW - 1 } : pickHeaderRow(emp, EMP_COLUMNS);
+    if (picked.row >= 0) {
+      const { map } = mapColumns(emp[picked.row].map(str), EMP_COLUMNS);
+      const empRows = emp.slice(picked.row + 1);
+      verifyColumns(map, empRows, EMP_COLUMNS);
+      const inEmp = await report('ชีทพนักงาน', empRows, map.branch, map.name);
+
+      const onlyEmp = [...inEmp].filter((b) => !inTimesheet.has(b));
+      if (onlyEmp.length) {
+        console.log(`\n  สาขาที่มีในชีทพนักงานแต่ไม่มีในชีทลงตารางงาน: ${onlyEmp.join(', ')}`);
+        console.log('  => ถ้าสาขาพวกนี้คือที่ขาดไป ให้ใช้ชีทพนักงานเป็นแหล่งข้อมูลแทน --employees-from-timesheet');
+      }
     }
     return;
   }

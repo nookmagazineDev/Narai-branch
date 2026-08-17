@@ -11,22 +11,25 @@ export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPt
 // ---------------------------------------------------------------------------
 const SQL_ENDPOINT = '/api/schedule';
 
-// ⚠️ ปิดไว้ทั้งหมดจนกว่าจะย้ายข้อมูลเข้า SQL เสร็จและตรวจแล้ว
+// เปิดทีละกลุ่ม ไม่เปิดรวดเดียว เพราะบาง action มีหน้าอื่นใช้ร่วมด้วย
 //
-// เคยเปิด getScheduleEmployees ไว้ทั้งที่ตาราง hr_employee ยังว่าง ผลคือ
+// รอบแรกเคยเปิด getScheduleEmployees ทั้งที่ hr_employee ยังว่าง ผลคือ
 // "หน้านับสต๊อก/ขอเบิก" ที่ใช้ action เดียวกันดึงรายชื่อผู้เบิก-ผู้นับ กลายเป็นดรอปดาวน์ว่าง
-// ใช้งานไม่ได้ทั้งหน้า — action นี้ไม่ได้ใช้แค่หน้าตารางงาน ต้องดูให้ครบก่อนเปิด
+// ใช้งานไม่ได้ทั้งหน้า — ก่อนเปิดตัวไหนต้องไล่ดูก่อนว่ามีหน้าไหนเรียกบ้าง
 //
-// ลำดับที่ถูกต้องคือ: ย้ายข้อมูลให้เสร็จ -> ตรวจว่าข้อมูลครบ -> ค่อยเปิดทีละ action
-// เปิดโดยใส่ชื่อ action กลับเข้าลิสต์นี้ แล้ว deploy (ดู docs/hr-sql-migration.md)
+// สถานะข้อมูลตอนเปิดกลุ่มนี้: พนักงาน 356 คน, กะ 2,412 แถว (ย้อนหลัง 1 เดือน),
+// กะที่หาเจ้าของไม่เจอ 6 แถว (0.25%)
 const SQL_ACTIONS = new Set([
-  // 'getScheduleEmployees',   // ใช้ที่หน้าตารางงาน + หน้านับสต๊อก/ขอเบิก
-  // 'getBranchStats',
-  // 'getDailySales',
-  // 'getHistoryData',
-  // 'saveTimesheet',
-  // 'updateOTApprovalBulk',
-  // 'updateWorkStation',
+  // กลุ่มที่ 1 — กระทบเฉพาะหน้าลงตารางงานกับหน้าประวัติ ไม่มีหน้าอื่นเรียก
+  'getHistoryData',        // ScheduleWeekly, ScheduleHistory
+  'saveTimesheet',         // ScheduleWeekly
+  'updateOTApprovalBulk',  // ScheduleHistory
+  'updateWorkStation',     // ยังไม่มีหน้าไหนเรียก
+  'getBranchStats',        // ScheduleWeekly (การ์ดเป้าขาย)
+  'getDailySales',         // ScheduleHistory (การ์ดยอดขาย)
+
+  // กลุ่มที่ 2 — รอเปิดหลังทดสอบกลุ่มแรกผ่าน
+  // 'getScheduleEmployees',  // ⚠️ ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
 ]);
 
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
