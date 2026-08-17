@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage } from '../services/api';
 import { Loader2, Search, CheckCircle, ChevronLeft, ChevronRight, Calendar, Users, DollarSign, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { leaveText } from '../utils/leaveCodes';
 
 // แถวหนึ่งของประวัติ = พนักงานหนึ่งคน ยึด hrCode เป็นหลัก
 // เดิมใช้ "ชื่อ" เป็นคีย์ พนักงานชื่อซ้ำกันจะติ๊กอนุมัติ OT พร้อมกันทั้งคู่
@@ -325,8 +326,8 @@ export default function ScheduleHistory() {
                       </td>
                       
                       <td className="px-3 py-2 text-right font-bold text-blue-700">{parseFloat(item.wage || 0).toLocaleString()}</td>
-                      <td className="px-3 py-2 text-center text-blue-600 text-xs">{item.leaveNote || '-'}</td>
-                      <td className="px-3 py-2 text-center text-red-500 text-xs">{item.unpaidLeave || '-'}</td>
+                      <td className="px-3 py-2 text-center text-blue-600 text-xs">{leaveText(item.leaveNote) || '-'}</td>
+                      <td className="px-3 py-2 text-center text-red-500 text-xs">{leaveText(item.unpaidLeave) || '-'}</td>
                       <td className="px-3 py-2 text-center text-gray-600 text-xs">{item.useAccumulatedHours > 0 ? `${item.useAccumulatedHours} ชม.` : '-'}</td>
                       <td className="px-3 py-2 text-center text-gray-600 text-xs">{item.hourlyLeave > 0 ? `${item.hourlyLeave} ชม.` : '-'}</td>
                       <td className="px-3 py-2 text-center text-gray-500 text-xs">{item.breakTimeRange || '-'}</td>
