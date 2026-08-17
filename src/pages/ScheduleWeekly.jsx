@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall, errMessage } from '../services/api';
+import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
@@ -315,7 +315,10 @@ export default function ScheduleWeekly() {
 
     // allSettled: เป้าขายล้มต้องไม่ทำให้รายชื่อพนักงานหายไปด้วย
     Promise.allSettled([
-      apiCall('getScheduleEmployees', { branch }),
+      // อ่านจาก SQL ก่อน (เร็ว) แล้ว onRefresh จะยิงกลับมาถ้าชีทมีของใหม่กว่า
+      fetchScheduleEmployees(branch, {
+        onRefresh: (fresh) => { if (alive) setEmployees(fresh); },
+      }),
       apiCall('getBranchStats', { branch }),
     ]).then(([empRes, statsRes]) => {
       if (!alive) return;

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall, errMessage } from '../services/api';
+import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { tryGetJson } from '../services/dashboardApi';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import html2canvas from 'html2canvas';
@@ -513,7 +513,8 @@ export default function StockList() {
       // (เดิมใช้ Promise.all — คำขอเดียวพลาด หน้าว่างทั้งหน้าแล้วขึ้น "ติดต่อเซิร์ฟเวอร์ไม่ได้")
       const settled = await Promise.allSettled([
         apiCall('getStockItems', { branch }),
-        apiCall('getScheduleEmployees', { branch }),
+        // อ่านจาก SQL (เร็ว) พร้อม fallback ไปชีทเมื่อ SQL ยังไม่มีข้อมูลของสาขานั้น
+        fetchScheduleEmployees(branch, { onRefresh: (fresh) => setEmployees(fresh) }),
         outletId
           ? tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`)
           : Promise.resolve(null),

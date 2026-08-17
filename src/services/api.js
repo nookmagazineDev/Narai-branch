@@ -28,8 +28,10 @@ const SQL_ACTIONS = new Set([
   'getBranchStats',        // ScheduleWeekly (การ์ดเป้าขาย)
   'getDailySales',         // ScheduleHistory (การ์ดยอดขาย)
 
-  // กลุ่มที่ 2 — ไม่ย้าย แต่ให้ SQL คัดลอกตามอัตโนมัติ (ดู MIRROR_TO_SQL ข้างล่าง)
-  // 'getScheduleEmployees',  // ⚠️ ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
+  // กลุ่มที่ 2 — อ่านจาก SQL เพื่อความเร็ว แต่ยังเช็คของใหม่จากชีทเงียบๆ ข้างหลัง
+  // ห้ามเรียก action นี้ด้วย apiCall() ตรงๆ ให้ใช้ fetchScheduleEmployees() แทน
+  // เพราะมันจัดการ fallback ตอน SQL ว่าง และการซิงก์กลับให้ครบ
+  'getScheduleEmployees',  // ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
 ]);
 
 // ---------------------------------------------------------------------------
@@ -75,6 +77,65 @@ const mirrorToSql = (action, payload, result) => {
       }
     })
     .catch((err) => console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, err?.message || err));
+};
+
+/** ลายนิ้วมือของรายชื่อ ใช้เทียบว่าชีทเปลี่ยนไปจากที่เก็บใน SQL หรือยัง */
+const rosterSignature = (list) =>
+  (list || [])
+    .map((e) => `${e.hrCode}|${e.name}|${e.position || ''}|${e.type || e.empType || ''}|${e.dailyWage || 0}`)
+    .sort()
+    .join('~');
+
+/**
+ * ดึงรายชื่อพนักงานของสาขา — เร็วจาก SQL แต่ยังตามการแก้ในชีททัน
+ *
+ * ปัญหาที่ต้องแก้พร้อมกันสองข้อ
+ *   1) Apps Script ช้า (เปิดสเปรดชีตทั้งไฟล์ทุกครั้ง) เปิดหน้าลงตารางแล้วรอนาน
+ *   2) ถ้าอ่านจาก SQL เฉยๆ การแก้ในชีท (เพิ่มคน/ให้ลาออก/แก้ค่าแรง) จะไม่มีทางเข้า SQL
+ *      เพราะตัวซิงก์เดิมทำงานตอนที่หน้าเว็บไปอ่านชีท
+ *
+ * จึงทำเป็นสองจังหวะ
+ *   จังหวะแรก  — อ่านจาก SQL คืนให้หน้าเว็บใช้ทันที (เร็ว)
+ *   จังหวะสอง — เช็คชีทเงียบๆ ข้างหลัง ซิงก์เข้า SQL ให้ และถ้ารายชื่อต่างจากเดิม
+ *                จะเรียก onRefresh ให้หน้าเว็บอัปเดตตัวเองในการเปิดครั้งนั้นเลย
+ *
+ * ถ้า SQL ยังไม่มีข้อมูลของสาขานั้น (สาขาใหม่ / ซิงก์ยังไม่ถึง) จะรอผลจากชีทแทน
+ * ไม่ปล่อยให้หน้าเว็บขึ้นรายชื่อว่างเปล่า — เคสนี้เคยทำหน้านับสต๊อกใช้งานไม่ได้ทั้งหน้า
+ *
+ * @param {string} branch
+ * @param {{ onRefresh?: (employees: any[]) => void }} [options]
+ */
+export const fetchScheduleEmployees = async (branch, { onRefresh } = {}) => {
+  const b = String(branch || '').trim();
+  if (!b) return { status: 'success', data: [] };
+
+  let sqlRes = null;
+  try {
+    sqlRes = await apiCall('getScheduleEmployees', { branch: b }, { via: 'sql' });
+  } catch (err) {
+    console.warn('อ่านรายชื่อพนักงานจาก SQL ไม่สำเร็จ จะใช้ชีทแทน:', err?.message || err);
+  }
+
+  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data : [];
+
+  // SQL ไม่มีข้อมูล -> ต้องได้จากชีทก่อนคืนค่า (mirror จะซิงก์เข้า SQL ให้เอง)
+  if (fromSql.length === 0) {
+    return await apiCall('getScheduleEmployees', { branch: b }, { via: 'sheet' });
+  }
+
+  // มีข้อมูลแล้ว — คืนทันที แล้วค่อยเช็คของใหม่จากชีทข้างหลัง
+  // ไม่ลองใหม่ (retries: 0) เพราะเป็นงานเบื้องหลัง ถ้าพลาดรอบนี้ครั้งหน้าก็เช็คใหม่
+  apiCall('getScheduleEmployees', { branch: b }, { via: 'sheet', retries: 0 })
+    .then((sheetRes) => {
+      const fresh = Array.isArray(sheetRes?.data) ? sheetRes.data : [];
+      if (fresh.length === 0) return;
+      if (rosterSignature(fresh) === rosterSignature(fromSql)) return;
+      console.info(`รายชื่อพนักงานสาขา ${b} ในชีทเปลี่ยนไปจากใน SQL — อัปเดตให้แล้ว`);
+      if (typeof onRefresh === 'function') onRefresh(fresh);
+    })
+    .catch((err) => console.warn(`เช็ครายชื่อพนักงานสาขา ${b} จากชีทไม่สำเร็จ:`, err?.message || err));
+
+  return sqlRes;
 };
 
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
@@ -150,10 +211,12 @@ const pump = () => {
 const acquire = () => new Promise((resolve) => { waiting.push(resolve); pump(); });
 const release = () => { active--; pump(); };
 
-const requestOnce = async (action, payload, timeoutMs) => {
+const requestOnce = async (action, payload, timeoutMs, via) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const toSql = SQL_ACTIONS.has(action);
+  // via บังคับเส้นทางได้ ('sql' หรือ 'sheet') ไม่ใส่ = ตัดสินจาก SQL_ACTIONS ตามปกติ
+  // จำเป็นเพราะ fetchScheduleEmployees() ต้องอ่านทั้งสองทางในคำสั่งเดียวกัน
+  const toSql = via ? via === 'sql' : SQL_ACTIONS.has(action);
 
   let response;
   try {
@@ -235,9 +298,12 @@ export const apiCall = async (action, payload, options = {}) => {
         // ตัด timeout ของรอบนี้ไม่ให้ล้ำ deadline รวม — เดิมทุกรอบใช้ 30 วิเต็มโดยไม่สนเวลาที่ใช้ไปแล้ว
         // ทำให้ 3 รอบรวมกันเป็น ~93 วิ ทั้งที่ตั้ง deadline ไว้ 70 วิ (ผู้ใช้นั่งรอค้างเกินจริงเกือบครึ่งนาที)
         const remaining = deadline - Date.now();
-        const result = await requestOnce(action, payload, Math.min(timeoutMs, remaining));
+        const result = await requestOnce(action, payload, Math.min(timeoutMs, remaining), options.via);
         // คัดลอกรายชื่อพนักงานไปเก็บใน SQL ด้วย — ไม่รอผล ไม่ให้กระทบเวลาโหลดหน้า
-        if (MIRROR_TO_SQL.has(action) && !SQL_ACTIONS.has(action)) mirrorToSql(action, payload, result);
+        // ซิงก์เข้า SQL เมื่อคำขอนี้ไปหยิบมาจากชีทจริงๆ เท่านั้น
+        // (ถ้าอ่านมาจาก SQL อยู่แล้วก็ไม่มีอะไรต้องซิงก์)
+        const cameFromSheet = options.via ? options.via === 'sheet' : !SQL_ACTIONS.has(action);
+        if (MIRROR_TO_SQL.has(action) && cameFromSheet) mirrorToSql(action, payload, result);
         return result;
       } catch (err) {
         // เซิร์ฟเวอร์ตอบมาแล้วว่าทำไม่ได้ (เช่น รหัสผ่านผิด, ไม่พบข้อมูล) — ลองใหม่ก็ได้ผลเดิม
