@@ -4,6 +4,7 @@ import { apiCall, errMessage } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
+import { PAID_LEAVE, UNPAID_LEAVE, leaveText } from '../utils/leaveCodes';
 
 function getStartOfWeek(date) {
   const d = new Date(date);
@@ -37,28 +38,6 @@ function isPublicHoliday(dateStr) {
   if (FIXED_HOLIDAYS_MMDD.includes(dateStr.slice(5, 10))) return true;
   return (LUNAR_HOLIDAYS_BY_YEAR[dateStr.slice(0, 4)] || []).includes(dateStr);
 }
-
-/* ประเภทการลา — เก็บลงฐานข้อมูลเป็น "รหัส ชื่อ" ทั้งก้อน
-   เก็บรหัสไว้ด้วยเพราะเป็นรหัสที่ฝ่ายบุคคลใช้คิดเงินเดือน และทำให้แยกออกว่า
-   "13 ป่วย" (รับค่าแรง) กับ "21 ป่วย" (ไม่รับค่าแรง) เป็นคนละอย่างกัน
-   ถ้าเก็บแค่ชื่อจะแยกไม่ออกเลยเวลาเอาไปทำรายงาน */
-const PAID_LEAVE_OPTS = [
-  '10 หยุด',
-  '11 ชดเชย',
-  '12 V',
-  '13 ป่วย',
-  '14 กิจ',
-  '15 cd off',
-  '16 M, ประชุม',
-  '17 คลอด',
-  '19 อบรม',
-  '80 8hr',
-];
-const UNPAID_LEAVE_OPTS = [
-  '21 ป่วย',
-  '22 กิจ',
-  '23 ขาดงาน',
-];
 
 const EMPTY_CELL = {
   isStop: false,
@@ -650,8 +629,8 @@ export default function ScheduleWeekly() {
 
     if (cell.isStop || cell.leave2) {
       const reasons = [];
-      if (cell.leave1) reasons.push(cell.leave1);
-      if (cell.leave2) reasons.push(cell.leave2);
+      if (cell.leave1) reasons.push(leaveText(cell.leave1));
+      if (cell.leave2) reasons.push(leaveText(cell.leave2));
       if (cell.otherNote) reasons.push(cell.otherNote);
       return (
         <div className="min-h-[55px] rounded-md border-2 border-amber-100 border-l-4 border-l-amber-400 bg-amber-50/60 text-amber-600 flex flex-col items-center justify-center text-xs p-1 gap-1">
@@ -669,7 +648,7 @@ export default function ScheduleWeekly() {
     const badges = [];
     if (cell.ot && cell.ot !== '0') badges.push({ text: `OT ${cell.ot}`, cls: 'bg-blue-600 text-white' });
     const leaveTexts = [];
-    if (cell.leave1) leaveTexts.push(cell.leave1);
+    if (cell.leave1) leaveTexts.push(leaveText(cell.leave1));
     if (cell.hrLeave && cell.hrLeave !== '0') leaveTexts.push(`ลาชม. ${cell.hrLeave}`);
     if (cell.useAccum && cell.useAccum !== '0') leaveTexts.push(`ใช้ชม.สะสม ${cell.useAccum}ชม.`);
     if (cell.otAccum && cell.otAccum !== '0') leaveTexts.push(`+สะสม ${cell.otAccum}`);
@@ -1000,7 +979,7 @@ export default function ScheduleWeekly() {
                         onChange={(e) => setCellData({...cellData, leave1: e.target.value})}
                       >
                         <option value="">-</option>
-                        {PAID_LEAVE_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+                        {PAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
                       </select>
                     </div>
                     <div>
@@ -1011,7 +990,7 @@ export default function ScheduleWeekly() {
                         onChange={(e) => setCellData({...cellData, leave2: e.target.value})}
                       >
                         <option value="">-</option>
-                        {UNPAID_LEAVE_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+                        {UNPAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
                       </select>
                     </div>
                   </div>
