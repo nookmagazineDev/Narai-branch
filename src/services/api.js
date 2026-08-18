@@ -1,8 +1,8 @@
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
 // ---------------------------------------------------------------------------
-// การย้ายจาก Google Apps Script ไปฐานข้อมูล (MySQL เครื่อง inventory.dyndns.tv)
-// action ที่อยู่ในลิสต์นี้จะถูกส่งไปที่ /api/schedule (ต่อฐานข้อมูลตรง) แทน Apps Script
+// การย้ายจาก Google Apps Script ไป SQL Server (เครื่อง 203.154.185.48)
+// action ที่อยู่ในลิสต์นี้จะถูกส่งไปที่ /api/schedule (ต่อ MS SQL ตรง) แทน Apps Script
 // ที่เหลือยังวิ่งไปชีทเหมือนเดิม — ย้ายทีละกลุ่มได้โดยไม่ต้องแก้หน้าเว็บสักหน้า
 // รูปแบบ request/response เหมือนกันทั้งสองทาง หน้าเว็บจึงไม่รู้ว่าข้อมูลมาจากไหน
 //

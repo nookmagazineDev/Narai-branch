@@ -1,19 +1,13 @@
-# ย้ายตารางงานจาก Google Sheets ไปฐานข้อมูล
+# ย้ายตารางงานจาก Google Sheets ไป SQL Server
 
 ข้อมูลส่วน "ลงตารางงาน" ย้ายจาก Google Apps Script + Google Sheets มาเก็บใน
-**MySQL** เครื่อง **inventory.dyndns.tv** ฐานข้อมูล **narai_hr**
-(เครื่องเดียวกับฐานข้อมูล `myfbdata` ของระบบสต๊อก)
-
-> **เคยอยู่บน MS SQL Server** เครื่องเดียวกันมาก่อน แล้วย้ายมา MySQL ทีหลัง
-> เพื่อให้เหลือฐานข้อมูลเดียวที่ต้องดูแล/เปิดพอร์ต/สำรองข้อมูล
-> วิธีย้ายอยู่ที่หัวข้อ [ย้ายจาก SQL Server มา MySQL](#ย้ายจาก-sql-server-มา-mysql)
-> ส่วนของเดิมยังเก็บไว้ดูได้ที่ `docs/schema-hr.sql` (เลิกใช้แล้ว)
+Microsoft SQL Server เครื่อง **203.154.185.48** ฐานข้อมูล **narai_hr**
 
 หน้าเว็บไม่ได้แก้อะไรเลย — `src/services/api.js` เป็นตัวตัดสินว่า action ไหนวิ่งไป SQL
 action ไหนยังวิ่งไปชีท (ดูตัวแปร `SQL_ACTIONS`) จึงย้ายทีละกลุ่มได้โดยไม่ต้องหยุดใช้งานระบบ
 
 ```
-เบราว์เซอร์ ──apiCall(action)──┬─ action อยู่ใน SQL_ACTIONS ─→ /api/schedule ─→ MySQL inventory.dyndns.tv
+เบราว์เซอร์ ──apiCall(action)──┬─ action อยู่ใน SQL_ACTIONS ─→ /api/schedule ─→ SQL Server 203.154.185.48
                                └─ นอกนั้น ────────────────────→ Google Apps Script (ชีทเดิม)
 ```
 
@@ -43,21 +37,21 @@ action ไหนยังวิ่งไปชีท (ดูตัวแปร `
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `docs/schema-hr-mysql.sql` | สร้างฐานข้อมูลและตารางทั้งหมด รันครั้งเดียว |
-| `lib/hr-mysql.js` | connection pool + transaction + แปลง error เป็นข้อความไทย |
+| `docs/schema-hr.sql` | สร้างฐานข้อมูลและตารางทั้งหมด รันครั้งเดียว |
+| `lib/mssql.js` | connection pool + แปลง error เป็นข้อความไทย |
 | `api/schedule.js` | endpoint เดียวรวมทุก action ของตารางงาน |
-| `scripts/migrate-schedule.mjs` | ย้ายข้อมูลเก่าจากชีทเข้าฐานข้อมูล |
-| `scripts/mssql-to-mysql.mjs` | ย้ายข้อมูลจาก SQL Server เดิมมา MySQL (ใช้ครั้งเดียว) |
+| `scripts/migrate-schedule.mjs` | ย้ายข้อมูลเก่าจากชีทเข้า SQL |
 | `src/services/api.js` | ตัวสลับเส้นทาง SQL / Apps Script |
-| `docs/schema-hr.sql` | โครงสร้างฉบับ SQL Server เดิม — เก็บไว้อ้างอิงเฉยๆ |
 
 ## ขั้นตอนติดตั้ง
 
 ### 1. เปิดทางให้ต่อฐานข้อมูลได้
 
-MySQL เครื่องนี้เปิดให้ระบบสต๊อก (`myfbdata`) ต่อจากอินเทอร์เน็ตอยู่แล้ว
-พอร์ต **3306** จึง forward ไว้แล้ว ไม่ต้องทำอะไรเพิ่ม — เหลือแค่ให้ user
-ที่จะใช้ต่อได้จาก host ภายนอก (`'narai_web'@'%'` ไม่ใช่ `@'localhost'`)
+Vercel จะต่อเข้ามาจากอินเทอร์เน็ต เครื่องฐานข้อมูลจึงต้อง
+
+- เปิด **TCP/IP protocol** ใน SQL Server Configuration Manager (ปกติปิดมาจากโรงงาน)
+- เปิด **SQL Server Authentication** (โหมดผสม) ไม่ใช่ Windows Authentication อย่างเดียว
+- forward พอร์ต **1433** ที่เราเตอร์มาที่เครื่องนี้ และเปิดใน Windows Firewall
 
 > ถ้าไม่อยากเปิดพอร์ตออกเน็ต ทางเลือกคือให้ `office-server` เป็นตัวกลางแทน
 > (เหมือนที่ทำกับ ZKBio9 อยู่แล้ว) แล้วให้ `/api/schedule` proxy ไปที่นั่น
@@ -65,28 +59,25 @@ MySQL เครื่องนี้เปิดให้ระบบสต๊�
 ### 2. สร้างตาราง
 
 ```cmd
-mysql -u root -p < docs\schema-hr-mysql.sql
+sqlcmd -S 203.154.185.48 -U sa -P "<รหัสผ่าน>" -i docs\schema-hr.sql
 ```
 
-แล้วสร้าง user แยกสำหรับเว็บ (อย่าใช้ `root`) ตามคำสั่งท้ายไฟล์ `schema-hr-mysql.sql`
+แล้วสร้าง login แยกสำหรับเว็บ (อย่าใช้ `sa`) ตามคำสั่งท้ายไฟล์ `schema-hr.sql`
 
 ### 3. ตั้ง environment variables บน Vercel
 
 | ตัวแปร | ค่า |
 |---|---|
-| `HR_DB_HOST` | `inventory.dyndns.tv` (ค่าเริ่มต้นในโค้ดอยู่แล้ว) |
-| `HR_DB_PORT` | `3306` |
+| `HR_DB_HOST` | `203.154.185.48` (ค่าเริ่มต้นในโค้ดอยู่แล้ว) |
+| `HR_DB_PORT` | `1433` |
 | `HR_DB_NAME` | `narai_hr` |
-| `HR_DB_USER` | user ที่สร้างไว้ เช่น `narai_web` |
-| `HR_DB_PASSWORD` | รหัสผ่านของ user นั้น |
+| `HR_DB_USER` | login ที่สร้างไว้ เช่น `narai_web` |
+| `HR_DB_PASSWORD` | รหัสผ่านของ login นั้น |
+| `HR_DB_INSTANCE` | ใส่เมื่อเป็น named instance เช่น `SQLEXPRESS` (ปกติเว้นว่าง) |
+| `HR_DB_ENCRYPT` | ใส่ `1` เมื่อเปิด TLS ที่ SQL Server แล้ว |
 
-ถ้าไม่ตั้ง `HR_DB_USER`/`HR_DB_PASSWORD` จะถอยไปใช้ `MYSQL_USER`/`MYSQL_PASSWORD`
-ที่ตั้งไว้ให้ `myfbdata` อยู่แล้ว (เครื่องเดียวกัน user เดียวกันมักใช้ได้เลย)
-ถ้าไม่มีทั้งคู่ endpoint จะตอบ 503 พร้อมบอกว่ายังไม่ได้ตั้งค่า แทนที่จะค้างรอจนหมดเวลา
-
-> **ตัวแปรที่ต้องลบทิ้ง** หลังย้ายมา MySQL: `HR_DB_INSTANCE`, `HR_DB_USE_BROWSER`,
-> `HR_DB_ENCRYPT` (เป็นของ SQL Server ล้วนๆ) และอย่าลืมแก้ `HR_DB_PORT` จาก
-> `1433` เป็น `3306` — ถ้าลืม โค้ดจะเตือนใน log แล้วใช้ 3306 ให้เอง
+ถ้ายังไม่ได้ตั้ง `HR_DB_USER`/`HR_DB_PASSWORD` endpoint จะตอบ 503
+พร้อมข้อความบอกว่ายังไม่ได้ตั้งค่า แทนที่จะค้างรอจนหมดเวลา
 
 ### 4. ย้ายข้อมูลเก่า
 
@@ -109,7 +100,7 @@ node scripts/migrate-schedule.mjs --months=6
 ```
 
 สคริปต์ย้าย 2 ชุด: พนักงาน (สร้างรายชื่อสาขาให้ด้วย) → ตารางงาน
-รันซ้ำได้ (เขียนทับตามคีย์ ไม่เกิดแถวซ้ำ) เลือกเฉพาะบางชุดด้วย `--only=timesheet` ได้
+รันซ้ำได้ (ใช้ MERGE ทับของเดิม ไม่เกิดแถวซ้ำ) เลือกเฉพาะบางชุดด้วย `--only=timesheet` ได้
 
 **ชีทพนักงานจับคอลัมน์จากชื่อหัวตาราง ไม่ใช่ตำแหน่ง** เพราะไฟล์ถูกย้ายมาแล้วครั้งหนึ่ง
 (ไม่ใช่ไฟล์เดียวกับที่ Apps Script เดิมชี้ไว้) ตำแหน่งคอลัมน์จึงเชื่อไม่ได้
@@ -131,45 +122,11 @@ node scripts/migrate-schedule.mjs --months=6
 ผลคือการ์ดบนหน้าลงตารางจะขึ้น 0 จนกว่าจะกรอกเป้าลงตาราง `hr_branch` เอง
 
 ```sql
-UPDATE hr_branch SET daily_target = 40000, max_wage = 6000 WHERE branch = '<รหัสสาขา>';
+UPDATE dbo.hr_branch SET daily_target = 40000, max_wage = 6000 WHERE branch = N'<รหัสสาขา>';
 ```
 
 ส่วน "ยอดขายของวัน" ในหน้าประวัติจะเป็น 0 เสมอจนกว่าจะมีแหล่งข้อมูลใหม่
 (ระบบมี `/api/dashboard` ที่ดึงยอดขายจริงจาก POS อยู่แล้ว ต่อเข้ามาแทนได้ถ้าต้องการ)
-
-## ย้ายจาก SQL Server มา MySQL
-
-ทำครั้งเดียวตอนเลิกใช้ SQL Server ใช้ `scripts/mssql-to-mysql.mjs` คัดลอกทั้ง 5 ตาราง
-(`hr_branch`, `hr_employee`, `hr_timesheet`, `hr_timesheet_log`, `hr_daily_sales`)
-สคริปต์อ่านอย่างเดียวจากฝั่ง SQL Server ไม่ได้ลบหรือแก้อะไรที่ต้นทางเลย
-ของเดิมจึงยังอยู่ครบไว้ย้อนกลับได้ถ้าจำเป็น
-
-รันบนเครื่องที่ต่อได้ทั้งสองฝั่ง (ปกติคือเครื่องที่ออฟฟิศ)
-
-```cmd
-mkdir C:\hr-migrate && cd C:\hr-migrate
-npm init -y && npm i mssql mysql2
-:: วางไฟล์ scripts\mssql-to-mysql.mjs ไว้ในโฟลเดอร์นี้
-
-:: 1) นับแถวก่อน ยังไม่เขียนอะไร (ไม่ต้องมี MySQL ก็รันได้)
-node mssql-to-mysql.mjs --dry-run --src-host localhost --src-user narai_web --src-pass "<รหัสผ่าน>"
-
-:: 2) ย้ายจริง — สร้างฐานข้อมูล/ตารางฝั่ง MySQL ให้เองถ้ายังไม่มี
-node mssql-to-mysql.mjs --src-host localhost --src-user narai_web --src-pass "<รหัสผ่าน>" --dst-pass "<รหัสผ่าน root>"
-```
-
-จบแล้วสคริปต์จะนับแถวฝั่งปลายทางให้ดูว่าตรงกับต้นทางไหม
-รันซ้ำได้เรื่อยๆ (เขียนทับตามคีย์) จึงย้ายล่วงหน้าไว้ก่อนแล้วค่อยรันซ้ำตอนจะสลับจริงได้
-ถ้าอยากให้ปลายทางเหมือนต้นทางเป๊ะๆ (ลบของที่ต้นทางลบไปแล้วด้วย) ใส่ `--truncate`
-
-**ลำดับที่ปลอดภัยตอนสลับจริง**
-
-1. รัน `--dry-run` ดูจำนวนแถว
-2. ย้ายจริง แล้วดูว่ายอดตรงกัน
-3. แก้ env บน Vercel (`HR_DB_PORT` = 3306, ลบ `HR_DB_INSTANCE`/`HR_DB_ENCRYPT`,
-   ตั้ง `HR_DB_USER`/`HR_DB_PASSWORD` เป็น user ของ MySQL)
-4. deploy แล้วเรียก action `ping` เช็คว่าต่อติด (`readMs`/`txMs` ต้องมีค่า)
-5. รัน `--truncate` อีกรอบถ้ามีคนกรอกตารางเพิ่มระหว่างทาง — หรือปิดการใช้งานช่วงสลับ
 
 ## สิ่งที่เปลี่ยนไปจากของเดิม
 
@@ -180,7 +137,7 @@ node mssql-to-mysql.mjs --src-host localhost --src-user narai_web --src-pass "<�
 
 | การกระทำ | ชีทเดิม | SQL |
 |---|---|---|
-| บันทึกซ้ำวันเดิม | ต่อท้ายแถวใหม่ | `INSERT ... ON DUPLICATE KEY UPDATE` ทับแถวเดิม |
+| บันทึกซ้ำวันเดิม | ต่อท้ายแถวใหม่ | `MERGE` ทับแถวเดิม |
 | ล้างข้อมูลของวัน | ต่อท้ายแถวที่เขียนว่า `ล้างข้อมูล` | `DELETE` แถวนั้นจริง |
 | ประวัติว่าใครแก้เมื่อไหร่ | ดูจากแถวเก่าที่ทับถมกัน | ตาราง `hr_timesheet_log` แยกต่างหาก (เก็บ actor + payload) |
 | อนุมัติ OT | จับคู่ด้วย "ชื่อ" | จับคู่ด้วย `hr_code` (ชื่อซ้ำกันไม่โดนอนุมัติพร้อมกัน) |

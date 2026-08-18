@@ -14,6 +14,7 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.16.0",
+    "mssql": "^11.0.1",
     "mysql2": "^3.22.5",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
