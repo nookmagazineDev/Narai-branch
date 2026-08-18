@@ -1,5 +1,9 @@
-// ตารางงาน (ลงตารางสัปดาห์ / ประวัติ / อนุมัติ OT) — อ่าน-เขียนตรงกับ MS SQL Server
-//   เครื่อง 203.154.185.48 ฐานข้อมูล narai_hr (ดู docs/schema-hr.sql และ lib/mssql.js)
+// ตารางงาน (ลงตารางสัปดาห์ / ประวัติ / อนุมัติ OT) — อ่าน-เขียนตรงกับ MySQL
+//   เครื่อง inventory.dyndns.tv ฐานข้อมูล narai_hr (ดู docs/schema-hr-mysql.sql และ lib/hr-mysql.js)
+//
+// เดิมอยู่บน MS SQL Server เครื่องเดียวกัน ย้ายมา MySQL เพื่อให้เหลือฐานข้อมูลเดียวกับระบบสต๊อก
+// คำสั่งจึงเปลี่ยนสำนวน: MERGE + OPENJSON ของ T-SQL -> INSERT ... ON DUPLICATE KEY UPDATE
+// ที่ส่งทุกแถวไปเป็นชุดเดียว (VALUES ?) ซึ่งได้ผลเหมือนกันและยังยิงรอบเดียวจบเหมือนเดิม
 //
 // แทนที่ Google Apps Script เดิมที่เก็บข้อมูลในชีท "ลงตารางงาน"
 // รับเป็น POST เดียวแล้วแยกด้วย body.action ให้เหมือนสัญญาเดิมของ apiCall()
@@ -8,7 +12,7 @@
 //
 // รวมทุก action ไว้ไฟล์เดียวเพราะ Vercel จำกัด 12 Serverless Functions และตอนนี้เต็มพอดี
 
-import { sql, queryRead, withTransaction, replyDbError, isConfigured } from '../lib/mssql.js';
+import { queryRead, withTransaction, replyDbError, isConfigured } from '../lib/hr-mysql.js';
 
 /* ลำดับตำแหน่งสำหรับเรียงพนักงานในตาราง — ยกมาจาก Apps Script เดิมทั้งชุด */
 const POSITION_PRIORITY = {
@@ -65,10 +69,15 @@ function branchFor(session, requested) {
 
 /** แปลงแถวในตารางเป็นรูปแบบเดียวกับที่ Apps Script เคยตอบ ฝั่งเว็บจะได้ไม่ต้องแก้ */
 function toHistoryRow(r) {
-  const d = r.work_date instanceof Date ? r.work_date : new Date(r.work_date);
-  const workDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // pool ตั้ง dateStrings ไว้ วันที่จึงกลับมาเป็นข้อความ 'YYYY-MM-DD' ตามที่เก็บไว้จริง
+  // (ถ้าปล่อยให้แปลงเป็น Date จะโดน timezone ของเครื่องที่รันเลื่อนวันให้)
+  const raw = r.work_date;
+  const workDate =
+    raw instanceof Date
+      ? `${raw.getFullYear()}-${String(raw.getMonth() + 1).padStart(2, '0')}-${String(raw.getDate()).padStart(2, '0')}`
+      : String(raw || '').slice(0, 10);
   return {
-    timestamp: r.updated_at ? new Date(r.updated_at).toISOString() : '',
+    timestamp: r.updated_at ? new Date(String(r.updated_at).replace(' ', 'T')).toISOString() : '',
     workDate,
     branch: r.branch || '',
     hrCode: r.hr_code || '',
@@ -104,7 +113,7 @@ const HISTORY_COLUMNS = `
 /** รายชื่อสาขา — ตอบเป็น [{name, outletId}] ให้ตรงกับที่หน้าเว็บอ่าน (br.name) */
 async function getBranches(body, session) {
   const rows = await queryRead(
-    `SELECT branch, branch_name, outlet_id FROM dbo.hr_branch WHERE is_active = 1 ORDER BY branch`
+    `SELECT branch, branch_name, outlet_id FROM hr_branch WHERE is_active = 1 ORDER BY branch`
   );
   return rows
     // user ที่ไม่ใช่สิทธิ์ all เห็นแค่สาขาตัวเอง
@@ -118,9 +127,9 @@ async function getScheduleEmployees(body, session) {
   if (!branch) return [];
   const rows = await queryRead(
     `SELECT hr_code, full_name, branch, emp_type, position, daily_wage
-       FROM dbo.hr_employee
-      WHERE branch = @branch AND status = N'ทำงาน'`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+       FROM hr_employee
+      WHERE branch = ? AND status = 'ทำงาน'`,
+    [branch]
   );
   return rows
     .map((r) => ({
@@ -163,8 +172,8 @@ async function syncEmployees(body, session) {
   if (rows.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีรหัส/ชื่อที่ใช้ได้' };
 
   const activeNow = await queryRead(
-    `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE branch = @branch AND status = N'ทำงาน'`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT COUNT(*) AS n FROM hr_employee WHERE branch = ? AND status = 'ทำงาน'`,
+    [branch]
   );
   const before = Number(activeNow[0]?.n || 0);
   // รายชื่อหดลงเกินครึ่ง = น่าจะได้ข้อมูลมาไม่ครบ อย่าไปตั้งใครเป็นลาออก
@@ -172,41 +181,32 @@ async function syncEmployees(body, session) {
 
   let resigned = 0;
   await withTransaction(async (run) => {
-    // ส่งทั้งรายชื่อไปเป็น JSON ก้อนเดียว ให้ SQL Server แตกเองด้วย OPENJSON
-    // เดิมวนยิง MERGE ทีละคน + สร้างตารางชั่วคราวแล้ว INSERT ทีละแถว
-    // สาขาละ 20 คนกลายเป็น 40+ รอบข้ามประเทศ และ action นี้ทำงานทุกครั้งที่เปิดหน้า
+    // ส่งทั้งรายชื่อไปเป็นชุดเดียว (INSERT หลายแถวในคำสั่งเดียว)
+    // เดิมวนยิงทีละคน สาขาละ 20 คนกลายเป็น 40+ รอบข้ามประเทศ และ action นี้ทำงานทุกครั้งที่เปิดหน้า
     // จึงไปแย่งคอนเนคชันกับตอนผู้ใช้กดบันทึกตาราง ทำให้ทั้งสองฝั่งช้าและ timeout
-    const rowsJson = { type: sql.NVarChar(sql.MAX), value: JSON.stringify(rows) };
+    //
+    // คอลัมน์ status/resign_date/updated_at ไม่ได้ส่งค่าไปตอน INSERT เพราะใช้ค่าตั้งต้นของตาราง
+    // ('ทำงาน' / NULL / เวลาปัจจุบัน) — ให้เวลามาจากนาฬิกาของเครื่องฐานข้อมูล ไม่ใช่ของ Vercel
+    const values = rows.map((e) => [e.hrCode, e.name, branch, e.empType || null, e.position || null, e.dailyWage]);
 
     await run(
-      `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-         USING (SELECT * FROM OPENJSON(@rows) WITH (
-                  hr_code NVARCHAR(30) '$.hrCode',
-                  full_name NVARCHAR(150) '$.name',
-                  emp_type NVARCHAR(20) '$.empType',
-                  position NVARCHAR(100) '$.position',
-                  daily_wage DECIMAL(12,2) '$.dailyWage'
-                )) AS s
-            ON t.hr_code = s.hr_code
-       WHEN MATCHED THEN UPDATE SET
-            full_name = s.full_name, branch = @branch, emp_type = s.emp_type,
-            position = s.position, daily_wage = s.daily_wage,
-            status = N'ทำงาน', resign_date = NULL, updated_at = SYSDATETIME()
-       WHEN NOT MATCHED THEN
-            INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status)
-            VALUES (s.hr_code, s.full_name, @branch, s.emp_type, s.position, s.daily_wage, N'ทำงาน');`,
-      { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
+      `INSERT INTO hr_employee (hr_code, full_name, branch, emp_type, position, daily_wage)
+       VALUES ?
+       ON DUPLICATE KEY UPDATE
+            full_name = VALUES(full_name), branch = VALUES(branch), emp_type = VALUES(emp_type),
+            position = VALUES(position), daily_wage = VALUES(daily_wage),
+            status = 'ทำงาน', resign_date = NULL, updated_at = NOW()`,
+      [values]
     );
 
     if (safeToRetire) {
       const r = await run(
-        `UPDATE dbo.hr_employee
-            SET status = N'ลาออก', updated_at = SYSDATETIME()
-          WHERE branch = @branch AND status = N'ทำงาน'
-            AND hr_code NOT IN (SELECT hr_code FROM OPENJSON(@rows) WITH (hr_code NVARCHAR(30) '$.hrCode'));`,
-        { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
+        `UPDATE hr_employee
+            SET status = 'ลาออก', updated_at = NOW()
+          WHERE branch = ? AND status = 'ทำงาน' AND hr_code NOT IN (?)`,
+        [branch, rows.map((e) => e.hrCode)]
       );
-      resigned = r.rowsAffected?.[0] || 0;
+      resigned = r.affectedRows || 0;
     }
   });
 
@@ -221,8 +221,8 @@ async function syncEmployees(body, session) {
 async function getBranchStats(body, session) {
   const branch = branchFor(session, body.branch);
   const rows = await queryRead(
-    `SELECT daily_target, monthly_target, max_wage FROM dbo.hr_branch WHERE branch = @branch`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT daily_target, monthly_target, max_wage FROM hr_branch WHERE branch = ?`,
+    [branch]
   );
   const r = rows[0];
   return {
@@ -238,8 +238,8 @@ async function getDailySales(body, session) {
   const date = str(body.searchDateStr || body.searchDate || body.date);
   if (!isDateStr(date)) return { sales: 0 };
   const rows = await queryRead(
-    `SELECT sales FROM dbo.hr_daily_sales WHERE sale_date = @d AND branch = @branch`,
-    { d: { type: sql.Date, value: date }, branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT sales FROM hr_daily_sales WHERE sale_date = ? AND branch = ?`,
+    [date, branch]
   );
   return { sales: rows[0] ? Number(rows[0].sales) : 0 };
 }
@@ -262,13 +262,9 @@ async function getHistoryData(body, session) {
 
   const rows = await queryRead(
     `SELECT ${HISTORY_COLUMNS}
-       FROM dbo.hr_timesheet
-      WHERE branch = @branch AND work_date BETWEEN @start AND @end`,
-    {
-      branch: { type: sql.NVarChar(50), value: branch },
-      start: { type: sql.Date, value: start },
-      end: { type: sql.Date, value: end },
-    }
+       FROM hr_timesheet
+      WHERE branch = ? AND work_date BETWEEN ? AND ?`,
+    [branch, start, end]
   );
   return rows
     .map(toHistoryRow)
@@ -281,7 +277,7 @@ async function getHistoryData(body, session) {
 
 /**
  * บันทึกตารางงาน — หนึ่งแถวต่อพนักงานต่อวัน
- * ชีทเดิมต่อท้ายแถวใหม่ทุกครั้งแล้วค่อยหยิบแถวล่าสุดตอนอ่าน ที่นี่เขียนทับด้วย MERGE
+ * ชีทเดิมต่อท้ายแถวใหม่ทุกครั้งแล้วค่อยหยิบแถวล่าสุดตอนอ่าน ที่นี่เขียนทับแถวเดิมตามคีย์
  * และถ้า otherNote === 'ล้างข้อมูล' คือสั่งลบแถวนั้นจริงๆ
  * ทั้งชุดอยู่ใน transaction เดียว — บันทึกทั้งสัปดาห์แล้วพลาดกลางคันจะไม่เหลือข้อมูลครึ่งๆ
  */
@@ -337,93 +333,53 @@ async function saveTimesheet(body, session) {
   }
 
   await withTransaction(async (run) => {
-    // ส่งทุกแถวไปเป็น JSON ก้อนเดียวแล้วให้ SQL Server แตกเองด้วย OPENJSON
+    // ส่งทุกแถวไปเป็นชุดเดียว (INSERT หลายแถวในคำสั่งเดียว)
     //
-    // เดิมวนยิงทีละแถว (MERGE + INSERT log = 2 รอบต่อช่อง) บันทึก 15 ช่องกลายเป็น 30 รอบ
+    // เดิมวนยิงทีละแถว (เขียนตาราง + INSERT log = 2 รอบต่อช่อง) บันทึก 15 ช่องกลายเป็น 30 รอบ
     // แต่ละรอบวิ่งจาก Vercel ข้ามประเทศมาที่เซิร์ฟเวอร์ที่ออฟฟิศ รวมกันแล้วเกินเวลา
     // จนขึ้น "เชื่อมต่อฐานข้อมูล HR ไม่ทันเวลา" ทั้งที่ฐานข้อมูลปกติดี
     // ตอนนี้เหลือ 3 รอบคงที่ ไม่ว่าจะบันทึกกี่ช่อง
     if (upserts.length) {
       await run(
-        `MERGE dbo.hr_timesheet WITH (HOLDLOCK) AS t
-           USING (SELECT * FROM OPENJSON(@rows) WITH (
-                    work_date DATE '$.workDate',
-                    branch NVARCHAR(50) '$.branch',
-                    hr_code NVARCHAR(30) '$.hrCode',
-                    emp_name NVARCHAR(150) '$.name',
-                    position NVARCHAR(100) '$.position',
-                    emp_type NVARCHAR(20) '$.empType',
-                    check_in VARCHAR(5) '$.checkIn',
-                    check_out VARCHAR(5) '$.checkOut',
-                    break_time NVARCHAR(20) '$.breakTime',
-                    break_range VARCHAR(20) '$.breakRange',
-                    ot_hours DECIMAL(5,2) '$.ot',
-                    ot_accumulated DECIMAL(5,2) '$.otAcc',
-                    use_accumulated_hours DECIMAL(5,2) '$.useAcc',
-                    hourly_leave DECIMAL(5,2) '$.hourlyLeave',
-                    wage DECIMAL(12,2) '$.wage',
-                    status NVARCHAR(20) '$.status',
-                    leave_note NVARCHAR(100) '$.leaveNote',
-                    unpaid_leave NVARCHAR(100) '$.unpaidLeave',
-                    other_note NVARCHAR(255) '$.otherNote',
-                    work_station NVARCHAR(100) '$.workStation'
-                  )) AS s
-              ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code
-         WHEN MATCHED THEN UPDATE SET
-              emp_name = s.emp_name, position = s.position, emp_type = s.emp_type,
-              check_in = s.check_in, check_out = s.check_out,
-              break_time = s.break_time, break_range = s.break_range,
-              ot_hours = s.ot_hours, ot_accumulated = s.ot_accumulated,
-              use_accumulated_hours = s.use_accumulated_hours, hourly_leave = s.hourly_leave,
-              wage = s.wage, status = s.status,
-              leave_note = s.leave_note, unpaid_leave = s.unpaid_leave,
-              other_note = s.other_note, work_station = s.work_station,
-              updated_at = SYSDATETIME(), updated_by = @actor
-         WHEN NOT MATCHED THEN INSERT (
+        `INSERT INTO hr_timesheet (
               work_date, branch, hr_code, emp_name, position, emp_type,
               check_in, check_out, break_time, break_range,
               ot_hours, ot_accumulated, use_accumulated_hours, hourly_leave,
               wage, status, leave_note, unpaid_leave, other_note, work_station, updated_by)
-         VALUES (
-              s.work_date, s.branch, s.hr_code, s.emp_name, s.position, s.emp_type,
-              s.check_in, s.check_out, s.break_time, s.break_range,
-              s.ot_hours, s.ot_accumulated, s.use_accumulated_hours, s.hourly_leave,
-              s.wage, s.status, s.leave_note, s.unpaid_leave, s.other_note, s.work_station, @actor);`,
-        {
-          rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(upserts) },
-          actor: { type: sql.NVarChar(100), value: actor },
-        }
+         VALUES ?
+         ON DUPLICATE KEY UPDATE
+              emp_name = VALUES(emp_name), position = VALUES(position), emp_type = VALUES(emp_type),
+              check_in = VALUES(check_in), check_out = VALUES(check_out),
+              break_time = VALUES(break_time), break_range = VALUES(break_range),
+              ot_hours = VALUES(ot_hours), ot_accumulated = VALUES(ot_accumulated),
+              use_accumulated_hours = VALUES(use_accumulated_hours), hourly_leave = VALUES(hourly_leave),
+              wage = VALUES(wage), status = VALUES(status),
+              leave_note = VALUES(leave_note), unpaid_leave = VALUES(unpaid_leave),
+              other_note = VALUES(other_note), work_station = VALUES(work_station),
+              updated_at = NOW(), updated_by = VALUES(updated_by)`,
+        // ไม่แตะ ot_approver ตรงนี้ — คนที่อนุมัติ OT ไว้แล้วต้องไม่หายไปเพราะมีคนกดบันทึกตารางทับ
+        [
+          upserts.map((u) => [
+            u.workDate, u.branch, u.hrCode, u.name, u.position, u.empType,
+            u.checkIn, u.checkOut, u.breakTime, u.breakRange,
+            u.ot, u.otAcc, u.useAcc, u.hourlyLeave,
+            u.wage, u.status, u.leaveNote, u.unpaidLeave, u.otherNote, u.workStation, actor,
+          ]),
+        ]
       );
     }
 
     if (clears.length) {
+      // เทียบทีละชุดคีย์ในคำสั่งเดียว — (a,b,c) IN ((..),(..)) ของ MySQL
       await run(
-        `DELETE t
-           FROM dbo.hr_timesheet t
-           JOIN OPENJSON(@rows) WITH (
-                  work_date DATE '$.workDate',
-                  branch NVARCHAR(50) '$.branch',
-                  hr_code NVARCHAR(30) '$.hrCode'
-                ) s
-             ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code;`,
-        { rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(clears) } }
+        `DELETE FROM hr_timesheet WHERE (work_date, branch, hr_code) IN (?)`,
+        [clears.map((c) => [c.workDate, c.branch, c.hrCode])]
       );
     }
 
     await run(
-      `INSERT INTO dbo.hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
-       SELECT s.action, s.work_date, s.branch, s.hr_code, @actor, s.payload
-         FROM OPENJSON(@rows) WITH (
-                action VARCHAR(10) '$.action',
-                work_date DATE '$.workDate',
-                branch NVARCHAR(50) '$.branch',
-                hr_code NVARCHAR(30) '$.hrCode',
-                payload NVARCHAR(MAX) '$.payload'
-              ) s;`,
-      {
-        rows: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(logRows) },
-        actor: { type: sql.NVarChar(100), value: actor },
-      }
+      `INSERT INTO hr_timesheet_log (action, work_date, branch, hr_code, actor, payload) VALUES ?`,
+      [logRows.map((l) => [l.action, l.workDate, l.branch, l.hrCode, actor, l.payload])]
     );
   });
 
@@ -454,30 +410,18 @@ async function updateOTApprovalBulk(body, session) {
 
       const value = u.isApproved ? approver : null;
       const r = await run(
-        `UPDATE dbo.hr_timesheet
-            SET ot_approver = @approver, updated_at = SYSDATETIME()
-          WHERE work_date = @d AND branch = @branch
-            AND (${hrCode ? 'hr_code = @hrCode' : 'emp_name = @name'})`,
-        {
-          d: { type: sql.Date, value: dateStr },
-          branch: { type: sql.NVarChar(50), value: branch },
-          hrCode: { type: sql.NVarChar(30), value: hrCode || null },
-          name: { type: sql.NVarChar(150), value: name || null },
-          approver: { type: sql.NVarChar(100), value: value },
-        }
+        `UPDATE hr_timesheet
+            SET ot_approver = ?, updated_at = NOW()
+          WHERE work_date = ? AND branch = ?
+            AND ${hrCode ? 'hr_code = ?' : 'emp_name = ?'}`,
+        [value, dateStr, branch, hrCode || name]
       );
-      updated += r.rowsAffected?.[0] || 0;
+      updated += r.affectedRows || 0;
 
       await run(
-        `INSERT INTO dbo.hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
-         VALUES ('ot', @d, @branch, @hrCode, @actor, @payload)`,
-        {
-          d: { type: sql.Date, value: dateStr },
-          branch: { type: sql.NVarChar(50), value: branch },
-          hrCode: { type: sql.NVarChar(30), value: hrCode || name },
-          actor: { type: sql.NVarChar(100), value: approver },
-          payload: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(u) },
-        }
+        `INSERT INTO hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
+         VALUES ('ot', ?, ?, ?, ?, ?)`,
+        [dateStr, branch, hrCode || name, approver, JSON.stringify(u)]
       );
     }
   });
@@ -501,19 +445,13 @@ async function updateWorkStation(body, session) {
       const name = str(u.name);
       if (!hrCode && !name) continue;
       const r = await run(
-        `UPDATE dbo.hr_timesheet
-            SET work_station = @station, updated_at = SYSDATETIME()
-          WHERE work_date = @d AND branch = @branch
-            AND (${hrCode ? 'hr_code = @hrCode' : 'emp_name = @name'})`,
-        {
-          d: { type: sql.Date, value: dateStr },
-          branch: { type: sql.NVarChar(50), value: branch },
-          hrCode: { type: sql.NVarChar(30), value: hrCode || null },
-          name: { type: sql.NVarChar(150), value: name || null },
-          station: { type: sql.NVarChar(100), value: textOrNull(u.station) },
-        }
+        `UPDATE hr_timesheet
+            SET work_station = ?, updated_at = NOW()
+          WHERE work_date = ? AND branch = ?
+            AND ${hrCode ? 'hr_code = ?' : 'emp_name = ?'}`,
+        [textOrNull(u.station), dateStr, branch, hrCode || name]
       );
-      updated += r.rowsAffected?.[0] || 0;
+      updated += r.affectedRows || 0;
     }
   });
   return { updated };
@@ -528,7 +466,7 @@ async function updateWorkStation(body, session) {
  */
 async function ping() {
   const t0 = Date.now();
-  const rows = await queryRead('SELECT SYSDATETIME() AS server_time, DB_NAME() AS db_name');
+  const rows = await queryRead('SELECT NOW() AS server_time, DATABASE() AS db_name');
   const readMs = Date.now() - t0;
 
   const t1 = Date.now();
@@ -585,7 +523,7 @@ export default async function handler(req, res) {
   if (!isConfigured()) {
     return res.status(503).json({
       status: 'error',
-      message: 'ยังไม่ได้ตั้งค่าการเชื่อมต่อฐานข้อมูล HR (HR_DB_USER / HR_DB_PASSWORD) บนเซิร์ฟเวอร์',
+      message: 'ยังไม่ได้ตั้งค่าการเชื่อมต่อฐานข้อมูล HR (HR_DB_USER / HR_DB_PASSWORD หรือ MYSQL_USER / MYSQL_PASSWORD) บนเซิร์ฟเวอร์',
     });
   }
 

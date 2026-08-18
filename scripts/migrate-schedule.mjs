@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * ย้ายข้อมูลตารางงานจาก Google Sheets เข้า MS SQL Server (narai_hr)
+ * ย้ายข้อมูลตารางงานจาก Google Sheets เข้า MySQL (narai_hr)
  *
  * ย้ายให้ 2 อย่าง: พนักงาน (พร้อมสร้างรายชื่อสาขาให้อัตโนมัติ) และตารางงานย้อนหลัง
  * ชีทเป้าขาย (Details) กับยอดขายรายวัน เลิกใช้แล้วจึงไม่ย้าย
- * -> เป้าขาย/ค่าแรงสูงสุด/ยอดขายของวัน จะเป็น 0 จนกว่าจะกรอกลง dbo.hr_branch เอง
+ * -> เป้าขาย/ค่าแรงสูงสุด/ยอดขายของวัน จะเป็น 0 จนกว่าจะกรอกลง hr_branch เอง
  *
  * วิธีใช้ (รันจากเครื่องที่ต่อฐานข้อมูลได้):
- *   1) สร้างตารางก่อน:  sqlcmd -S 203.154.185.48 -U <user> -P <pass> -i docs/schema-hr.sql
+ *   1) สร้างตารางก่อน:  mysql -h inventory.dyndns.tv -u <user> -p < docs/schema-hr-mysql.sql
  *   2) ตั้ง env:        HR_DB_USER, HR_DB_PASSWORD (และ HR_DB_HOST/HR_DB_NAME ถ้าไม่ใช้ค่าเริ่มต้น)
+ *                      ถ้าไม่ตั้ง จะถอยไปใช้ MYSQL_USER/MYSQL_PASSWORD ให้เอง
  *   3) ลองแบบไม่เขียนจริงก่อน:
  *        node scripts/migrate-schedule.mjs --months=6 --dry-run
  *   4) ย้ายจริง:
@@ -41,7 +42,7 @@
  * - ชีทตารางงานเป็น log ต่อท้าย วันเดียวกันของคนเดียวกันมีได้หลายแถว
  *   สคริปต์จึงหยิบ "แถวล่าสุด" ตาม Timestamp เหมือนที่ Apps Script ทำตอนอ่าน
  *   และแถวที่หมายเหตุเป็น 'ล้างข้อมูล' = ถือว่าถูกลบ ไม่ย้ายเข้า SQL
- * - รันซ้ำได้ ใช้ MERGE ทับของเดิม ไม่เกิดข้อมูลซ้ำ
+ * - รันซ้ำได้ ใช้ INSERT ... ON DUPLICATE KEY UPDATE ทับของเดิม ไม่เกิดข้อมูลซ้ำ
  * - ระวังตัวกรองในชีท: gviz ส่งกลับมาเฉพาะแถวที่ผ่านตัวกรองที่เปิดค้างไว้
  *   ชีทลงตารางงานมีตัวกรองอยู่จริง (เห็นจาก --inspect ได้ 496 แถวจากหมื่นกว่าแถว)
  *   ตอนย้ายจริงจึงต้องใส่ --csv เสมอ เพราะ export CSV ไม่สนใจตัวกรอง
@@ -53,16 +54,14 @@ import process from 'node:process';
    โหมด --inspect และ --dry-run แค่อ่านชีทอย่างเดียว ไม่ได้แตะฐานข้อมูล
    จึงไม่ควรบังคับให้ npm install ก่อน (เครื่องที่รันสคริปต์นี้บางเครื่องลง package ไม่ได้)
    ตัวแปรพวกนี้จะมีค่าก็ต่อเมื่อเรียก loadDb() แล้วเท่านั้น */
-let sql;
 let getPool;
 let closePool;
 let withTransaction;
 let describeDbError = (err) => err?.message || String(err);
 
 async function loadDb() {
-  if (sql) return;
-  const m = await import('../lib/mssql.js');
-  sql = m.sql;
+  if (withTransaction) return;
+  const m = await import('../lib/hr-mysql.js');
   getPool = m.getPool;
   closePool = m.closePool;
   withTransaction = m.withTransaction;
@@ -513,36 +512,34 @@ async function employeesFromTimesheet() {
 
 /** เขียนรายชื่อพนักงานลงฐานข้อมูล พร้อมสร้างรายชื่อสาขาจากพนักงานที่มี */
 async function writeEmployees(data) {
-await runBatch('พนักงาน', data, (row) => ({
-    text: `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-             USING (SELECT @hrCode AS hr_code) AS s ON t.hr_code = s.hr_code
-           WHEN MATCHED THEN UPDATE SET
-             full_name = @name, branch = @branch, emp_type = @empType, position = @position,
-             daily_wage = @dailyWage, status = @status, resign_date = @resignDate,
-             updated_at = SYSDATETIME()
-           WHEN NOT MATCHED THEN
-             INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status, resign_date)
-             VALUES (@hrCode, @name, @branch, @empType, @position, @dailyWage, @status, @resignDate);`,
-    params: {
-      hrCode: { type: sql.NVarChar(30), value: row.hrCode },
-      name: { type: sql.NVarChar(150), value: row.name },
-      branch: { type: sql.NVarChar(50), value: row.branch },
-      empType: { type: sql.NVarChar(20), value: orNull(row.empType) },
-      position: { type: sql.NVarChar(100), value: orNull(row.position) },
-      dailyWage: { type: sql.Decimal(12, 2), value: row.dailyWage },
-      status: { type: sql.NVarChar(20), value: row.status },
-      resignDate: { type: sql.Date, value: row.resignDate },
-    },
+  await runBatch('พนักงาน', data, (row) => ({
+    text: `INSERT INTO hr_employee
+             (hr_code, full_name, branch, emp_type, position, daily_wage, status, resign_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             full_name = VALUES(full_name), branch = VALUES(branch), emp_type = VALUES(emp_type),
+             position = VALUES(position), daily_wage = VALUES(daily_wage),
+             status = VALUES(status), resign_date = VALUES(resign_date), updated_at = NOW()`,
+    params: [
+      row.hrCode,
+      row.name,
+      row.branch,
+      orNull(row.empType),
+      orNull(row.position),
+      row.dailyWage,
+      row.status,
+      row.resignDate,
+    ],
   }));
 
   // รายชื่อสาขามาจากพนักงานล้วนๆ (ชีท Details เลิกใช้แล้ว)
-  // เป้าขาย/ค่าแรงสูงสุดจึงเป็น 0 ไปก่อน ต้องกรอกเองด้วย UPDATE dbo.hr_branch
+  // เป้าขาย/ค่าแรงสูงสุดจึงเป็น 0 ไปก่อน ต้องกรอกเองด้วย UPDATE hr_branch
   const branches = [...new Set(data.map((d) => d.branch).filter(Boolean))].sort();
   console.log(`  พบสาขา ${branches.length} สาขา: ${branches.join(', ') || '(ไม่มี)'}`);
   await runBatch('สาขา', branches.map((b) => ({ branch: b })), (row) => ({
-    text: `IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch WHERE branch = @branch)
-             INSERT INTO dbo.hr_branch (branch, branch_name) VALUES (@branch, @branch);`,
-    params: { branch: { type: sql.NVarChar(50), value: row.branch } },
+    // มีอยู่แล้วไม่ต้องแตะ — เป้าขาย/ค่าแรงสูงสุดที่กรอกไว้เองต้องไม่ถูกล้างทิ้ง
+    text: `INSERT IGNORE INTO hr_branch (branch, branch_name) VALUES (?, ?)`,
+    params: [row.branch, row.branch],
   }));
 }
 
@@ -690,7 +687,7 @@ async function migrateEmployees() {
   }
 
   // ชีท DATA มีคนที่ลงชื่อซ้ำสองแถว (คนละรหัส) พอจับคู่แล้วจะได้รหัสเดียวกัน
-  // ต้องยุบให้เหลือแถวเดียว ไม่งั้น MERGE จะเขียนทับกันเองแล้วเหลือข้อมูลของแถวหลังสุด
+  // ต้องยุบให้เหลือแถวเดียว ไม่งั้นจะเขียนทับกันเองแล้วเหลือข้อมูลของแถวหลังสุด
   const byCodeFinal = new Map();
   const merged = [];
   for (const emp of data) {
@@ -833,54 +830,31 @@ async function migrateTimesheet() {
 
   console.log(`  อ่านจากชีท ${rows.length} แถว | เก่ากว่ากำหนด ${skippedOld} | ถูกล้างไปแล้ว ${cleared}`);
   await runBatch('ตารางงาน', data, (row) => ({
-    text: `MERGE dbo.hr_timesheet WITH (HOLDLOCK) AS t
-             USING (SELECT @d AS work_date, @branch AS branch, @hrCode AS hr_code) AS s
-                ON t.work_date = s.work_date AND t.branch = s.branch AND t.hr_code = s.hr_code
-           WHEN MATCHED THEN UPDATE SET
-             emp_name = @name, position = @position, emp_type = @empType,
-             check_in = @checkIn, check_out = @checkOut,
-             break_time = @breakTime, break_range = @breakRange,
-             ot_hours = @ot, ot_accumulated = @otAcc,
-             use_accumulated_hours = @useAcc, hourly_leave = @hourlyLeave,
-             wage = @wage, status = @status, leave_note = @leaveNote,
-             unpaid_leave = @unpaidLeave, other_note = @otherNote,
-             work_station = @workStation, ot_approver = @otApprover,
-             updated_at = SYSDATETIME(), updated_by = N'migration'
-           WHEN NOT MATCHED THEN INSERT (
+    text: `INSERT INTO hr_timesheet (
              work_date, branch, hr_code, emp_name, position, emp_type,
              check_in, check_out, break_time, break_range,
              ot_hours, ot_accumulated, use_accumulated_hours, hourly_leave,
              wage, status, leave_note, unpaid_leave, other_note,
              work_station, ot_approver, updated_by)
-           VALUES (
-             @d, @branch, @hrCode, @name, @position, @empType,
-             @checkIn, @checkOut, @breakTime, @breakRange,
-             @ot, @otAcc, @useAcc, @hourlyLeave,
-             @wage, @status, @leaveNote, @unpaidLeave, @otherNote,
-             @workStation, @otApprover, N'migration');`,
-    params: {
-      d: { type: sql.Date, value: row.workDate },
-      branch: { type: sql.NVarChar(50), value: row.branch },
-      hrCode: { type: sql.NVarChar(30), value: row.hrCode },
-      name: { type: sql.NVarChar(150), value: orNull(row.name) },
-      position: { type: sql.NVarChar(100), value: orNull(row.position) },
-      empType: { type: sql.NVarChar(20), value: orNull(row.empType) },
-      checkIn: { type: sql.VarChar(5), value: row.checkIn },
-      checkOut: { type: sql.VarChar(5), value: row.checkOut },
-      breakTime: { type: sql.NVarChar(20), value: row.breakTime },
-      breakRange: { type: sql.VarChar(20), value: row.breakRange },
-      ot: { type: sql.Decimal(5, 2), value: row.ot },
-      otAcc: { type: sql.Decimal(5, 2), value: row.otAcc },
-      useAcc: { type: sql.Decimal(5, 2), value: row.useAcc },
-      hourlyLeave: { type: sql.Decimal(5, 2), value: row.hourlyLeave },
-      wage: { type: sql.Decimal(12, 2), value: row.wage },
-      status: { type: sql.NVarChar(20), value: row.status },
-      leaveNote: { type: sql.NVarChar(100), value: row.leaveNote },
-      unpaidLeave: { type: sql.NVarChar(100), value: row.unpaidLeave },
-      otherNote: { type: sql.NVarChar(255), value: row.otherNote },
-      workStation: { type: sql.NVarChar(100), value: row.workStation },
-      otApprover: { type: sql.NVarChar(100), value: row.otApprover },
-    },
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'migration')
+           ON DUPLICATE KEY UPDATE
+             emp_name = VALUES(emp_name), position = VALUES(position), emp_type = VALUES(emp_type),
+             check_in = VALUES(check_in), check_out = VALUES(check_out),
+             break_time = VALUES(break_time), break_range = VALUES(break_range),
+             ot_hours = VALUES(ot_hours), ot_accumulated = VALUES(ot_accumulated),
+             use_accumulated_hours = VALUES(use_accumulated_hours), hourly_leave = VALUES(hourly_leave),
+             wage = VALUES(wage), status = VALUES(status), leave_note = VALUES(leave_note),
+             unpaid_leave = VALUES(unpaid_leave), other_note = VALUES(other_note),
+             work_station = VALUES(work_station), ot_approver = VALUES(ot_approver),
+             updated_at = NOW(), updated_by = 'migration'`,
+    params: [
+      row.workDate, row.branch, row.hrCode,
+      orNull(row.name), orNull(row.position), orNull(row.empType),
+      row.checkIn, row.checkOut, row.breakTime, row.breakRange,
+      row.ot, row.otAcc, row.useAcc, row.hourlyLeave,
+      row.wage, row.status, row.leaveNote, row.unpaidLeave, row.otherNote,
+      row.workStation, row.otApprover,
+    ],
   }));
 }
 
@@ -1039,16 +1013,19 @@ async function main() {
     return;
   }
 
-  console.log(`ย้ายข้อมูลตารางงาน -> ${process.env.HR_DB_HOST || '203.154.185.48'}/${process.env.HR_DB_NAME || 'narai_hr'}`);
+  console.log(`ย้ายข้อมูลตารางงาน -> ${process.env.HR_DB_HOST || process.env.MYSQL_HOST || 'inventory.dyndns.tv'}/${process.env.HR_DB_NAME || 'narai_hr'}`);
   if (DRY_RUN) console.log('โหมด dry-run: อ่านชีทและสรุปผลเท่านั้น ไม่เขียนลงฐานข้อมูล');
 
   // ต่อฐานข้อมูลให้พังตั้งแต่ต้นถ้าต่อไม่ได้ จะได้ไม่เสียเวลาอ่านชีท
   if (!DRY_RUN) {
-    if (!process.env.HR_DB_USER || !process.env.HR_DB_PASSWORD) {
-      throw new Error('ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD');
+    const dbUser = process.env.HR_DB_USER || process.env.MYSQL_USER;
+    const dbPass = process.env.HR_DB_PASSWORD || process.env.MYSQL_PASSWORD;
+    if (!dbUser || !dbPass) {
+      throw new Error('ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD (หรือ MYSQL_USER / MYSQL_PASSWORD)');
     }
     await loadDb();
-    await getPool();
+    // getPool() ของ MySQL แค่สร้างพูล ยังไม่ได้ต่อจริง ต้องยิงคำสั่งดูสักครั้ง
+    await getPool().query('SELECT 1');
   }
 
   // พนักงานต้องมาก่อนตารางงานเสมอ (รายชื่อสาขาถูกสร้างจากพนักงาน)
