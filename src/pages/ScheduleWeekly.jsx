@@ -87,6 +87,7 @@ export default function ScheduleWeekly() {
   // เก็บเฉพาะช่องที่ถูกแก้จริงในรอบนี้ — เดิมกดบันทึกทีเดียวส่งทั้งสัปดาห์ รวมช่องที่โหลดมาจากประวัติ
   // ทำให้ชีทมีแถวซ้ำเพิ่มขึ้นทุกครั้งที่กดบันทึก
   const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
+  const [otSavingKey, setOtSavingKey] = useState(null); // ช่องที่กำลังส่งคำสั่งอนุมัติ OT อยู่
   const hasUnsaved = dirtyKeys.size > 0;
 
   // ร่างที่กดบันทึกแล้วแต่ส่งขึ้นเซิร์ฟเวอร์ไม่สำเร็จ (นับรวมทุกสาขา/ทุกสัปดาห์)
@@ -410,7 +411,9 @@ export default function ScheduleWeekly() {
             leave2: record.unpaidLeave || '',
             hrLeave: String(record.hourlyLeave || ''),
             useAccum: String(record.useAccumulatedHours || ''),
-            otherNote: record.otherNote || ''
+            otherNote: record.otherNote || '',
+            // ว่าง = ยังไม่อนุมัติ OT (ฝั่งเซิร์ฟเวอร์เก็บชื่อคนอนุมัติไว้ที่คอลัมน์ ot_approver)
+            otApprover: record.otApprover || ''
           };
         });
 
@@ -776,9 +779,44 @@ export default function ScheduleWeekly() {
     }
   };
 
+  /**
+   * อนุมัติ / ยกเลิกอนุมัติ OT ของช่องเดียว — ปุ่มนี้ขึ้นเฉพาะ user สิทธิ์ all
+   *
+   * ชื่อผู้อนุมัติไม่ได้ส่งจากหน้าเว็บ ฝั่งเซิร์ฟเวอร์ใช้ user ที่ล็อกอินไว้เสมอ (ปลอมไม่ได้)
+   * แล้วเก็บลงคอลัมน์ ot_approver พร้อมบันทึกลง hr_timesheet_log ว่าใครกดเมื่อไหร่
+   *
+   * อนุมัติได้เฉพาะช่องที่ขึ้นระบบไปแล้ว เพราะคำสั่งนี้ไปอัปเดตแถวในฐานข้อมูลตามคีย์ (วัน+สาขา+รหัส)
+   * ถ้าแถวยังไม่มี คำสั่งจะไม่โดนอะไรเลยแล้วเงียบหายไป ผู้ใช้จะนึกว่าอนุมัติแล้ว
+   */
+  const toggleOtApproval = async (emp, dateStr, approve) => {
+    const key = `${emp.hrCode}_${dateStr}`;
+    if (dirtyKeys.has(key)) {
+      toast.error('ช่องนี้ยังไม่ได้ส่งขึ้นระบบ กดบันทึกตารางก่อนแล้วค่อยอนุมัติ');
+      return;
+    }
+    setOtSavingKey(key);
+    try {
+      await apiCall('updateOTApprovalBulk', {
+        dateStr,
+        branch: emp.branch || effectiveBranch,
+        updates: [{ hrCode: emp.hrCode, name: emp.name, isApproved: approve }],
+      });
+      // ไม่ต้อง markDirty — การอนุมัติเขียนลงฐานข้อมูลไปแล้ว ไม่ใช่ร่างที่รอบันทึก
+      setScheduleData((prev) => (
+        prev[key] ? { ...prev, [key]: { ...prev[key], otApprover: approve ? (user?.username || '') : '' } } : prev
+      ));
+      toast.success(approve ? 'อนุมัติ OT แล้ว' : 'ยกเลิกการอนุมัติ OT แล้ว');
+    } catch (err) {
+      toast.error(errMessage(err, 'บันทึกการอนุมัติ OT ไม่สำเร็จ'));
+    } finally {
+      setOtSavingKey(null);
+    }
+  };
+
   // สร้างการ์ดกะในแต่ละช่อง (เลียนแบบดีไซน์เดิม: badge ประเภทกะ/OT/ลา/นักขัตฤกษ์)
   const renderCell = (emp, dateStr) => {
-    const cell = scheduleData[`${emp.hrCode}_${dateStr}`];
+    const key = `${emp.hrCode}_${dateStr}`;
+    const cell = scheduleData[key];
     const isHoliday = isPublicHoliday(dateStr);
 
     if (!cell || isCellCleared(cell)) {
@@ -807,8 +845,10 @@ export default function ScheduleWeekly() {
     }
 
     // กะทำงาน
+    const otHours = parseFloat(cell.ot || '0') || 0;
+    const otBusy = otSavingKey === key;
     const badges = [];
-    if (cell.ot && cell.ot !== '0') badges.push({ text: `OT ${cell.ot}`, cls: 'bg-blue-600 text-white' });
+    if (otHours > 0) badges.push({ text: `OT ${cell.ot}`, cls: 'bg-blue-600 text-white' });
     const leaveTexts = [];
     if (cell.leave1) leaveTexts.push(leaveText(cell.leave1));
     if (cell.hrLeave && cell.hrLeave !== '0') leaveTexts.push(`ลาชม. ${cell.hrLeave}`);
@@ -838,6 +878,41 @@ export default function ScheduleWeekly() {
           ))}
         </div>
         {timeStr && <div className="text-xs text-gray-600">{timeStr}</div>}
+        {otHours > 0 && (
+          // กันไม่ให้การกดปุ่มไปเปิดหน้าต่างแก้ไขช่องด้วย
+          <div onClick={(e) => e.stopPropagation()}>
+            {cell.otApprover ? (
+              isAll ? (
+                <button
+                  type="button"
+                  disabled={otBusy}
+                  onClick={() => toggleOtApproval(emp, dateStr, false)}
+                  title={`อนุมัติโดย ${cell.otApprover} — กดเพื่อยกเลิกการอนุมัติ`}
+                  className="w-full rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-white hover:bg-emerald-700 disabled:opacity-60"
+                >
+                  {otBusy ? 'กำลังบันทึก…' : `✓ อนุมัติ OT · ${cell.otApprover}`}
+                </button>
+              ) : (
+                <span className="block rounded bg-emerald-600 px-1.5 py-0.5 text-center text-[10px] font-semibold leading-tight text-white">
+                  ✓ อนุมัติ OT · {cell.otApprover}
+                </span>
+              )
+            ) : isAll ? (
+              <button
+                type="button"
+                disabled={otBusy}
+                onClick={() => toggleOtApproval(emp, dateStr, true)}
+                className="w-full rounded border border-blue-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-blue-700 hover:bg-blue-600 hover:text-white disabled:opacity-60"
+              >
+                {otBusy ? 'กำลังบันทึก…' : 'อนุมัติ OT'}
+              </button>
+            ) : (
+              <span className="block rounded bg-gray-200 px-1.5 py-0.5 text-center text-[10px] font-semibold leading-tight text-gray-600">
+                OT รออนุมัติ
+              </span>
+            )}
+          </div>
+        )}
       </div>
     );
   };
