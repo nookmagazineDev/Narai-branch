@@ -7,9 +7,18 @@ Microsoft SQL Server เครื่อง **203.154.185.48** ฐานข้อ
 action ไหนยังวิ่งไปชีท (ดูตัวแปร `SQL_ACTIONS`) จึงย้ายทีละกลุ่มได้โดยไม่ต้องหยุดใช้งานระบบ
 
 ```
-เบราว์เซอร์ ──apiCall(action)──┬─ action อยู่ใน SQL_ACTIONS ─→ /api/schedule ─→ SQL Server 203.154.185.48
+เบราว์เซอร์ ──apiCall(action)──┬─ action อยู่ใน SQL_ACTIONS ─→ /api/schedule ─┐
                                └─ นอกนั้น ────────────────────→ Google Apps Script (ชีทเดิม)
+                                                                              │
+                    office-server :8787/schedule ←──────────────────────────┘
+                    (เครื่องที่ออฟฟิศ) ──localhost:1433──→ SQL Server narai_hr
 ```
+
+**ทำไมต้องอ้อมผ่าน office-server:** ไฟร์วอลล์ของออฟฟิศเปิดพอร์ต 1433 ให้เฉพาะ IP ในไทย
+แต่ฟังก์ชันบน Vercel วิ่งมาจากต่างประเทศ จึงต่อฐานข้อมูลตรงไม่ได้ — กดบันทึกตารางแล้วขึ้น error มาตลอด
+เครื่องที่ออฟฟิศต่อ SQL Server ผ่าน `localhost` ได้อยู่แล้ว (ไม่ผ่านไฟร์วอลล์) และ Vercel ก็เรียก
+เครื่องนั้นที่พอร์ต 8787 ได้อยู่แล้ว (หน้ายอดขาย/สต๊อกใช้ทางนี้ทุกวัน) จึงต่อกันสองทอดแทน
+เป็นแพตเทิร์นเดียวกับที่ใช้กับ ZKBio9 อยู่ก่อนแล้ว
 
 ## การล็อกอิน — ใช้ user เดิม ไม่ล็อกอินซ้อน
 
@@ -38,23 +47,24 @@ action ไหนยังวิ่งไปชีท (ดูตัวแปร `
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `docs/schema-hr.sql` | สร้างฐานข้อมูลและตารางทั้งหมด รันครั้งเดียว |
-| `lib/mssql.js` | connection pool + แปลง error เป็นข้อความไทย |
-| `api/schedule.js` | endpoint เดียวรวมทุก action ของตารางงาน |
-| `scripts/migrate-schedule.mjs` | ย้ายข้อมูลเก่าจากชีทเข้า SQL |
+| `office-server/schedule.js` | **ตรรกะ SQL ทั้งหมดของตารางงาน** (รันที่เครื่องออฟฟิศ ต่อ localhost) |
+| `api/schedule.js` | ตัวส่งต่อบางๆ บน Vercel — ส่ง body ไป office-server แล้วส่งคำตอบกลับ |
+| `lib/upstream.js` | fetch ไป office-server พร้อม timeout/retry/ข้อความ error ไทย |
+| `office-server/scripts/test-schedule.mjs` | ทดสอบว่ากดบันทึกแล้วข้อมูลเข้าฐานข้อมูลจริงไหม |
+| `scripts/migrate-schedule.mjs` | ย้ายข้อมูลเก่าจากชีทเข้า SQL (รันมือ ใช้ `lib/mssql.js`) |
 | `src/services/api.js` | ตัวสลับเส้นทาง SQL / Apps Script |
 
 ## ขั้นตอนติดตั้ง
 
 ### 1. เปิดทางให้ต่อฐานข้อมูลได้
 
-Vercel จะต่อเข้ามาจากอินเทอร์เน็ต เครื่องฐานข้อมูลจึงต้อง
+**ไม่ต้องเปิดพอร์ต 1433 ออกเน็ตแล้ว** เพราะ office-server ต่อฐานข้อมูลผ่าน `localhost`
+สิ่งที่ต้องมีคือ
 
 - เปิด **TCP/IP protocol** ใน SQL Server Configuration Manager (ปกติปิดมาจากโรงงาน)
 - เปิด **SQL Server Authentication** (โหมดผสม) ไม่ใช่ Windows Authentication อย่างเดียว
-- forward พอร์ต **1433** ที่เราเตอร์มาที่เครื่องนี้ และเปิดใน Windows Firewall
-
-> ถ้าไม่อยากเปิดพอร์ตออกเน็ต ทางเลือกคือให้ `office-server` เป็นตัวกลางแทน
-> (เหมือนที่ทำกับ ZKBio9 อยู่แล้ว) แล้วให้ `/api/schedule` proxy ไปที่นั่น
+- office-server (พอร์ต 8787) ต้องรันอยู่และ Vercel เรียกถึง — ซึ่งเป็นเงื่อนไขเดียวกับหน้ายอดขาย/สต๊อก
+  ที่ใช้อยู่ทุกวันแล้ว ไม่มีอะไรต้องตั้งเพิ่ม
 
 ### 2. สร้างตาราง
 
@@ -64,20 +74,40 @@ sqlcmd -S 203.154.185.48 -U sa -P "<รหัสผ่าน>" -i docs\schema-hr
 
 แล้วสร้าง login แยกสำหรับเว็บ (อย่าใช้ `sa`) ตามคำสั่งท้ายไฟล์ `schema-hr.sql`
 
-### 3. ตั้ง environment variables บน Vercel
+### 3. ตั้งค่าการเชื่อมต่อ — ที่ `.env` ของ office-server ไม่ใช่ที่ Vercel
+
+แก้ `<โฟลเดอร์ office-server>\.env` (ดูตัวอย่างครบใน `.env.example`)
 
 | ตัวแปร | ค่า |
 |---|---|
-| `HR_DB_HOST` | `203.154.185.48` (ค่าเริ่มต้นในโค้ดอยู่แล้ว) |
-| `HR_DB_PORT` | `1433` |
+| `HR_DB_HOST` | `localhost` |
 | `HR_DB_NAME` | `narai_hr` |
 | `HR_DB_USER` | login ที่สร้างไว้ เช่น `narai_web` |
 | `HR_DB_PASSWORD` | รหัสผ่านของ login นั้น |
 | `HR_DB_INSTANCE` | ใส่เมื่อเป็น named instance เช่น `SQLEXPRESS` (ปกติเว้นว่าง) |
-| `HR_DB_ENCRYPT` | ใส่ `1` เมื่อเปิด TLS ที่ SQL Server แล้ว |
+| `HR_DB_PORT` | ใส่เมื่อไม่ใช่ 1433 (ปกติเว้นว่าง) |
+
+แล้วรีสตาร์ทบริการ (PowerShell แบบ Run as Administrator)
+
+```powershell
+Restart-Service NaraiUsageAPI
+```
+
+ฝั่ง Vercel ใช้แค่ `USAGE_API_BASE` ที่ตั้งไว้อยู่แล้ว — **`HR_DB_*` บน Vercel ไม่ได้ใช้แล้ว ลบทิ้งได้**
 
 ถ้ายังไม่ได้ตั้ง `HR_DB_USER`/`HR_DB_PASSWORD` endpoint จะตอบ 503
 พร้อมข้อความบอกว่ายังไม่ได้ตั้งค่า แทนที่จะค้างรอจนหมดเวลา
+
+### 3.1 ทดสอบว่าบันทึกลงฐานข้อมูลได้จริง
+
+```powershell
+cd <โฟลเดอร์ office-server>
+node scripts/test-schedule.mjs
+```
+
+ยิงเข้า office-server เหมือนที่หน้าเว็บทำ (ping → บันทึก → อ่านกลับ) แล้วไปอ่านจากตารางใน
+SQL Server ตรงๆ เพื่อยืนยันว่าแถวลงจริง ไม่ใช่แค่ API ตอบว่าสำเร็จ
+ใช้ข้อมูลปลอม (สาขา `ZZTEST` วันที่ `2099-12-31`) แล้วลบทิ้งเมื่อจบ ใส่ `--keep` ถ้าอยากให้เหลือไว้ดูเอง
 
 ### 4. ย้ายข้อมูลเก่า
 
