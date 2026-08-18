@@ -7,6 +7,7 @@ import 'dotenv/config';
 import express from 'express';
 import natUpnp from 'nat-upnp';
 import sql from 'mssql';
+import { scheduleHandler } from './schedule.js';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
@@ -347,7 +348,15 @@ app.use((req, res, next) => {
   if (need && req.get('x-api-token') !== need) return res.status(401).json({ status: 'error', message: 'unauthorized' });
   next();
 });
+// ตารางงาน (ลงตารางสัปดาห์ / ประวัติ / อนุมัติ OT) รับเป็น POST ก้อน JSON — ดู schedule.js
+// เส้นทางอื่นทั้งหมดเป็น GET ไม่มี body จึงเพิ่ง express.json() เข้ามาเพื่อเส้นทางนี้เส้นเดียว
+app.use(express.json({ limit: '2mb' }));
+
 app.get('/health', (req, res) => res.json({ ok: true, days_cached: salesCache.size, recipes: Object.keys(recipe).length }));
+
+// ฐานข้อมูล HR อยู่บนเครื่องนี้ ต่อผ่าน localhost จึงไม่ติดไฟร์วอลล์ที่บล็อกพอร์ต 1433 จากต่างประเทศ
+// (Vercel ต่อตรงไม่ได้ จึงให้ /api/schedule ส่งต่อมาที่นี่แทน)
+app.post('/schedule', scheduleHandler);
 app.get('/usagebymenu', async (req, res) => {
   try {
     const branch = String(req.query.branch || '').toLowerCase().trim();
