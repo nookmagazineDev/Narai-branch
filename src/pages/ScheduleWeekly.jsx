@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 import { PAID_LEAVE, UNPAID_LEAVE, leaveText } from '../utils/leaveCodes';
+import {
+  loadDraft, saveDraftCells, savePendingLogs, clearDraft, listDrafts, countPendingLogs,
+} from '../utils/scheduleDrafts';
 
 function getStartOfWeek(date) {
   const d = new Date(date);
@@ -85,6 +88,13 @@ export default function ScheduleWeekly() {
   // ทำให้ชีทมีแถวซ้ำเพิ่มขึ้นทุกครั้งที่กดบันทึก
   const [dirtyKeys, setDirtyKeys] = useState(() => new Set());
   const hasUnsaved = dirtyKeys.size > 0;
+
+  // ร่างที่กดบันทึกแล้วแต่ส่งขึ้นเซิร์ฟเวอร์ไม่สำเร็จ (นับรวมทุกสาขา/ทุกสัปดาห์)
+  const [pendingCount, setPendingCount] = useState(() => countPendingLogs());
+  const [flushing, setFlushing] = useState(false);
+  // สาขา+สัปดาห์ที่ "โหลดเสร็จแล้วจริง" — กันไม่ให้ effect ที่เก็บร่าง
+  // เอา scheduleData ของสัปดาห์เก่าไปเขียนทับร่างของสัปดาห์ใหม่ตอนกำลังสลับ
+  const loadedKeyRef = useRef('');
 
   // Helpers for options
   // เวลาเข้า/เบรค 00-23 และเวลาออกถึง 24 — เดิมมีแค่ 08-24 ทำให้กะที่เลิกหลังเที่ยงคืน
@@ -359,6 +369,7 @@ export default function ScheduleWeekly() {
     const start = new Date(weekStartDate);
     const end = new Date(weekStartDate);
     end.setDate(end.getDate() + 6);
+    const weekKey = formatDateLocal(start); // คีย์ของร่าง = วันจันทร์ของสัปดาห์นั้น
 
     apiCall('getHistoryData', {
       branch,
@@ -403,21 +414,118 @@ export default function ScheduleWeekly() {
           };
         });
 
-        setScheduleData(newScheduleData);
+        applyDraftOver(newScheduleData);
       })
       .catch((err) => {
         if (!alive) return;
-        setScheduleData({});
+        // โหลดประวัติไม่ได้ก็ยังต้องคืนร่างที่ค้างในเครื่องให้เห็น
+        // (เคสที่เจอจริงคือฐานข้อมูลต่อไม่ได้ ทั้งอ่านและเขียนล้มพร้อมกัน)
+        applyDraftOver({});
         toast.error(errMessage(err, 'โหลดตารางของสัปดาห์นี้ไม่สำเร็จ'));
       })
       .finally(() => {
         if (!alive) return;
-        setDirtyKeys(new Set());
         setLoadingWeek(false);
       });
 
+    // เอาร่างที่เก็บไว้ในเครื่องมาทับข้อมูลจากเซิร์ฟเวอร์ แล้วทำเครื่องหมายว่ายังไม่ได้บันทึก
+    function applyDraftOver(base) {
+      const draft = loadDraft(branch, weekKey);
+      const draftCells = draft?.cells || {};
+      const keys = Object.keys(draftCells);
+
+      setScheduleData(keys.length ? { ...base, ...draftCells } : base);
+      setDirtyKeys(new Set(keys));
+      loadedKeyRef.current = `${branch}:${weekKey}`;
+
+      if (keys.length) {
+        toast(`มีร่างที่ยังไม่ได้บันทึกอยู่ ${keys.length} ช่อง — กดบันทึกตารางเพื่อส่งขึ้นระบบ`, { icon: '📝' });
+      }
+    }
+
     return () => { alive = false; };
   }, [effectiveBranch, weekStartDate]);
+
+  // -------------------------------------------------------------------------
+  // ร่างในเครื่อง — กันข้อมูลหายตอนส่งขึ้นเซิร์ฟเวอร์ไม่ได้
+  // (ตอนนี้ฐานข้อมูล HR เปิดพอร์ตเฉพาะ IP ในไทย เว็บที่รันต่างประเทศจึงต่อไม่ได้)
+  // -------------------------------------------------------------------------
+
+  // เก็บทุกครั้งที่มีการแก้ ปิดหน้าหรือปิดเครื่องแล้วกลับมาก็ยังอยู่
+  useEffect(() => {
+    if (!effectiveBranch) return;
+    const weekKey = formatDateLocal(weekStartDate);
+    // ยังโหลดสัปดาห์นี้ไม่เสร็จ อย่าเพิ่งเขียน ไม่งั้นจะเอาของสัปดาห์เก่าไปทับ
+    if (loadedKeyRef.current !== `${effectiveBranch}:${weekKey}`) return;
+
+    const cells = {};
+    dirtyKeys.forEach((k) => { if (scheduleData[k]) cells[k] = scheduleData[k]; });
+    saveDraftCells(effectiveBranch, weekKey, cells);
+  }, [scheduleData, dirtyKeys, effectiveBranch, weekStartDate]);
+
+  /** คีย์ช่อง (`hrCode_YYYY-MM-DD`) ของแถว log — ใช้เคลียร์เฉพาะช่องที่ส่งขึ้นไปแล้วจริง */
+  const keysOfLogs = (logs) => new Set((logs || []).map((l) => `${l.hrCode}_${l.workDate}`));
+
+  /**
+   * ส่งร่างที่ค้างขึ้นระบบ — ใช้ pendingLogs ที่คิดเสร็จแล้ว จึงส่งได้ทุกสาขา/สัปดาห์
+   * loud=false สำหรับการลองเงียบๆ เบื้องหลัง จะไม่รบกวนผู้ใช้ตอนยังต่อไม่ได้
+   */
+  const flushPendingDrafts = useCallback(async ({ loud = false } = {}) => {
+    const drafts = listDrafts().filter((d) => (d.pendingLogs || []).length > 0);
+    if (drafts.length === 0) {
+      setPendingCount(0);
+      return { sent: 0, failed: 0 };
+    }
+
+    setFlushing(true);
+    let sent = 0;
+    let failed = 0;
+    let lastMsg = '';
+    const currentWeek = formatDateLocal(weekStartDate);
+
+    for (const d of drafts) {
+      try {
+        await apiCall('saveTimesheet', { logs: d.pendingLogs });
+        sent += d.pendingLogs.length;
+        clearDraft(d.branch, d.weekStart);
+        // ล้างเฉพาะช่องที่ส่งขึ้นไปแล้วจริง — ถ้าผู้ใช้แก้ช่องอื่นเพิ่มระหว่างรอ
+        // ช่องใหม่นั้นต้องยังนับว่ายังไม่ได้บันทึกอยู่ ไม่งั้นจะหายไปเงียบๆ
+        if (d.branch === effectiveBranch && d.weekStart === currentWeek) {
+          const done = keysOfLogs(d.pendingLogs);
+          setDirtyKeys((prev) => new Set([...prev].filter((k) => !done.has(k))));
+        }
+      } catch (err) {
+        failed += d.pendingLogs.length;
+        lastMsg = errMessage(err, 'ส่งร่างขึ้นระบบไม่สำเร็จ');
+      }
+    }
+
+    setPendingCount(countPendingLogs());
+    setFlushing(false);
+    if (sent) toast.success(`ส่งร่างที่ค้างขึ้นระบบแล้ว ${sent} รายการ`);
+    if (failed && loud) toast.error(lastMsg);
+    return { sent, failed };
+  }, [effectiveBranch, weekStartDate]);
+
+  // ลองส่งเองเป็นระยะ + ตอนเน็ตกลับมา + ตอนสลับกลับมาที่แท็บนี้
+  // ผู้ใช้จึงไม่ต้องคอยกดเอง พอฝั่งเซิร์ฟเวอร์ต่อได้เมื่อไหร่ของที่ค้างจะขึ้นเอง
+  useEffect(() => {
+    if (pendingCount === 0) return undefined;
+
+    flushPendingDrafts({ loud: false });
+    const timer = setInterval(() => flushPendingDrafts({ loud: false }), 120000);
+    const retry = () => {
+      if (document.visibilityState === 'visible') flushPendingDrafts({ loud: false });
+    };
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', retry);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', retry);
+    };
+  }, [pendingCount, flushPendingDrafts]);
 
   const handleCellClick = (emp, dateStr) => {
     const key = `${emp.hrCode}_${dateStr}`;
@@ -640,11 +748,27 @@ export default function ScheduleWeekly() {
         return;
       }
 
-      // ไม่ต้องส่งชื่อคนบันทึกเอง — apiCall แนบ user ที่ล็อกอินไว้ไปให้อัตโนมัติ
-      // แล้วฝั่ง SQL เก็บลง hr_timesheet_log ให้ (Apps Script เดิมไม่ได้เก็บไว้)
-      await apiCall('saveTimesheet', { logs });
-      toast.success(`บันทึกตารางงานเรียบร้อยแล้ว (${logs.length} รายการ)`);
-      setDirtyKeys(new Set());
+      const weekKey = formatDateLocal(weekStartDate);
+
+      try {
+        // ไม่ต้องส่งชื่อคนบันทึกเอง — apiCall แนบ user ที่ล็อกอินไว้ไปให้อัตโนมัติ
+        // แล้วฝั่ง SQL เก็บลง hr_timesheet_log ให้ (Apps Script เดิมไม่ได้เก็บไว้)
+        await apiCall('saveTimesheet', { logs });
+        clearDraft(effectiveBranch, weekKey);
+        setPendingCount(countPendingLogs());
+        const done = keysOfLogs(logs);
+        setDirtyKeys((prev) => new Set([...prev].filter((k) => !done.has(k))));
+        toast.success(`บันทึกตารางงานเรียบร้อยแล้ว (${logs.length} รายการ)`);
+      } catch (err) {
+        // ส่งไม่ขึ้น = เก็บไว้ในเครื่อง ห้ามทิ้งงานที่ผู้ใช้กรอกมาแล้ว
+        // เก็บทั้งแถวที่คิดเสร็จแล้ว (ส่งซ้ำได้เลย) และช่องที่แก้ (คืนหน้าจอได้)
+        const cells = {};
+        dirtyKeys.forEach((k) => { if (scheduleData[k]) cells[k] = scheduleData[k]; });
+        const msg = errMessage(err, 'เกิดข้อผิดพลาดในการบันทึก');
+        savePendingLogs(effectiveBranch, weekKey, logs, cells, msg);
+        setPendingCount(countPendingLogs());
+        toast.error(`${msg} — เก็บร่างไว้ในเครื่องแล้ว ${logs.length} รายการ ข้อมูลไม่หาย`, { duration: 6000 });
+      }
     } catch (err) {
       toast.error(errMessage(err, 'เกิดข้อผิดพลาดในการบันทึก'));
     } finally {
@@ -808,6 +932,24 @@ export default function ScheduleWeekly() {
             <h6 className="text-sm opacity-90 m-0">🥧 ค่าแรง / เป้าขาย (%)</h6>
             <div className="mt-1"><span className="text-lg font-bold">{summary.wagePercent}%</span></div>
           </div>
+        </div>
+      )}
+
+      {/* แถบเตือนร่างที่ค้าง — ต้องเห็นชัดว่า "ข้อมูลไม่หาย" ไม่ใช่ปล่อยให้ผู้ใช้เดาเอง */}
+      {pendingCount > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <span className="text-sm text-amber-900">
+            มี <strong>{pendingCount}</strong> รายการที่บันทึกไว้แล้วแต่ยังส่งขึ้นระบบไม่ได้ —
+            เก็บไว้ในเครื่องนี้เรียบร้อย ปิดหน้าหรือปิดเครื่องก็ไม่หาย ระบบจะลองส่งให้เองเป็นระยะ
+          </span>
+          <button
+            onClick={() => flushPendingDrafts({ loud: true })}
+            disabled={flushing}
+            className="ml-auto flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+          >
+            {flushing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {flushing ? 'กำลังส่ง...' : 'ลองส่งอีกครั้ง'}
+          </button>
         </div>
       )}
 
