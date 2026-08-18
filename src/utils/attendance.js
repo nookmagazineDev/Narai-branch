@@ -62,3 +62,110 @@ export function summarizeDaily(rows) {
     })
     .sort((a, b) => (b.date + b.empCode).localeCompare(a.date + a.empCode));
 }
+
+// ---------------------------------------------------------------------------
+// เทียบกับตารางงานที่สาขาลงไว้ (hr_timesheet ผ่าน action getHistoryData)
+//
+// หน้าสแกนเข้า-ออกจะได้เห็นสองฝั่งคู่กัน: เวลาที่ "วางแผนไว้" กับเวลาที่ "สแกนจริง"
+// แล้วสรุปส่วนต่างให้เลยว่าเข้าสาย/เข้าเบรคสาย/ออกก่อนเวลากี่นาที
+// ---------------------------------------------------------------------------
+
+/** 'HH:mm' -> จำนวนนาทีนับจากเที่ยงคืน (รองรับ '24:00' ที่ระบบเดิมใช้ได้จริง) */
+export function minutesOfDay(t) {
+  const m = String(t || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+/** ระยะเบรคที่อนุญาตเป็นนาที จากข้อความในตารางงาน ('ไม่เบรค' / '1 ชม.') */
+export function breakMinutes(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  if (s.includes('ไม่เบรค')) return 0;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? Math.round(n * 60) : null;
+}
+
+/* ชื่อจากเครื่องสแกน (ZKBio9) กับจากตารางงานมักใส่คำนำหน้าไม่เหมือนกัน
+   ใช้เป็นทางสำรองตอนรหัสไม่ตรงกันเท่านั้น รหัสยังเป็นตัวหลักเสมอ */
+const normName = (s) =>
+  String(s || '')
+    .replace(/^(นาย|นางสาว|น\.ส\.|นาง|ว่าที่ร\.ต\.|ดร\.|mr\.?|mrs\.?|miss|ms\.?)\s*/i, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+
+/** แถวตารางงานหนึ่งแถว -> เวลาที่วางแผนไว้ (ข้อความ 'HH:mm' ตามที่สาขากรอก) */
+export function planOf(record) {
+  if (!record) return null;
+  const range = String(record.breakTimeRange || '').split('-');
+  return {
+    in: record.checkIn || '',
+    out: record.checkOut || '',
+    breakOut: range[0] || '',
+    breakIn: range[1] || '',
+    breakAllowed: breakMinutes(record.breakTime),
+    status: record.status || '',
+    otHours: parseFloat(record.ot || '0') || 0,
+    otApprover: record.otApprover || '',
+  };
+}
+
+/** ต่างกันกี่นาที คืน null ถ้าข้อมูลไม่พอ และคืน 0 เมื่อไม่สาย (ไม่คืนค่าติดลบ) */
+function lateBy(actual, planned) {
+  const a = minutesOfDay(actual);
+  const p = minutesOfDay(planned);
+  if (a == null || p == null) return null;
+  return Math.max(0, Math.round(a - p));
+}
+
+/**
+ * รวมสรุปรายวัน (จากการสแกน) เข้ากับตารางงานที่สาขาลงไว้
+ *
+ * จับคู่ด้วยรหัสพนักงานก่อนเสมอ ถ้าไม่เจอค่อยลองจับด้วยชื่อในวันเดียวกัน
+ * (เครื่องสแกนกับตารางงานเป็นคนละระบบ บางสาขารหัสจึงไม่ตรงกัน)
+ *
+ * เพิ่มให้แต่ละแถว:
+ *   plan      เวลาที่วางแผนไว้ (null = วันนั้นไม่มีในตารางงาน)
+ *   lateIn        เข้างานสายกี่นาที
+ *   lateBreakIn   กลับจากเบรคสายกี่นาที
+ *   earlyOut      ออกก่อนเวลากี่นาที
+ */
+export function attachSchedule(daily, scheduleRows) {
+  const byCode = new Map();
+  const byName = new Map();
+  for (const r of scheduleRows || []) {
+    if (r.otherNote === 'ล้างข้อมูล') continue;
+    const date = String(r.workDate || '').slice(0, 10);
+    if (!date) continue;
+    if (r.hrCode) byCode.set(`${date}|${String(r.hrCode).trim()}`, r);
+    const n = normName(r.name);
+    if (n) byName.set(`${date}|${n}`, r);
+  }
+
+  return (daily || []).map((d) => {
+    const rec =
+      byCode.get(`${d.date}|${String(d.empCode).trim()}`) ||
+      byName.get(`${d.date}|${normName(d.name)}`) ||
+      null;
+    const plan = planOf(rec);
+    if (!plan) return { ...d, plan: null, lateIn: null, lateBreakIn: null, earlyOut: null };
+
+    // กลับจากเบรคสาย: เทียบกับเวลาสิ้นสุดเบรคที่ลงไว้ ถ้าไม่ได้ลงช่วงเวลาไว้
+    // ก็เทียบกับ "ออกเบรคจริง + ระยะเบรคที่อนุญาต" แทน จะได้ยังวัดได้
+    let lateBreakIn = lateBy(hhmm(d.breakIn), plan.breakIn);
+    if (lateBreakIn == null && plan.breakAllowed != null && d.breakOut && d.breakIn) {
+      const out = minutesOfDay(hhmm(d.breakOut));
+      const back = minutesOfDay(hhmm(d.breakIn));
+      if (out != null && back != null) lateBreakIn = Math.max(0, Math.round(back - out - plan.breakAllowed));
+    }
+
+    return {
+      ...d,
+      plan,
+      lateIn: lateBy(hhmm(d.first), plan.in),
+      lateBreakIn,
+      // ออกก่อนเวลา = กลับด้านของการสาย (เวลาที่ลงไว้ - เวลาที่สแกนออกจริง)
+      earlyOut: lateBy(plan.out, d.last ? hhmm(d.last) : ''),
+    };
+  });
+}
