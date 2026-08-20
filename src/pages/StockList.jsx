@@ -100,6 +100,17 @@ const byStoreCat = (a, b) => {
 // หมายเหตุ: ชื่อหมวดในชีท item (คอลัมน์ N) ถูกเปลี่ยนจาก "ห้องผัก" เป็น "ผัก" — ใส่ไว้ทั้งคู่กันเผื่อเปลี่ยนชื่อกลับ/มีทั้งสองแบบปนกัน
 const SPLIT_ORDER_CATEGORIES = ['ผัก', 'ห้องผัก'];
 
+// ---- หมวดสโตร์อุปกรณ์ ----
+// สินค้าหมวด "อุปกรณ์" (คอลัมน์ N ชีท item) ไม่ต้องนับสต๊อกทุกรอบ จึงซ่อนออกจากตารางเป็นค่าเริ่มต้น
+// แต่ยังหาเจอได้ 2 ทาง: (1) พิมพ์ค้นหาด้วยรหัส/ชื่อ  (2) เลือก "สโตร์อุปกรณ์" ในช่องกรองหมวด
+// เทียบแบบ "มีคำว่าอุปกรณ์อยู่ในชื่อหมวด" เพื่อรองรับทั้ง "อุปกรณ์", "สโตร์อุปกรณ์", "อุปกรณ์ครัว" ฯลฯ
+const EQUIPMENT_CAT_PATTERN = /อุปกรณ์/;
+// ค่าพิเศษของ dropdown กรองหมวด — ไม่ชนกับชื่อหมวดจริงในชีทแน่นอน
+const EQUIPMENT_FILTER_VALUE = '__equipment__';
+const isEquipmentItem = (it) =>
+  EQUIPMENT_CAT_PATTERN.test(String(it?.storeCat || '')) ||
+  EQUIPMENT_CAT_PATTERN.test(String(it?.storageCat || ''));
+
 // แบ่งรายการที่จะสั่งออกเป็นกลุ่มใบเบิก — 1 กลุ่ม = 1 ใบ (1 Ord_No)
 // รายการหมวดใน SPLIT_ORDER_CATEGORIES แยกออกไปเป็นใบของตัวเอง ที่เหลือรวมเป็น "ใบเบิกทั่วไป" 1 ใบ
 function partitionOrderGroups(sortedItems) {
@@ -1520,20 +1531,31 @@ export default function StockList() {
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
-      if (item.storageCat) cats.add(String(item.storageCat));
+      // ของหมวดสโตร์อุปกรณ์ไม่ต้องเอาหมวดจัดเก็บมาใส่ใน dropdown — มีตัวเลือก "สโตร์อุปกรณ์" แยกให้แล้ว
+      if (item.storageCat && !isEquipmentItem(item)) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
   }, [items]);
 
   const sortedAndFilteredItems = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    const equipOnly = filterCategory === EQUIPMENT_FILTER_VALUE;
+
     let result = items.filter(item => {
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
-      
-      const matchSearch = itemNameStr.includes(searchTerm.toLowerCase()) ||
-                          String(item.productId || '').toLowerCase().includes(searchTerm.toLowerCase());
-      const matchCat = filterCategory === '' || itemCatStr === filterCategory;
-      return matchSearch && matchCat;
+
+      const matchSearch = itemNameStr.includes(term) ||
+                          String(item.productId || '').toLowerCase().includes(term);
+      if (!matchSearch) return false;
+
+      // เลือกหมวด "สโตร์อุปกรณ์" ในช่องกรอง = ดูเฉพาะของหมวดนี้
+      if (equipOnly) return isEquipmentItem(item);
+
+      // ค่าเริ่มต้น: ซ่อนหมวดสโตร์อุปกรณ์ไว้ ยกเว้นกำลังพิมพ์ค้นหาอยู่ (ค้นหาแล้วต้องเจอ)
+      if (isEquipmentItem(item) && term === '') return false;
+
+      return filterCategory === '' || itemCatStr === filterCategory;
     });
 
     result.sort((a, b) => {
@@ -1556,6 +1578,12 @@ export default function StockList() {
 
     return result;
   }, [items, searchTerm, filterCategory, sortBy]);
+
+  // จำนวนสินค้าหมวดสโตร์อุปกรณ์ที่ถูกซ่อนอยู่ตอนนี้ (ใช้โชว์ป้ายบอกใต้ช่องค้นหา)
+  const hiddenEquipmentCount = useMemo(() => {
+    if (searchTerm.trim() !== '' || filterCategory === EQUIPMENT_FILTER_VALUE) return 0;
+    return items.filter(isEquipmentItem).length;
+  }, [items, searchTerm, filterCategory]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -1989,6 +2017,8 @@ export default function StockList() {
                 {uniqueCategories.map((cat, idx) => (
                   <option key={idx} value={cat}>{cat}</option>
                 ))}
+                {/* หมวดสโตร์อุปกรณ์ถูกซ่อนจากตารางปกติ — เลือกตัวเลือกนี้เพื่อเรียกดูเฉพาะของหมวดนี้ */}
+                <option value={EQUIPMENT_FILTER_VALUE}>สโตร์อุปกรณ์ (ซ่อนไว้)</option>
               </select>
               <select
                 value={sortBy}
@@ -2000,6 +2030,32 @@ export default function StockList() {
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
             </div>
+
+            {/* ป้ายบอกว่ามีของหมวดสโตร์อุปกรณ์ถูกซ่อนอยู่ + ทางลัดกดดู */}
+            {hiddenEquipmentCount > 0 && (
+              <div className="px-4 py-2 bg-amber-50/60 border-b border-amber-100 text-[11px] text-amber-700 flex items-center gap-2 flex-wrap">
+                <span>ซ่อนสินค้าหมวดสโตร์อุปกรณ์ไว้ {hiddenEquipmentCount} รายการ — ค้นหาด้วยรหัส/ชื่อก็เจอ</span>
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory(EQUIPMENT_FILTER_VALUE)}
+                  className="underline font-semibold hover:text-amber-900 cursor-pointer"
+                >
+                  แสดงหมวดสโตร์อุปกรณ์
+                </button>
+              </div>
+            )}
+            {filterCategory === EQUIPMENT_FILTER_VALUE && (
+              <div className="px-4 py-2 bg-amber-50/60 border-b border-amber-100 text-[11px] text-amber-700 flex items-center gap-2 flex-wrap">
+                <span>กำลังแสดงเฉพาะสินค้าหมวดสโตร์อุปกรณ์</span>
+                <button
+                  type="button"
+                  onClick={() => setFilterCategory('')}
+                  className="underline font-semibold hover:text-amber-900 cursor-pointer"
+                >
+                  กลับไปดูทุกหมวด
+                </button>
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               {loading ? (
@@ -2042,7 +2098,13 @@ export default function StockList() {
                       return (
                         <tr key={item.productId || index} className="hover:bg-gray-50/50 transition-colors">
                           <td className="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-600">{item.productId}</td>
-                          <td className="px-4 py-3 text-sm text-gray-800 font-medium">{item.name}</td>
+                          <td className="px-4 py-3 text-sm text-gray-800 font-medium">
+                            {item.name}
+                            {/* ของหมวดสโตร์อุปกรณ์ปกติถูกซ่อน — ติดป้ายไว้เวลาโผล่มาจากการค้นหา จะได้รู้ว่ามาจากหมวดไหน */}
+                            {isEquipmentItem(item) && (
+                              <span className="ml-2 align-middle px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-semibold">สโตร์อุปกรณ์</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center gap-1.5 group">
                               <span className="text-xs text-gray-500">{item.storageCat || '-'}</span>
