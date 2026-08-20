@@ -24,6 +24,10 @@ const READ_ONLY = new Set([
   'getBranchStats',
   'getDailySales',
   'getHistoryData',
+  // หน้านับสต๊อก (ยังไม่เปิดใช้จากหน้าเว็บ — ดู docs/stock-sql-migration.md)
+  'getStockItems',
+  'getStockTotal',
+  'stockStatus',
 ]);
 
 export default async function handler(req, res) {
