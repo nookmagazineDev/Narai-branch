@@ -24,6 +24,8 @@
  *                      (ไม่ใส่ = ข้ามตารางนั้นไป กันเขียนซ้ำโดยไม่ตั้งใจ)
  *   --host / --port / --db / --user / --pass   ปลายทาง (ค่าเริ่มต้น localhost:1433/InventoryNarai)
  *   --gid-<key>=123    ระบุ gid ของแท็บเอง เมื่อชื่อแท็บไม่ตรงหรือชีทมีตัวกรองเปิดค้างไว้
+ *   --fix-codes        ทำเฉพาะขั้นเติมรหัสให้ตรงกับ inv_item (ไม่ต้องอ่านชีทใหม่)
+ *   --no-fix-codes     ย้ายอย่างเดียว ไม่ต้องเติมรหัสให้
  *
  * ข้อควรรู้
  * - ชีททุกไฟล์ต้องตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" ก่อน (อ่านแบบไม่ล็อกอิน)
@@ -31,8 +33,13 @@
  * - ชุดไหนที่รู้ gid จะดึงผ่าน export CSV เพราะ "ไม่สนใจตัวกรองที่เปิดค้างไว้ในชีท"
  *   ส่วนชุดที่รู้แค่ชื่อแท็บต้องใช้ gviz ซึ่งโดนตัวกรองบังข้อมูลได้ (เคยเจอมาแล้วตอนย้ายตารางงาน
  *   gviz คืนมา 496 แถวจากหมื่นกว่าแถว) ถ้าจำนวนแถวดูน้อยผิดปกติให้หา gid มาใส่ด้วย --gid-<key>=
- * - รหัสสินค้าในชีทปนกันทั้งตัวเลขและข้อความ (5001 กับ '05001') ทุกตารางจึงมี item_code_norm
- *   ที่ตัด 0 นำหน้าแล้ว ใช้ join แทน — กติกาเดียวกับ normalizeId ใน apps-script.js
+ * - รหัสสินค้าในชีทปนกันทั้งตัวเลขและข้อความ (5001 กับ '05001') ทุกตารางจึงมีสองคอลัมน์
+ *     item_code       รหัสจริงที่เอาไว้แสดง/ทำรายงาน — เก็บ 0 นำหน้าไว้ครบตามต้นทาง
+ *     item_code_norm  รหัสที่ตัด 0 นำหน้าแล้ว ใช้ join อย่างเดียว ห้ามเอาไปแสดง
+ *   (กติกาเดียวกับ normalizeId ใน apps-script.js)
+ * - แถวไหนที่ชีทเก็บรหัสเป็นตัวเลขจน 0 นำหน้าหายไป จะถูกเติมกลับให้ตอนจบด้วยขั้น "เติมรหัส"
+ *   ซึ่งลอกรหัสตัวเต็มจากตารางรายการสินค้า (inv_item) มาใส่ให้ทุกตารางที่จับคู่ได้
+ *   ข้ามขั้นนี้ได้ด้วย --no-fix-codes และสั่งทำอย่างเดียวได้ด้วย --fix-codes
  * - ชุดที่มีคีย์ (รายการสินค้า/ยอดยกมา/หมวดจัดเก็บ/ค่าเฉลี่ยต่อหัว/ราคากลาง) ถ้าชีทมีแถวซ้ำคีย์เดียวกัน
  *   จะเก็บ "แถวล่างสุด" ไว้ (ตีความว่าใหม่กว่า) แล้วรายงานให้ดูว่ายุบไปกี่แถว
  */
@@ -55,6 +62,8 @@ const val = (name, fallback) => {
 const DRY_RUN = has('dry-run');
 const REPLACE = has('replace');
 const LIST = has('list');
+const FIX_CODES_ONLY = has('fix-codes');
+const SKIP_FIX_CODES = has('no-fix-codes');
 const INSPECT = val('inspect', '');
 
 const DB = {
@@ -524,6 +533,39 @@ async function insertRows(pool, src, rows) {
   return done;
 }
 
+/* ---------------------------- เติมรหัสให้ครบ 0 นำหน้า ----------------------------
+   ชีทหลายไฟล์เก็บรหัสสินค้าเป็น "ตัวเลข" ทำให้ '05001' กลายเป็น 5001 ตั้งแต่ในชีทแล้ว
+   ตัวที่รู้รหัสเต็มแน่นอนคือชีทรายการสินค้า (แท็บ item) ซึ่งเก็บเป็นข้อความ
+   ขั้นนี้จึงลอก item_code จาก inv_item มาทับให้ทุกตารางที่จับคู่ด้วย item_code_norm ได้
+   -> ทุกตารางได้รหัสตัวเต็มเหมือนกันหมด เอาไปทำรายงาน/ส่งออกได้ตรงกับที่ฝ่ายจัดซื้อใช้
+
+   แถวที่จับคู่กับรายการสินค้าไม่ได้ (สินค้าที่ถูกลบออกจากชีท item ไปแล้ว) ปล่อยไว้ตามเดิม
+   ไม่ได้เดารหัสให้ เพราะไม่มีข้อมูลพอจะรู้ว่ารหัสเต็มมี 0 กี่ตัว */
+const CODE_TABLES = [
+  'inv_price', 'inv_stock_count', 'inv_balance', 'inv_request', 'inv_storage_category',
+  'inv_month_end', 'inv_sup_cost', 'inv_waste', 'inv_plan_order', 'inv_dispatch',
+  'inv_goods_received', 'inv_avg_per_head',
+];
+
+async function fixCodes(pool) {
+  console.log('เติมรหัสสินค้าให้ตรงกับรายการสินค้า (เอา 0 นำหน้ากลับมา)');
+  let total = 0;
+  for (const table of CODE_TABLES) {
+    const r = await pool.request().query(
+      `UPDATE t
+          SET t.item_code = i.item_code
+         FROM dbo.${table} AS t
+         JOIN dbo.inv_item AS i ON i.item_code_norm = t.item_code_norm
+        WHERE t.item_code_norm IS NOT NULL AND t.item_code_norm <> ''
+          AND (t.item_code IS NULL OR t.item_code <> i.item_code)`
+    );
+    const n = r.rowsAffected?.[0] || 0;
+    total += n;
+    if (n) console.log(`  ${table.padEnd(22)} แก้ ${n} แถว`);
+  }
+  console.log(total ? `  รวมแก้ ${total} แถว\n` : '  ไม่มีแถวไหนต้องแก้ (รหัสตรงกันหมดอยู่แล้ว)\n');
+}
+
 /* --------------------------------- main --------------------------------- */
 
 async function main() {
@@ -562,7 +604,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  if (!DRY_RUN && (!DB.user || !DB.password)) {
+  if ((!DRY_RUN || FIX_CODES_ONLY) && (!DB.user || !DB.password)) {
     console.error('ต้องใส่ --user และ --pass (หรือตั้ง INV_DB_USER / INV_DB_PASSWORD)');
     process.exitCode = 1;
     return;
@@ -570,7 +612,7 @@ async function main() {
 
   let pool = null;
   try {
-    if (!DRY_RUN) {
+    if (!DRY_RUN || FIX_CODES_ONLY) {
       pool = await new sql.ConnectionPool({
         server: DB.host, port: DB.port, database: DB.database, user: DB.user, password: DB.password,
         connectionTimeout: 15000,
@@ -579,6 +621,12 @@ async function main() {
         options: { encrypt: false, trustServerCertificate: true, enableArithAbort: true },
       }).connect();
       console.log('ต่อ SQL Server ได้แล้ว\n');
+    }
+
+    if (FIX_CODES_ONLY) {
+      await fixCodes(pool);
+      console.log('เสร็จแล้ว');
+      return;
     }
 
     const summary = [];
@@ -627,6 +675,13 @@ async function main() {
       const written = await insertRows(pool, src, rows);
       process.stdout.write(`\r  เขียนลง dbo.${src.table} ${written} แถว           \n\n`);
       summary.push({ key: src.key, read: raw.length, written, note: '' });
+    }
+
+    // เติมรหัสหลังย้ายเสร็จ ต้องมี inv_item อยู่แล้วถึงจะเทียบได้
+    if (!DRY_RUN && !SKIP_FIX_CODES) {
+      const hasItems = await pool.request().query('SELECT COUNT(*) AS n FROM dbo.inv_item');
+      if (Number(hasItems.recordset[0]?.n || 0) > 0) await fixCodes(pool);
+      else console.log('ข้ามขั้นเติมรหัส: ยังไม่มีข้อมูลใน inv_item ให้เทียบ\n');
     }
 
     console.log('สรุป');
