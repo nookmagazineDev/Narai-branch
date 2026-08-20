@@ -43,6 +43,9 @@ function isPublicHoliday(dateStr) {
 }
 
 const EMPTY_CELL = {
+  // ไม่มีช่องติ๊ก "กำหนดเป็นวันหยุด" ในหน้าจอแล้ว — ใช้ '10 หยุด' ในช่องลารับ/ไม่รับค่าแรงแทน
+  // แต่ยังต้องเก็บฟิลด์นี้ไว้ เพราะแถวเก่าที่บันทึกไว้ตอนยังมีช่องติ๊กมีค่านี้เป็น true อยู่
+  // (โหลดมาจาก status = 'หยุด') ถ้าเอาออกทั้งหมด วันหยุดย้อนหลังจะกลายเป็นวันทำงานทันที
   isStop: false,
   checkInHr: '', checkInMin: '',
   checkOutHr: '', checkOutMin: '',
@@ -164,7 +167,6 @@ export default function ScheduleWeekly() {
     cellData.ot,
     cellData.otAccum
   ]);
-
 
   // ปิด modal ด้วยปุ่ม ESC
   useEffect(() => {
@@ -569,7 +571,6 @@ export default function ScheduleWeekly() {
     markDirty(activeCell.key);
     setIsModalOpen(false);
   };
-
 
   const calculateCellWage = (emp, data) => {
     let wage = 0;
@@ -1105,181 +1106,168 @@ export default function ScheduleWeekly() {
             </div>
             
             <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
-              {/* Top Toggle */}
-              <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
-                <input 
-                  type="checkbox" 
-                  id="modalIsStop" 
-                  className="w-5 h-5 rounded border-gray-300 text-red-600 focus:ring-red-500"
-                  checked={cellData.isStop}
-                  onChange={(e) => setCellData({...cellData, isStop: e.target.checked})}
-                />
-                <label htmlFor="modalIsStop" className="font-bold text-red-600">กำหนดเป็นวันหยุด</label>
-              </div>
 
-              {!cellData.isStop && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเข้า <span className="text-red-500">*</span></label>
-                      <div className="flex items-center gap-1">
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.checkInHr}
-                          onChange={(e) => setCellData({...cellData, checkInHr: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                        <span className="font-bold">:</span>
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.checkInMin}
-                          onChange={(e) => setCellData({...cellData, checkInMin: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาออก</label>
-                      <div className="flex items-center gap-1">
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.checkOutHr}
-                          onChange={(e) => setCellData({...cellData, checkOutHr: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {hrOutOpts.map(h => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                        <span className="font-bold">:</span>
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.checkOutMin}
-                          onChange={(e) => setCellData({...cellData, checkOutMin: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเบรค</label>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเข้า <span className="text-red-500">*</span></label>
+                    <div className="flex items-center gap-1">
                       <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.breakDur}
-                        onChange={(e) => setCellData({...cellData, breakDur: e.target.value})}
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.checkInHr}
+                        onChange={(e) => setCellData({...cellData, checkInHr: e.target.value})}
                       >
                         <option value="">-</option>
-                        {breakOpts.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                        {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">เริ่มเบรค</label>
-                      <div className="flex items-center gap-1">
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.breakStartHr}
-                          onChange={(e) => setCellData({...cellData, breakStartHr: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
-                        </select>
-                        <span className="font-bold">:</span>
-                        <select 
-                          className="w-full border border-gray-300 rounded p-1 text-center text-sm"
-                          value={cellData.breakStartMin}
-                          onChange={(e) => setCellData({...cellData, breakStartMin: e.target.value})}
-                        >
-                          <option value="">-</option>
-                          {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">OT (ชั่วโมง)</label>
+                      <span className="font-bold">:</span>
                       <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.ot}
-                        onChange={(e) => setCellData({...cellData, ot: e.target.value})}
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.checkInMin}
+                        onChange={(e) => setCellData({...cellData, checkInMin: e.target.value})}
                       >
                         <option value="">-</option>
-                        {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">ชั่วโมงสะสม</label>
-                      <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.otAccum}
-                        onChange={(e) => setCellData({...cellData, otAccum: e.target.value})}
-                      >
-                        <option value="">-</option>
-                        {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                        {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
                   </div>
-
-                  <hr className="my-2" />
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-blue-600 mb-1">ลา (รับค่าแรง)</label>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">เวลาออก</label>
+                    <div className="flex items-center gap-1">
                       <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.leave1}
-                        onChange={(e) => setCellData({...cellData, leave1: e.target.value})}
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.checkOutHr}
+                        onChange={(e) => setCellData({...cellData, checkOutHr: e.target.value})}
                       >
                         <option value="">-</option>
-                        {PAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
+                        {hrOutOpts.map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-red-600 mb-1">หยุด (ไม่รับค่าแรง)</label>
+                      <span className="font-bold">:</span>
                       <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.leave2}
-                        onChange={(e) => setCellData({...cellData, leave2: e.target.value})}
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.checkOutMin}
+                        onChange={(e) => setCellData({...cellData, checkOutMin: e.target.value})}
                       >
                         <option value="">-</option>
-                        {UNPAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">ลารายชั่วโมง</label>
-                      <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.hrLeave}
-                        onChange={(e) => setCellData({...cellData, hrLeave: e.target.value})}
-                      >
-                        <option value="">-</option>
-                        {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">ใช้ชั่วโมงสะสม</label>
-                      <select 
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm"
-                        value={cellData.useAccum}
-                        onChange={(e) => setCellData({...cellData, useAccum: e.target.value})}
-                      >
-                        <option value="">-</option>
-                        {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                        {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </div>
                   </div>
                 </div>
-              )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">เวลาเบรค</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.breakDur}
+                      onChange={(e) => setCellData({...cellData, breakDur: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {breakOpts.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">เริ่มเบรค</label>
+                    <div className="flex items-center gap-1">
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.breakStartHr}
+                        onChange={(e) => setCellData({...cellData, breakStartHr: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {hrOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                      </select>
+                      <span className="font-bold">:</span>
+                      <select 
+                        className="w-full border border-gray-300 rounded p-1 text-center text-sm"
+                        value={cellData.breakStartMin}
+                        onChange={(e) => setCellData({...cellData, breakStartMin: e.target.value})}
+                      >
+                        <option value="">-</option>
+                        {minOpts.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">OT (ชั่วโมง)</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.ot}
+                      onChange={(e) => setCellData({...cellData, ot: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">ชั่วโมงสะสม</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.otAccum}
+                      onChange={(e) => setCellData({...cellData, otAccum: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {otOpts.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <hr className="my-2" />
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-blue-600 mb-1">ลา (รับค่าแรง)</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.leave1}
+                      onChange={(e) => setCellData({...cellData, leave1: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {PAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-red-600 mb-1">หยุด (ไม่รับค่าแรง)</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.leave2}
+                      onChange={(e) => setCellData({...cellData, leave2: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {UNPAID_LEAVE.map(o => <option key={o.code} value={o.code}>{o.code} {o.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">ลารายชั่วโมง</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.hrLeave}
+                      onChange={(e) => setCellData({...cellData, hrLeave: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">ใช้ชั่วโมงสะสม</label>
+                    <select 
+                      className="w-full border border-gray-300 rounded p-1.5 text-sm"
+                      value={cellData.useAccum}
+                      onChange={(e) => setCellData({...cellData, useAccum: e.target.value})}
+                    >
+                      <option value="">-</option>
+                      {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
 
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1 mt-2">หมายเหตุเพิ่มเติม</label>
