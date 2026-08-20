@@ -95,9 +95,10 @@ const byStoreCat = (a, b) => {
   return ca.localeCompare(cb, 'th');
 };
 
-// หมวดสินค้าที่ไม่ต้องแสดงใน "ตารางนับสต๊อก" — กลุ่ม "อุปกรณ์" ไม่ได้นับกันทุกวันแต่มีจำนวนแถวเยอะมาก
-// ซ่อนแค่แถวในตาราง (ไม่ต้อง render แถวที่ไม่ได้ใช้ หน้าจึงเปิดไวขึ้น) แต่ยังเก็บไว้ใน items ครบเหมือนเดิม
-// จึงยังสั่งของหมวดนี้ได้ตามปกติผ่านปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" ที่ค้นหาจาก items ทั้งหมด
+// หมวดสินค้าที่ไม่แสดงปนในตารางนับปกติ — กลุ่ม "อุปกรณ์" ไม่ได้นับกันทุกวันแต่มีจำนวนแถวเยอะมาก
+// ไม่ต้อง render แถวที่ไม่ได้ใช้ หน้าจึงเปิดไวขึ้น แต่กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิกได้
+//
+// ซ่อนแค่ชั้นการแสดงผล ตัวสินค้ายังอยู่ใน items ครบ ตอนกดบันทึกจึงรวมเข้าใบเบิกใบเดียวกับหมวดอื่นเอง
 // อยากซ่อนหมวดอื่นเพิ่ม ใส่คำในลิสต์นี้ได้เลย — เทียบแบบ "มีคำนี้อยู่ในชื่อหมวด" จึงครอบคลุมชื่อย่อยเช่น "อุปกรณ์ครัว"
 const HIDDEN_CATEGORY_KEYWORDS = ['อุปกรณ์'];
 
@@ -1533,22 +1534,26 @@ export default function StockList() {
     }
   };
 
+  // ตารางมี 2 โหมด: ปกติ (ซ่อนหมวดอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มข้างช่องค้นหา
+  const [showHiddenOnly, setShowHiddenOnly] = useState(false);
+
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
-      if (isHiddenCategory(item)) return; // หมวดที่ซ่อนไม่ต้องมีในดรอปดาวน์ เลือกไปก็ไม่มีแถวให้ดู
+      // ดรอปดาวน์มีเฉพาะหมวดของโหมดที่ดูอยู่ เลือกหมวดของอีกชุดไปก็ได้ตารางว่างโดยไม่รู้สาเหตุ
+      if (isHiddenCategory(item) !== showHiddenOnly) return;
       if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
-  }, [items]);
+  }, [items, showHiddenOnly]);
 
-  // จำนวนรายการที่ถูกซ่อนจากตาราง — เอาไว้บอกผู้ใช้ว่าของหายไปไหน ไม่ใช่ข้อมูลหาย
+  // จำนวนรายการหมวดอุปกรณ์ — ใช้บอกผู้ใช้ว่าของไปอยู่ไหน ไม่ใช่ข้อมูลหาย
   const hiddenCount = useMemo(() => items.filter(isHiddenCategory).length, [items]);
 
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
-      // ซ่อนเฉพาะแถวในตารางนับ — ตัวสินค้ายังอยู่ใน items ให้ปุ่ม "สั่งเพิ่มเติม" ค้นเจอและสั่งได้อยู่
-      if (isHiddenCategory(item)) return false;
+      // โหมดปกติซ่อนหมวดอุปกรณ์ / โหมดอุปกรณ์แสดงเฉพาะหมวดนั้น
+      if (isHiddenCategory(item) !== showHiddenOnly) return false;
 
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
@@ -1578,7 +1583,7 @@ export default function StockList() {
     });
 
     return result;
-  }, [items, searchTerm, filterCategory, sortBy]);
+  }, [items, searchTerm, filterCategory, sortBy, showHiddenOnly]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -2022,12 +2027,30 @@ export default function StockList() {
                 <option value="productId">เรียงตามรหัสสินค้า</option>
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
+
+              {/* สลับไปดูหมวดอุปกรณ์ — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของสินค้าคนละชุด */}
+              {hiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setShowHiddenOnly(v => !v); setFilterCategory(''); setSearchTerm(''); }}
+                  className={`px-4 py-3 rounded-xl text-sm font-medium border transition-colors whitespace-nowrap ${
+                    showHiddenOnly
+                      ? 'bg-purple-600 border-purple-600 text-white hover:bg-purple-700'
+                      : 'bg-white border-gray-200 text-gray-700 hover:border-purple-300 hover:text-purple-700'
+                  }`}
+                  title="ของหมวดอุปกรณ์มีเป็นพันรายการ จึงแยกไว้คนละหน้าจอกับของที่นับทุกวัน"
+                >
+                  {showHiddenOnly ? '← กลับไปตารางนับปกติ' : `หมวดอุปกรณ์ (${hiddenCount})`}
+                </button>
+              )}
             </div>
 
             {/* บอกให้รู้ว่าของหมวดอุปกรณ์ถูกซ่อนไว้เฉยๆ ไม่ได้หายไป และยังสั่งได้จากปุ่มสั่งเพิ่มเติม */}
             {hiddenCount > 0 && (
               <div className="px-4 pb-3 -mt-1 text-xs text-gray-400">
-                ซ่อนสินค้าหมวดอุปกรณ์ {hiddenCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — ถ้าต้องการสั่งของหมวดนี้ ใช้ปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" ได้ตามปกติ
+                {showHiddenOnly
+                  ? `กำลังดูเฉพาะหมวดอุปกรณ์ ${hiddenCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
+                  : `ซ่อนสินค้าหมวดอุปกรณ์ ${hiddenCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิก`}
               </div>
             )}
 
