@@ -1584,7 +1584,7 @@ export default function StockList() {
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-5">
+    <div className="w-full space-y-5">
 
       {/* คู่มือการนับสต๊อก/ขอเบิก — ย่อไว้เป็นค่าเริ่มต้น กดเปิดดูได้ */}
       <StockGuide />
@@ -2043,26 +2043,26 @@ export default function StockList() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัส</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-28 bg-fuchsia-50/60" title="จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว">ค่าเฉลี่ย/หัว</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-teal-600 uppercase w-32 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดนับก่อนหน้า</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">สินค้ารอเข้า</th>
-                      {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
-                      {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
-                      {!isAll && <th className="px-2 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-40 min-w-[150px]">กรอกคงเหลือ</th>}
-                      {!isAll && <th className="px-2 py-3 text-center text-xs font-semibold text-gray-500 uppercase w-32 min-w-[110px]">ขอเบิก</th>}
+                      <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-24">รหัส</th>
+                      <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase min-w-[200px]">ชื่อสินค้า</th>
+                      <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-24">หมวดจัดเก็บ</th>
+                      <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-14">หน่วย</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-fuchsia-600 uppercase w-20 bg-fuchsia-50/60" title="จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว">ค่าเฉลี่ย/หัว</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-teal-600 uppercase w-24 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-purple-600 uppercase w-24 bg-purple-50/60">ยอดนับก่อนหน้า</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-indigo-600 uppercase w-28 bg-indigo-50/60">คงเหลือล่าสุด</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-orange-600 uppercase w-28 bg-orange-50/60">สินค้ารอเข้า</th>
+                      {isAll && <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-emerald-600 uppercase w-24 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-sky-600 uppercase w-24 bg-sky-50/60">ยอดรับ</th>
+                      {isAll && <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-amber-700 uppercase w-28 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
+                      {!isAll && <th className="px-2 py-3 text-center text-[11px] leading-tight font-semibold text-gray-500 uppercase w-36 min-w-[130px]">กรอกคงเหลือ</th>}
+                      {!isAll && <th className="px-2 py-3 text-center text-[11px] leading-tight font-semibold text-gray-500 uppercase w-28 min-w-[100px]">ขอเบิก</th>}
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
                     {sortedAndFilteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={13} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={13} className="px-4 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -2071,9 +2071,9 @@ export default function StockList() {
                       const originalIndex = items.findIndex(i => i.productId === item.productId);
                       return (
                         <tr key={item.productId || index} className="hover:bg-gray-50/50 transition-colors">
-                          <td className="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-600">{item.productId}</td>
-                          <td className="px-4 py-3 text-sm text-gray-800 font-medium">{item.name}</td>
-                          <td className="px-4 py-3 whitespace-nowrap">
+                          <td className="px-2 py-2.5 whitespace-nowrap text-xs font-mono text-gray-600">{item.productId}</td>
+                          <td className="px-2 py-2.5 text-sm text-gray-800 font-medium">{item.name}</td>
+                          <td className="px-2 py-2.5 whitespace-nowrap">
                             <div className="flex items-center gap-1.5 group">
                               <span className="text-xs text-gray-500">{item.storageCat || '-'}</span>
                               {!isAll && (
@@ -2086,10 +2086,10 @@ export default function StockList() {
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
+                          <td className="px-2 py-2.5 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
                           {/* ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้ บันทึกลงชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' อัตโนมัติ (ไม่มีค่าเดิม = เพิ่มใหม่) */}
-                          <td className="px-4 py-3 text-center bg-fuchsia-50/30">
+                          <td className="px-2 py-2.5 text-center bg-fuchsia-50/30">
                             <div className="flex items-center justify-center gap-1">
                               <input
                                 type="number" min="0" step="any" inputMode="decimal"
@@ -2109,7 +2109,7 @@ export default function StockList() {
 
                           {/* ยอดยกมาเดือนที่แล้ว — ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน)
                               ถ้าเดือนนั้นยังไม่เคยปิดยอด จะ fallback เป็นยอดนับล่าสุดของเดือนก่อนแทน */}
-                          <td className="px-4 py-3 text-center bg-teal-50/30">
+                          <td className="px-2 py-2.5 text-center bg-teal-50/30">
                             <div className="font-semibold text-teal-700 text-sm">
                               {item.prevMonthQty !== undefined && item.prevMonthQty !== null ? item.prevMonthQty : '-'}
                             </div>
@@ -2122,7 +2122,7 @@ export default function StockList() {
                           </td>
 
                           {/* ยอดนับก่อนหน้า */}
-                          <td className="px-4 py-3 text-center bg-purple-50/30">
+                          <td className="px-2 py-2.5 text-center bg-purple-50/30">
                             <div
                               className={`font-semibold text-purple-700 text-sm ${item.stockHistory && item.stockHistory.length > 1 ? 'cursor-pointer hover:underline hover:text-purple-900' : ''}`}
                               onClick={() => item.stockHistory && item.stockHistory.length > 1 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'previous' })}
@@ -2136,7 +2136,7 @@ export default function StockList() {
                           </td>
 
                           {/* คงเหลือล่าสุด (from ข้อมูลนับสตอค) */}
-                          <td className="px-4 py-3 text-center bg-indigo-50/30">
+                          <td className="px-2 py-2.5 text-center bg-indigo-50/30">
                             <div
                               className={`font-semibold text-indigo-700 text-sm ${item.stockHistory && item.stockHistory.length > 0 ? 'cursor-pointer hover:underline hover:text-indigo-900' : ''}`}
                               onClick={() => item.stockHistory && item.stockHistory.length > 0 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'last' })}
@@ -2153,7 +2153,7 @@ export default function StockList() {
                           </td>
 
                           {/* สินค้ารอเข้า — จำนวนตามใบเบิกที่ยังไม่รับ วันรับใกล้ที่สุด */}
-                          <td className="px-4 py-3 text-center bg-orange-50/30">
+                          <td className="px-2 py-2.5 text-center bg-orange-50/30">
                             <div className="font-semibold text-orange-600 text-sm">
                               {item.incomingQty !== '' && item.incomingQty !== undefined ? item.incomingQty : '-'}
                             </div>
@@ -2167,7 +2167,7 @@ export default function StockList() {
 
                           {/* ยอดใช้จาก API — เฉพาะ isAll */}
                           {isAll && (
-                          <td className="px-4 py-3 text-center bg-emerald-50/30">
+                          <td className="px-2 py-2.5 text-center bg-emerald-50/30">
                             {item.apiUsage && item.apiUsage.total !== undefined ? (
                               <div
                                 className="font-semibold text-emerald-600 text-sm cursor-pointer hover:underline hover:text-emerald-800"
@@ -2198,7 +2198,7 @@ export default function StockList() {
                           )}
 
                           {/* ยอดรับจาก API — ทุกคนเห็นได้ */}
-                          <td className="px-4 py-3 text-center bg-sky-50/30">
+                          <td className="px-2 py-2.5 text-center bg-sky-50/30">
                             {item.apiReceived && item.apiReceived.total !== undefined ? (
                               <div
                                 className="font-semibold text-sky-600 text-sm cursor-pointer hover:underline hover:text-sky-800"
@@ -2214,7 +2214,7 @@ export default function StockList() {
 
                           {/* ยอดคงเหลือจากระบบ — เฉพาะ isAll */}
                           {isAll && (
-                          <td className="px-4 py-3 text-center bg-amber-50/50 border-l-2 border-amber-200">
+                          <td className="px-2 py-2.5 text-center bg-amber-50/50 border-l-2 border-amber-200">
                             {(() => {
                               const prevBal = parseFloat(item.previousBalance);
                               const received = item.apiReceived?.total;
