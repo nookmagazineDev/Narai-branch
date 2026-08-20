@@ -95,6 +95,22 @@ const byStoreCat = (a, b) => {
   return ca.localeCompare(cb, 'th');
 };
 
+// หมวด "อุปกรณ์" — ของกลุ่มนี้มีเป็นพันรายการแต่ไม่ได้นับกันทุกวัน จึงไม่แสดงปนในตารางนับปกติ
+// (แถวที่ไม่ได้ใช้ทำให้หน้าโหลดช้าโดยเปล่าประโยชน์) แต่กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและเบิกได้
+//
+// ซ่อนแค่ชั้นการแสดงผล ตัวสินค้ายังอยู่ใน items ครบ ตอนกดบันทึกจึงรวมเข้าใบเบิกใบเดียวกับหมวดอื่น
+// อยากซ่อนหมวดอื่นเพิ่ม ใส่คำในลิสต์นี้ได้เลย — เทียบแบบ "มีคำนี้อยู่ในชื่อหมวด" จึงครอบคลุมชื่อย่อยเช่น "อุปกรณ์ครัว"
+const EQUIPMENT_CATEGORY_KEYWORDS = ['อุปกรณ์'];
+
+// ดูทั้งหมวดสโตร์ (คอลัมน์ N ชีท item) และหมวดจัดเก็บของสาขา เพราะบางสาขาตั้งหมวดไว้คนละช่องกัน
+const isEquipmentItem = (item) => {
+  const cats = [item?.storeCat, item?.storageCat];
+  return cats.some((c) => {
+    const name = String(c || '').trim();
+    return name !== '' && EQUIPMENT_CATEGORY_KEYWORDS.some((k) => name.includes(k));
+  });
+};
+
 // หมวดที่ต้องแยกเป็นใบเบิกต่างหากเสมอ (คนละ Ord_No จากใบหลัก) แม้วันที่รับจะเป็นวันเดียวกัน
 // เพิ่มชื่อหมวดในนี้ได้เรื่อยๆ ถ้ามีคลัง/ทีมที่ต้องแยกใบเพิ่ม
 // หมายเหตุ: ชื่อหมวดในชีท item (คอลัมน์ N) ถูกเปลี่ยนจาก "ห้องผัก" เป็น "ผัก" — ใส่ไว้ทั้งคู่กันเผื่อเปลี่ยนชื่อกลับ/มีทั้งสองแบบปนกัน
@@ -1517,16 +1533,25 @@ export default function StockList() {
     }
   };
 
+  // ตารางแสดงได้ 2 โหมด: ปกติ (ซ่อนอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มเหนือตาราง
+  const [showEquipmentOnly, setShowEquipmentOnly] = useState(false);
+  const equipmentCount = useMemo(() => items.filter(isEquipmentItem).length, [items]);
+
+  // ดรอปดาวน์หมวดต้องมีเฉพาะหมวดที่อยู่ในโหมดปัจจุบัน เลือกหมวดที่ไม่ได้แสดงไปก็ได้ตารางว่าง
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
+      if (isEquipmentItem(item) !== showEquipmentOnly) return;
       if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
-  }, [items]);
+  }, [items, showEquipmentOnly]);
 
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
+      // โหมดปกติซ่อนหมวดอุปกรณ์ / โหมดอุปกรณ์แสดงเฉพาะหมวดนั้น
+      if (isEquipmentItem(item) !== showEquipmentOnly) return false;
+
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
       
@@ -1555,7 +1580,7 @@ export default function StockList() {
     });
 
     return result;
-  }, [items, searchTerm, filterCategory, sortBy]);
+  }, [items, searchTerm, filterCategory, sortBy, showEquipmentOnly]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -1999,7 +2024,32 @@ export default function StockList() {
                 <option value="productId">เรียงตามรหัสสินค้า</option>
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
+
+              {/* สลับไปดูหมวดอุปกรณ์ — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของอีกชุดสินค้าหนึ่ง */}
+              {equipmentCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setShowEquipmentOnly(v => !v); setFilterCategory(''); setSearchTerm(''); }}
+                  className={`px-4 py-3 rounded-xl text-sm font-medium border transition-colors whitespace-nowrap ${
+                    showEquipmentOnly
+                      ? 'bg-purple-600 border-purple-600 text-white hover:bg-purple-700'
+                      : 'bg-white border-gray-200 text-gray-700 hover:border-purple-300 hover:text-purple-700'
+                  }`}
+                  title="ของหมวดอุปกรณ์มีเป็นพันรายการ จึงแยกไว้คนละหน้าจอกับของที่นับทุกวัน"
+                >
+                  {showEquipmentOnly ? '← กลับไปตารางนับปกติ' : `หมวดอุปกรณ์ (${equipmentCount})`}
+                </button>
+              )}
             </div>
+
+            {/* บอกให้รู้ว่าของหมวดอุปกรณ์แค่ถูกแยกไว้ ไม่ได้หายไป และเบิกรวมใบเดียวกันได้ */}
+            {equipmentCount > 0 && (
+              <div className="px-4 pb-3 -mt-1 text-xs text-gray-400">
+                {showEquipmentOnly
+                  ? `กำลังดูเฉพาะหมวดอุปกรณ์ ${equipmentCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
+                  : `ซ่อนสินค้าหมวดอุปกรณ์ ${equipmentCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิก`}
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               {loading ? (
