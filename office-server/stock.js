@@ -1,4 +1,4 @@
-// หน้านับสต๊อก / หน้ารวมสต๊อกทุกสาขา — อ่านจาก SQL Server narai_hr แทน Google Sheets
+// หน้านับสต๊อก / หน้ารวมสต๊อกทุกสาขา — อ่านจาก SQL Server (ฐานข้อมูล InventoryNarai) แทน Google Sheets
 //
 // ตอนนี้ย้ายมาแค่ฝั่ง "อ่าน" (getStockItems, getStockTotal) การบันทึกยังวิ่งไป Apps Script
 // ตามเดิม จึงยังไม่เปิดใช้จากหน้าเว็บ — ดูขั้นตอนและลำดับที่เหลือใน docs/stock-sql-migration.md
@@ -10,8 +10,11 @@
 // รูปแบบคำตอบเหมือน Apps Script เดิมทุกฟิลด์ (รวมรูปแบบวันที่ 'dd/MM/yyyy HH:mm')
 // หน้าเว็บจึงสลับมาใช้ทางนี้ได้โดยไม่ต้องแก้อะไร
 
-import { sql, queryRead } from './hr-db.js';
+// ฐานข้อมูลของสต๊อกคือ InventoryNarai คนละตัวกับ narai_hr ของตารางงาน จึงใช้ stockDb
+import { sql, stockDb } from './hr-db.js';
 import { branchFor } from './hr-session.js';
+
+const { queryRead } = stockDb;
 
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const num = (v) => {

@@ -3,6 +3,12 @@
 เอกสารนี้เป็นภาคต่อของ [hr-sql-migration.md](hr-sql-migration.md) ซึ่งย้ายส่วนตารางงานไปแล้ว
 เส้นทาง ตัวส่งต่อ และกติกาเรื่อง user/สาขา ใช้ของเดิมทั้งหมด ไม่ได้ทำใหม่
 
+**ฐานข้อมูล:** ตารางสต๊อกอยู่ที่ `InventoryNarai` ส่วนตารางงานอยู่ที่ `narai_hr` —
+คนละฐานข้อมูลแต่อยู่บนอินสแตนซ์เดียวกัน (`NARAI-PIZZARIA\SQLEXPRESS`) ใช้ host และ login ชุดเดียวกัน
+office-server จึงต่อสอง pool จากค่าตั้งชุดเดียว ไม่ได้ query ข้ามฐานข้อมูลด้วยชื่อเต็ม
+(`InventoryNarai.dbo.xxx`) เพราะถ้าวันหนึ่งแยกไปคนละเครื่อง คำสั่งแบบนั้นจะพังทั้งหมด
+เปลี่ยนชื่อฐานข้อมูลได้ที่ `STOCK_DB_NAME` ใน `.env` ของ office-server
+
 ```
 เบราว์เซอร์ -> /api/schedule (Vercel, เป็นแค่ตัวส่งต่อ) -> office-server :8787/schedule -> SQL Server
 ```
@@ -24,7 +30,7 @@
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `docs/schema-stock.sql` | ตารางทั้งหมดของฝั่งสต๊อก (อยู่ในฐานข้อมูล `narai_hr` เดียวกับตารางงาน) |
+| `docs/schema-stock.sql` | ตารางทั้งหมดของฝั่งสต๊อก (ฐานข้อมูล `InventoryNarai`) |
 | `scripts/migrate-stock.mjs` | ย้ายข้อมูลเก่าจากชีทเข้า SQL (มีโหมด `--inspect` / `--dry-run`) |
 | `office-server/stock.js` | ตรรกะอ่านของ `getStockItems` / `getStockTotal` |
 | `office-server/hr-db.js` | ตัวเชื่อมฐานข้อมูล (แยกออกจาก `schedule.js` เพื่อให้สองไฟล์ใช้ร่วมกัน) |
@@ -35,23 +41,40 @@
 
 รันบนเครื่องที่ออฟฟิศ (เครื่องเดียวกับที่รัน office-server) เพราะเป็นเครื่องที่ต่อ SQL Server ได้
 
-```bash
-# 1) สร้างตาราง (ครั้งเดียว)
-sqlcmd -S localhost -U sa -P '<รหัสผ่าน>' -i docs/schema-stock.sql
+```powershell
+# 0) ลง package ที่สคริปต์ใช้ (ครั้งเดียว ที่โฟลเดอร์รีโป)
+#    ถ้าข้ามขั้นนี้จะขึ้น Error: Cannot find module 'mssql' ตอนเขียนจริง
+npm install
 
-# 2) ตรวจก่อนว่าอ่านชีทได้และคอลัมน์ตรงกับที่โค้ดคาดไว้
+# 1) สร้างตาราง (ครั้งเดียว) — ฐานข้อมูล InventoryNarai
+sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-stock.sql
+
+# 2) ตั้งค่าการต่อฐานข้อมูลของ session นี้
+$env:HR_DB_HOST = 'localhost'
+$env:HR_DB_INSTANCE = 'SQLEXPRESS'   # ใส่เมื่อ SQL Server เป็น named instance
+$env:HR_DB_USE_BROWSER = '1'         # คู่กับ HR_DB_INSTANCE ถ้าอินสแตนซ์ไม่ได้ตรึงพอร์ต 1433
+$env:HR_DB_USER = '<user>'
+$env:HR_DB_PASSWORD = '<รหัสผ่าน>'
+
+# 3) ตรวจก่อนว่าอ่านชีทได้และคอลัมน์ตรงกับที่โค้ดคาดไว้ (ยังไม่แตะฐานข้อมูล)
 node scripts/migrate-stock.mjs --inspect
 
-# 3) ลองแบบไม่เขียนจริง — ดูจำนวนแถวของแต่ละชุด
+# 4) ลองแบบไม่เขียนจริง — ดูจำนวนแถวของแต่ละชุด
 node scripts/migrate-stock.mjs --dry-run
 
-# 4) ย้ายจริง
+# 5) ย้ายจริง (เขียนลง InventoryNarai)
 node scripts/migrate-stock.mjs
 ```
 
-ต้องตั้ง `HR_DB_USER` / `HR_DB_PASSWORD` ไว้ก่อน (ใช้ค่าเดียวกับที่ตั้งใน `.env` ของ office-server)
-และตั้ง `HR_DB_HOST=localhost` ด้วยถ้ารันบนเครื่องที่ออฟฟิศ — `lib/mssql.js` ตั้งค่าเริ่มต้นเป็น
-`inventory.dyndns.tv` ไว้สำหรับฝั่ง Vercel ซึ่งจากในออฟฟิศเองไม่จำเป็นต้องวิ่งอ้อมออกไปข้างนอก
+หมายเหตุเรื่องการต่อฐานข้อมูล
+
+- `HR_DB_HOST` ต้องตั้งเป็น `localhost` เมื่อรันบนเครื่องที่ออฟฟิศ — `lib/mssql.js` ตั้งค่าเริ่มต้น
+  เป็น `inventory.dyndns.tv` ไว้สำหรับฝั่ง Vercel ซึ่งจากในออฟฟิศเองไม่ต้องวิ่งอ้อมออกไปข้างนอก
+- อินสแตนซ์ `NARAI-PIZZARIA\SQLEXPRESS` ตรึง TCP 1433 ไว้อยู่แล้ว ถ้ายังเป็นแบบนั้นก็ไม่ต้องตั้ง
+  `HR_DB_INSTANCE`/`HR_DB_USE_BROWSER` เลย
+- login ที่ใช้ต้องมีสิทธิ์ใน `InventoryNarai` ด้วย ไม่ใช่แค่ `narai_hr` — ส่วนให้สิทธิ์อยู่ท้ายไฟล์
+  `docs/schema-stock.sql` (ถ้าลืม จะต่อติดแต่ query ไม่ผ่าน ขึ้นว่า *is not able to access the database*)
+- ปลายทางเป็น `InventoryNarai` โดยอัตโนมัติ เปลี่ยนได้ด้วย `--db=` หรือ env `STOCK_DB_NAME`
 
 **ถ้าจำนวนแถวจาก `--inspect` ดูน้อยผิดปกติ** ให้รันใหม่ด้วย `--csv` พร้อมระบุ gid ของแท็บ
 เพราะ gviz ส่งกลับมาเฉพาะแถวที่ผ่าน "ตัวกรอง" ที่เปิดค้างไว้ในชีท ซึ่งเคยทำให้ตอนย้ายตารางงาน
