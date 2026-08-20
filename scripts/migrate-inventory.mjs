@@ -45,7 +45,42 @@
  */
 
 import process from 'node:process';
-import sql from 'mssql';
+
+/* โหลด driver ฐานข้อมูลแบบ lazy
+   โหมด --list, --inspect และ --dry-run แค่อ่านชีทอย่างเดียว ไม่ได้แตะฐานข้อมูล
+   จึงไม่ควรบังคับให้ npm install ก่อน (เครื่องที่รันสคริปต์นี้บางเครื่องยังไม่มี node_modules)
+   ตัวแปรนี้จะมีค่าก็ต่อเมื่อเรียก loadDriver() แล้วเท่านั้น */
+let sql;
+let TYPES;
+
+async function loadDriver() {
+  if (sql) return;
+  try {
+    sql = (await import('mssql')).default;
+  } catch {
+    throw new Error(
+      'ยังไม่ได้ติดตั้ง driver ฐานข้อมูล — รัน "npm install mssql" ในโฟลเดอร์ที่วางสคริปต์นี้ก่อน ' +
+      '(โหมด --list / --inspect / --dry-run ไม่ต้องติดตั้งก็รันได้)'
+    );
+  }
+  TYPES = {
+    code: sql.NVarChar(50),
+    name: sql.NVarChar(255),
+    short: sql.NVarChar(50),
+    person: sql.NVarChar(150),
+    cat: sql.NVarChar(100),
+    qty: sql.Decimal(18, 3),
+    money: sql.Decimal(18, 4),
+    dt: sql.DateTime2(0),
+    date: sql.Date,
+    int: sql.Int,
+    bit: sql.Bit,
+    note: sql.NVarChar(500),
+    url: sql.NVarChar(1000),
+    branches: sql.NVarChar(500),
+    pct: sql.Decimal(9, 4),
+  };
+}
 
 /* ------------------------------ อ่านตัวเลือก ------------------------------ */
 
@@ -207,22 +242,12 @@ async function fetchRows(src) {
 /* ------------------------------ ชุดข้อมูล ------------------------------
    คอลัมน์ทุกชุดถอดมาจาก apps-script.js โดยตรง (เลขในวงเล็บคือ index ของคอลัมน์ในชีท) */
 
+/* ชื่อชนิดข้อมูลของแต่ละคอลัมน์ — แปลงเป็นชนิดจริงของ mssql ตอน loadDriver()
+   เก็บเป็นข้อความไว้ก่อน เพื่อให้ไฟล์นี้โหลดได้แม้ยังไม่ได้ติดตั้ง driver */
 const T = {
-  code: sql.NVarChar(50),
-  name: sql.NVarChar(255),
-  short: sql.NVarChar(50),
-  person: sql.NVarChar(150),
-  cat: sql.NVarChar(100),
-  qty: sql.Decimal(18, 3),
-  money: sql.Decimal(18, 4),
-  dt: sql.DateTime2(0),
-  date: sql.Date,
-  int: sql.Int,
-  bit: sql.Bit,
-  note: sql.NVarChar(500),
-  url: sql.NVarChar(1000),
-  branches: sql.NVarChar(500),
-  pct: sql.Decimal(9, 4),
+  code: 'code', name: 'name', short: 'short', person: 'person', cat: 'cat',
+  qty: 'qty', money: 'money', dt: 'dt', date: 'date', int: 'int', bit: 'bit',
+  note: 'note', url: 'url', branches: 'branches', pct: 'pct',
 };
 
 const SOURCES = [
@@ -519,7 +544,7 @@ async function insertRows(pool, src, rows) {
     chunk.forEach((row, n) => {
       const params = names.map((c) => {
         const p = `${c}_${n}`;
-        request.input(p, src.cols[c], row[c] === undefined || row[c] === '' ? null : row[c]);
+        request.input(p, TYPES[src.cols[c]], row[c] === undefined || row[c] === '' ? null : row[c]);
         return `@${p}`;
       });
       tuples.push(`(${params.join(', ')})`);
@@ -613,6 +638,7 @@ async function main() {
   let pool = null;
   try {
     if (!DRY_RUN || FIX_CODES_ONLY) {
+      await loadDriver();
       pool = await new sql.ConnectionPool({
         server: DB.host, port: DB.port, database: DB.database, user: DB.user, password: DB.password,
         connectionTimeout: 15000,
