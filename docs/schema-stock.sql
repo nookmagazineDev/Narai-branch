@@ -1,9 +1,12 @@
 /* ============================================================================
-   หน้านับสต๊อก / ขอเบิก บน Microsoft SQL Server — อยู่ในฐานข้อมูล narai_hr เดียวกับตารางงาน
+   หน้านับสต๊อก / ขอเบิก บน Microsoft SQL Server — ฐานข้อมูล InventoryNarai
+   อยู่บนอินสแตนซ์เดียวกับ narai_hr (NARAI-PIZZARIA\SQLEXPRESS) แต่แยกฐานข้อมูลกัน
+   ใช้ login เดียวกัน จึงต้องให้สิทธิ์ login นั้นกับ InventoryNarai ด้วย (ดูท้ายไฟล์)
+
    รันไฟล์นี้ครั้งเดียวก่อนเปิดใช้ action ของสต๊อกใน /api/schedule
 
    วิธีรัน (บนเครื่องฐานข้อมูล):
-     sqlcmd -S localhost -U sa -P '<รหัสผ่าน>' -i docs\schema-stock.sql
+     sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-stock.sql
    หรือเปิดใน SQL Server Management Studio แล้วกด Execute
 
    ที่มา: ย้ายมาจาก Google Sheets 4 ไฟล์ (ดู docs/stock-sql-migration.md)
@@ -35,7 +38,12 @@
    4) ทุกคอลัมน์ข้อความใช้ NVARCHAR เพราะข้อมูลเป็นภาษาไทย
 ============================================================================ */
 
-USE narai_hr;
+/* ---- สร้างฐานข้อมูล (ข้ามได้ถ้าสร้างไว้แล้ว) ---- */
+IF DB_ID(N'InventoryNarai') IS NULL
+    CREATE DATABASE InventoryNarai;
+GO
+
+USE InventoryNarai;
 GO
 
 /* ===================== รายการสินค้าของหน้านับสต๊อก =====================
@@ -213,5 +221,19 @@ CREATE TABLE dbo.stock_branch_percent (
 );
 GO
 
-PRINT N'สร้างตารางของหน้านับสต๊อกเรียบร้อย';
+/* ==================== สิทธิ์ของ login ที่เว็บใช้ ====================
+   office-server ต่อด้วย login เดียวกับตารางงาน (ดูท้ายไฟล์ docs/schema-hr.sql)
+   แต่ login นั้นมีสิทธิ์เฉพาะใน narai_hr จึงต้องเพิ่ม user ในฐานข้อมูลนี้ให้ด้วย
+   ไม่งั้นจะต่อติดแต่ query ไม่ผ่าน ขึ้นว่า 'The server principal ... is not able to access the database'
+
+   แก้ชื่อ login ให้ตรงกับที่ใช้จริงก่อนรัน (ตัวอย่างนี้คือ narai_web)   */
+IF SUSER_ID(N'narai_web') IS NOT NULL AND DATABASE_PRINCIPAL_ID(N'narai_web') IS NULL
+BEGIN
+    CREATE USER narai_web FOR LOGIN narai_web;
+    ALTER ROLE db_datareader ADD MEMBER narai_web;
+    ALTER ROLE db_datawriter ADD MEMBER narai_web;
+END
+GO
+
+PRINT N'สร้างตารางของหน้านับสต๊อกใน InventoryNarai เรียบร้อย';
 GO

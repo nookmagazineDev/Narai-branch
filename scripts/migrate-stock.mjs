@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ย้ายข้อมูลหน้านับสต๊อกจาก Google Sheets เข้า MS SQL Server (narai_hr)
+ * ย้ายข้อมูลหน้านับสต๊อกจาก Google Sheets เข้า MS SQL Server (ฐานข้อมูล InventoryNarai)
  *
  * ย้าย 6 ชุด — ดูโครงตารางและที่มาของแต่ละคอลัมน์ใน docs/schema-stock.sql
  *   items     ชีท 'item' (ไฟล์ BOM)       -> stock_item + stock_item_branch
@@ -12,7 +12,11 @@
  *
  * วิธีใช้ (รันจากเครื่องที่ต่อฐานข้อมูลได้ — ปกติคือเครื่อง office-server)
  *   1) สร้างตารางก่อน:  sqlcmd -S localhost -U <user> -P <pass> -i docs/schema-stock.sql
- *   2) ตั้ง env:        HR_DB_USER, HR_DB_PASSWORD (และ HR_DB_HOST/HR_DB_NAME ถ้าไม่ใช้ค่าเริ่มต้น)
+ *      (สคริปต์นี้ใช้ package mssql ถ้ายังไม่เคยลง ให้รัน npm install ที่โฟลเดอร์รีโปก่อน
+ *       ไม่งั้นจะขึ้น Error: Cannot find module 'mssql' ตอนเขียนจริง)
+ *   2) ตั้ง env:        HR_DB_USER, HR_DB_PASSWORD (login เดียวกับตารางงาน)
+ *                      HR_DB_HOST=localhost ถ้ารันบนเครื่องที่ออฟฟิศ
+ *                      STOCK_DB_NAME ถ้าใช้ชื่อฐานข้อมูลอื่นที่ไม่ใช่ InventoryNarai
  *   3) ดูก่อนว่าจับคอลัมน์ถูกไหม:
  *        node scripts/migrate-stock.mjs --inspect
  *   4) ลองแบบไม่เขียนจริง:
@@ -26,6 +30,7 @@
  *   --only=counts    ย้ายเฉพาะบางชุด (items,itemtotal,counts,balance,requests,category)
  *   --months=6       ย้ายประวัติการนับย้อนหลังกี่เดือน (ไม่ใส่ = ทั้งหมด)
  *   --csv            ดึงผ่าน export CSV แทน gviz — ต้องใส่ถ้าชีทมีตัวกรองเปิดค้างไว้
+ *   --db=InventoryNarai  ฐานข้อมูลปลายทาง (ค่าเริ่มต้นนี้ หรือตั้ง STOCK_DB_NAME ใน env)
  *   --gid-counts=... ระบุ gid ของแท็บเอง (มีครบทุกชุด: --gid-items, --gid-itemtotal,
  *                    --gid-counts, --gid-balance, --gid-requests, --gid-category)
  *
@@ -45,13 +50,17 @@ import process from 'node:process';
    จึงไม่ควรบังคับให้ npm install ก่อน (เครื่องที่รันสคริปต์นี้บางเครื่องลง package ไม่ได้) */
 let withTransaction;
 let closePool;
+let describeTarget = () => '';
 let describeDbError = (err) => err?.message || String(err);
 
 async function loadDb() {
   if (withTransaction) return;
   const m = await import('../lib/mssql.js');
+  // ตารางสต๊อกอยู่คนละฐานข้อมูลกับตารางงาน (InventoryNarai กับ narai_hr) แต่เครื่องและ login เดียวกัน
+  m.useDatabase(DB_NAME);
   withTransaction = m.withTransaction;
   closePool = m.closePool;
+  describeTarget = m.describeTarget;
   describeDbError = m.describeDbError;
 }
 
@@ -68,6 +77,7 @@ const DRY_RUN = args.includes('--dry-run');
 const INSPECT = args.includes('--inspect');
 const USE_CSV = args.includes('--csv');
 const MONTHS = Number(argVal('months', '0')) || 0;
+const DB_NAME = argVal('db', process.env.STOCK_DB_NAME || 'InventoryNarai');
 const ONLY = String(argVal('only', '')).split(',').map((s) => s.trim()).filter(Boolean);
 const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
 
@@ -592,7 +602,7 @@ async function main() {
     return;
   }
 
-  console.log(DRY_RUN ? 'โหมดทดลอง (ไม่เขียนลงฐานข้อมูล)' : 'เริ่มย้ายข้อมูลเข้า SQL Server');
+  console.log(DRY_RUN ? 'โหมดทดลอง (ไม่เขียนลงฐานข้อมูล)' : `เริ่มย้ายข้อมูลเข้าฐานข้อมูล ${DB_NAME}`);
   if (MONTHS) console.log(`ประวัติการนับ: ย้อนหลัง ${MONTHS} เดือน (ตั้งแต่ ${cutoff})`);
   if (USE_CSV) console.log('ช่องทางอ่านชีท: export CSV');
 
@@ -603,7 +613,7 @@ async function main() {
   }
 
   if (!DRY_RUN && closePool) await closePool();
-  console.log('\nเสร็จแล้ว');
+  console.log(`\nเสร็จแล้ว${DRY_RUN ? '' : ` (${describeTarget()})`}`);
 }
 
 main().catch(async (err) => {
