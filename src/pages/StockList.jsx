@@ -95,6 +95,22 @@ const byStoreCat = (a, b) => {
   return ca.localeCompare(cb, 'th');
 };
 
+// หมวดสินค้าที่ไม่ต้องแสดงใน "ตารางนับสต๊อก" — กลุ่ม "อุปกรณ์" ไม่ได้นับกันทุกวันแต่มีจำนวนแถวเยอะมาก
+// ซ่อนแค่แถวในตาราง (ไม่ต้อง render แถวที่ไม่ได้ใช้ หน้าจึงเปิดไวขึ้น) แต่ยังเก็บไว้ใน items ครบเหมือนเดิม
+// จึงยังสั่งของหมวดนี้ได้ตามปกติผ่านปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" ที่ค้นหาจาก items ทั้งหมด
+// อยากซ่อนหมวดอื่นเพิ่ม ใส่คำในลิสต์นี้ได้เลย — เทียบแบบ "มีคำนี้อยู่ในชื่อหมวด" จึงครอบคลุมชื่อย่อยเช่น "อุปกรณ์ครัว"
+const HIDDEN_CATEGORY_KEYWORDS = ['อุปกรณ์'];
+
+// สินค้าตัวนี้อยู่ในหมวดที่ซ่อนหรือไม่ — ดูทั้งหมวดสโตร์ (คอลัมน์ N ชีท item) และหมวดจัดเก็บของสาขา
+// เพราะบางสาขาตั้งหมวด "อุปกรณ์" ไว้คนละช่องกัน
+const isHiddenCategory = (item) => {
+  const cats = [item?.storeCat, item?.storageCat];
+  return cats.some(c => {
+    const name = String(c || '').trim();
+    return name !== '' && HIDDEN_CATEGORY_KEYWORDS.some(k => name.includes(k));
+  });
+};
+
 // หมวดที่ต้องแยกเป็นใบเบิกต่างหากเสมอ (คนละ Ord_No จากใบหลัก) แม้วันที่รับจะเป็นวันเดียวกัน
 // เพิ่มชื่อหมวดในนี้ได้เรื่อยๆ ถ้ามีคลัง/ทีมที่ต้องแยกใบเพิ่ม
 // หมายเหตุ: ชื่อหมวดในชีท item (คอลัมน์ N) ถูกเปลี่ยนจาก "ห้องผัก" เป็น "ผัก" — ใส่ไว้ทั้งคู่กันเผื่อเปลี่ยนชื่อกลับ/มีทั้งสองแบบปนกัน
@@ -1520,13 +1536,20 @@ export default function StockList() {
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
+      if (isHiddenCategory(item)) return; // หมวดที่ซ่อนไม่ต้องมีในดรอปดาวน์ เลือกไปก็ไม่มีแถวให้ดู
       if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
   }, [items]);
 
+  // จำนวนรายการที่ถูกซ่อนจากตาราง — เอาไว้บอกผู้ใช้ว่าของหายไปไหน ไม่ใช่ข้อมูลหาย
+  const hiddenCount = useMemo(() => items.filter(isHiddenCategory).length, [items]);
+
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
+      // ซ่อนเฉพาะแถวในตารางนับ — ตัวสินค้ายังอยู่ใน items ให้ปุ่ม "สั่งเพิ่มเติม" ค้นเจอและสั่งได้อยู่
+      if (isHiddenCategory(item)) return false;
+
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
       
@@ -2000,6 +2023,13 @@ export default function StockList() {
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
             </div>
+
+            {/* บอกให้รู้ว่าของหมวดอุปกรณ์ถูกซ่อนไว้เฉยๆ ไม่ได้หายไป และยังสั่งได้จากปุ่มสั่งเพิ่มเติม */}
+            {hiddenCount > 0 && (
+              <div className="px-4 pb-3 -mt-1 text-xs text-gray-400">
+                ซ่อนสินค้าหมวดอุปกรณ์ {hiddenCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — ถ้าต้องการสั่งของหมวดนี้ ใช้ปุ่ม "สั่งสินค้าแพลน/สั่งเพิ่มเติม" ได้ตามปกติ
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               {loading ? (
