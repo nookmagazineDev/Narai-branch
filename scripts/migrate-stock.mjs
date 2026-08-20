@@ -11,6 +11,8 @@
  *   category  ชีท 'หมวดจัดเก็บสาขา'        -> stock_storage_category
  *   avghead   ชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว'     -> stock_avg_per_head
  *   percent   ชีท 'เปอร์เซ็นการเบิกของแต่ละสาขา' -> stock_branch_percent
+ *   monthend  ชีท 'ปิดรอบสิ้นเดือน'          -> stock_month_end
+ *   waste     ชีท waste (gid 1493705916)     -> stock_waste
  *
  * วิธีใช้ (รันจากเครื่องที่ต่อฐานข้อมูลได้ — ปกติคือเครื่อง office-server)
  *   1) สร้างตารางก่อน:  sqlcmd -S localhost -U <user> -P <pass> -i docs/schema-stock.sql
@@ -29,7 +31,7 @@
  * ตัวเลือก
  *   --dry-run        อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *   --inspect        พิมพ์แถวแรกๆ ของทุกชีทออกมาดิบๆ ไว้ตรวจว่าคอลัมน์ตรงกับที่โค้ดคาดไว้ไหม
- *   --only=counts    ย้ายเฉพาะบางชุด (items,itemtotal,counts,balance,requests,category,avghead,percent)
+ *   --only=counts    ย้ายเฉพาะบางชุด (items,itemtotal,counts,balance,requests,category,avghead,percent,monthend,waste)
  *   --months=6       ย้ายประวัติการนับย้อนหลังกี่เดือน (ไม่ใส่ = ทั้งหมด)
  *   --csv            ดึงผ่าน export CSV แทน gviz — ต้องใส่ถ้าชีทมีตัวกรองเปิดค้างไว้
  *   --db=InventoryNarai  ฐานข้อมูลปลายทาง (ค่าเริ่มต้นนี้ หรือตั้ง STOCK_DB_NAME ใน env)
@@ -107,6 +109,8 @@ const SOURCES = {
   category: { ss: STOCK_SS, sheet: 'หมวดจัดเก็บสาขา', gid: argVal('gid-category', '') },
   avghead: { ss: BOM_SS, sheet: 'ค่าเฉลี่ยยอดใช้ต่อหัว', gid: argVal('gid-avghead', '1722427042') },
   percent: { ss: SUP_SS, sheet: 'เปอร์เซ็นการเบิกของแต่ละสาขา', gid: argVal('gid-percent', '') },
+  monthend: { ss: STOCK_SS, sheet: 'ปิดรอบสิ้นเดือน', gid: argVal('gid-monthend', '') },
+  waste: { ss: STOCK_SS, sheet: 'waste', gid: argVal('gid-waste', '1493705916') },
 };
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -656,6 +660,109 @@ async function migrateBranchPercent() {
   }));
 }
 
+/** ชีท 'ปิดรอบสิ้นเดือน': A=วันที่ปิดยอด B=สาขา C=รหัส D=ชื่อ E=หน่วย F=ยอด G=มูลค่า/หน่วย H=มูลค่ารวม I=ผู้บันทึก J=เวลาบันทึก */
+async function migrateMonthEnd() {
+  const rows = await loadSheet('monthend');
+  const list = [];
+  const seen = new Set();
+  let noDate = 0;
+  for (const row of rows) {
+    const stamp = toSqlDateTime(row[0]);
+    const branch = branchCode(row[1]);
+    const key = normCode(row[2]);
+    const qty = num(row[5]);
+    if (!branch || !key || qty === null) continue;
+    if (!stamp) { noDate++; continue; }
+    const savedAt = toSqlDateTime(row[9]) || stamp;
+    // ชีทเป็น log ต่อท้าย บันทึกซ้ำวันเดิมได้ — คีย์กันซ้ำจึงต้องรวมเวลาที่บันทึกด้วย
+    const dedupe = `${branch}|${key}|${stamp.slice(0, 10)}|${savedAt}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    list.push({
+      date: stamp.slice(0, 10), branch, key,
+      code: str(row[2]),
+      name: str(row[3]),
+      unit: str(row[4]),
+      qty,
+      unitPrice: num(row[6]) ?? 0,
+      amount: num(row[7]) ?? 0,
+      recorder: str(row[8]),
+      savedAt,
+    });
+  }
+  if (noDate) console.log(`  ข้ามแถวที่อ่านวันที่ไม่ออก ${noDate} แถว`);
+
+  await runBatch('stock_month_end', list, (m) => ({
+    text: `
+      IF NOT EXISTS (SELECT 1 FROM dbo.stock_month_end
+                      WHERE branch = @branch AND item_key = @item_key
+                        AND closing_date = CONVERT(DATE, @closing_date, 120)
+                        AND saved_at = CONVERT(DATETIME2(0), @saved_at, 120))
+      INSERT INTO dbo.stock_month_end
+        (closing_date, branch, item_key, item_code, item_name, unit, qty, unit_price, amount, recorder, saved_at)
+      VALUES (CONVERT(DATE, @closing_date, 120), @branch, @item_key, @item_code, @item_name, @unit,
+              @qty, @unit_price, @amount, @recorder, CONVERT(DATETIME2(0), @saved_at, 120));`,
+    params: {
+      closing_date: m.date,
+      branch: m.branch,
+      item_key: m.key,
+      item_code: m.code,
+      item_name: m.name || null,
+      unit: m.unit || null,
+      qty: m.qty,
+      unit_price: m.unitPrice,
+      amount: m.amount,
+      recorder: m.recorder || null,
+      saved_at: m.savedAt,
+    },
+  }));
+}
+
+/** ชีท waste: A=วันที่ของเสีย B=สาขา C=รหัส D=ชื่อ E=หน่วย F=จำนวนที่เสีย G=ผู้บันทึก H=เวลาที่คีย์ */
+async function migrateWaste() {
+  const rows = await loadSheet('waste');
+  const list = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const stamp = toSqlDateTime(row[0]);
+    const branch = branchCode(row[1]);
+    const key = normCode(row[2]);
+    const qty = num(row[5]);
+    if (!branch || !key || !stamp || qty === null || qty <= 0) continue;
+    const keyedAt = toSqlDateTime(row[7]) || stamp;
+    const dedupe = `${branch}|${key}|${stamp.slice(0, 10)}|${keyedAt}|${qty}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    list.push({
+      date: stamp.slice(0, 10), branch, key,
+      code: str(row[2]), name: str(row[3]), unit: str(row[4]), qty,
+      recorder: str(row[6]), keyedAt,
+    });
+  }
+
+  await runBatch('stock_waste', list, (w) => ({
+    text: `
+      IF NOT EXISTS (SELECT 1 FROM dbo.stock_waste
+                      WHERE branch = @branch AND item_key = @item_key
+                        AND waste_date = CONVERT(DATE, @waste_date, 120)
+                        AND keyed_at = CONVERT(DATETIME2(0), @keyed_at, 120) AND qty = @qty)
+      INSERT INTO dbo.stock_waste (waste_date, branch, item_key, item_code, item_name, unit, qty, recorder, keyed_at)
+      VALUES (CONVERT(DATE, @waste_date, 120), @branch, @item_key, @item_code, @item_name, @unit, @qty,
+              @recorder, CONVERT(DATETIME2(0), @keyed_at, 120));`,
+    params: {
+      waste_date: w.date,
+      branch: w.branch,
+      item_key: w.key,
+      item_code: w.code,
+      item_name: w.name || null,
+      unit: w.unit || null,
+      qty: w.qty,
+      recorder: w.recorder || null,
+      keyed_at: w.keyedAt,
+    },
+  }));
+}
+
 /* -------------------------------- โหมดตรวจชีท -------------------------------- */
 
 async function inspectSheets() {
@@ -686,6 +793,8 @@ const PARTS = [
   ['category', migrateCategory],
   ['avghead', migrateAvgPerHead],
   ['percent', migrateBranchPercent],
+  ['monthend', migrateMonthEnd],
+  ['waste', migrateWaste],
 ];
 
 async function main() {

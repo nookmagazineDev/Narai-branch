@@ -639,6 +639,230 @@ async function getBranchPercent(body, session) {
   };
 }
 
+
+/* ====================== รายการสินค้าแบบเบา (ปิดยอดสิ้นเดือน) ======================
+   หน้าปิดยอดใช้แค่ รหัส/ชื่อ/หน่วย/ราคา จึงไม่ต้องแตะตารางการนับที่มีเป็นแสนแถว */
+async function getClosingItems(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) return [];
+  const rows = await queryRead(
+    `SELECT i.item_code, i.item_name, i.unit, i.price
+       FROM dbo.stock_item i
+       JOIN dbo.stock_item_branch b ON b.item_key = i.item_key
+      WHERE b.branch = @itemBranch AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
+      ORDER BY i.sort_order, i.item_code`,
+    { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
+  );
+  return rows.map((r) => ({
+    productId: r.item_code,
+    name: r.item_name || '',
+    unit: str(r.unit),
+    price: r.price === null || r.price === undefined ? '' : Number(r.price),
+  }));
+}
+
+/* ============================ ปิดยอดสิ้นเดือน ============================ */
+async function saveMonthEndClosing(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  const date = str(body.date);
+  const recorder = str(body.recorder) || str(session?.username) || 'Unknown';
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!branch) throw badRequest('ไม่ระบุสาขา');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw badRequest('ไม่ระบุวันที่ปิดยอด');
+  if (items.length === 0) throw badRequest('ไม่มีรายการที่กรอกยอดคงเหลือ');
+
+  const rows = [];
+  let total = 0;
+  for (const it of items) {
+    const qty = Number(it.qty);
+    if (!Number.isFinite(qty) || qty < 0) continue;
+    const code = str(it.productId);
+    const key = normCode(code);
+    if (!key) continue;
+    const unitPrice = Number(it.price) || 0;
+    const amount = Math.round(qty * unitPrice * 100) / 100;
+    total += amount;
+    rows.push({ key, code, name: str(it.name), unit: str(it.unit), qty, unitPrice, amount });
+  }
+  if (rows.length === 0) throw badRequest('ไม่มีรายการที่กรอกยอดคงเหลือถูกต้อง');
+
+  const savedAt = localStamp();
+  await withTransaction(async (run) => {
+    for (const r of rows) {
+      await run(
+        `INSERT INTO dbo.stock_month_end
+           (closing_date, branch, item_key, item_code, item_name, unit, qty, unit_price, amount, recorder, saved_at)
+         VALUES (CONVERT(DATE, @closing_date, 120), @branch, @item_key, @item_code, @item_name, @unit,
+                 @qty, @unit_price, @amount, @recorder, CONVERT(DATETIME2(0), @saved_at, 120));`,
+        {
+          closing_date: { type: sql.NVarChar(10), value: date },
+          branch: { type: sql.NVarChar(50), value: branch },
+          item_key: { type: sql.NVarChar(50), value: r.key },
+          item_code: { type: sql.NVarChar(50), value: r.code },
+          item_name: { type: sql.NVarChar(255), value: r.name || null },
+          unit: { type: sql.NVarChar(50), value: r.unit || null },
+          qty: { type: sql.Decimal(18, 3), value: r.qty },
+          unit_price: { type: sql.Decimal(18, 4), value: r.unitPrice },
+          amount: { type: sql.Decimal(18, 2), value: r.amount },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+          saved_at: { type: sql.NVarChar(19), value: savedAt },
+        }
+      );
+    }
+  });
+
+  return {
+    message: `บันทึกยอดปิดสิ้นเดือนแล้ว ${rows.length} รายการ`,
+    count: rows.length,
+    total: Number(total.toFixed(2)),
+  };
+}
+
+/**
+ * ยอดปิดสิ้นเดือนของสาขา — คืน "ค่าล่าสุดที่เคยบันทึก" ของทุกสินค้า พร้อมประวัติทุกครั้งที่บันทึก
+ * (ไม่กรองตามวันที่ที่หน้าเว็บเลือกอยู่ ให้เห็นตัวเลขอ้างอิงล่าสุดเสมอ — กติกาเดิม)
+ */
+async function getMonthEndClosing(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) return {};
+  const rows = await queryRead(
+    `SELECT item_key, CONVERT(NVARCHAR(10), closing_date, 23) AS date_text,
+            qty, unit_price, amount, recorder,
+            CONVERT(NVARCHAR(19), saved_at, 120) AS saved_text
+       FROM dbo.stock_month_end
+      WHERE branch = @branch
+      ORDER BY item_key, closing_id`,
+    { branch: { type: sql.NVarChar(50), value: branch } }
+  );
+
+  const out = {};
+  for (const r of rows) {
+    const entry = out[r.item_key] || (out[r.item_key] = { qty: 0, price: 0, amount: 0, date: '', history: [] });
+    // แถวที่บันทึกทีหลังทับค่าปัจจุบันเสมอ (เรียงมาตาม closing_id แล้ว)
+    entry.qty = Number(r.qty);
+    entry.price = Number(r.unit_price);
+    entry.amount = Number(r.amount);
+    entry.date = r.date_text;
+    entry.history.push({
+      date: r.date_text,
+      qty: Number(r.qty),
+      price: Number(r.unit_price),
+      amount: Number(r.amount),
+      recorder: str(r.recorder),
+      time: thaiDateTime(r.saved_text),
+    });
+  }
+  return out;
+}
+
+/** แถวปิดยอดดิบๆ ของสาขา — ใช้จาก /api/stockcount ตอนคิดมูลค่าสต๊อกเดือนก่อน */
+async function getMonthEndRows(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) return [];
+  const month = str(body.month); // 'YYYY-MM' — ไม่ส่งมา = เอาทั้งหมด
+  const rows = await queryRead(
+    `SELECT CONVERT(NVARCHAR(10), closing_date, 23) AS date_text, item_key, item_code, item_name, unit,
+            qty, unit_price, amount
+       FROM dbo.stock_month_end
+      WHERE branch = @branch
+        AND (@month IS NULL OR CONVERT(NVARCHAR(7), closing_date, 23) = @month)
+      ORDER BY closing_id`,
+    {
+      branch: { type: sql.NVarChar(50), value: branch },
+      month: { type: sql.NVarChar(7), value: /^\d{4}-\d{2}$/.test(month) ? month : null },
+    }
+  );
+  return rows.map((r) => ({
+    date: r.date_text,
+    code: r.item_key,
+    productId: r.item_code,
+    name: r.item_name || '',
+    unit: str(r.unit),
+    qty: Number(r.qty),
+    unitPrice: Number(r.unit_price),
+    amount: Number(r.amount),
+  }));
+}
+
+/**
+ * แถวการนับดิบๆ ของสาขา — ใช้จาก /api/stockcount ตอนคิดมูลค่าสต๊อก
+ * จำกัดช่วงด้วย from/to ('YYYY-MM-DD') เพราะการ์ดมูลค่าสต๊อกดูแค่เดือนปัจจุบันกับเดือนก่อน
+ */
+async function getStockCountRows(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) return [];
+  const from = str(body.from);
+  const to = str(body.to);
+  const rows = await queryRead(
+    `SELECT CONVERT(NVARCHAR(10), counted_at, 23) AS date_text, item_key, item_code, item_name, unit, remaining
+       FROM dbo.stock_count
+      WHERE branch = @branch
+        AND (@from IS NULL OR counted_at >= CONVERT(DATETIME2(0), @from + ' 00:00:00', 120))
+        AND (@to IS NULL OR counted_at <= CONVERT(DATETIME2(0), @to + ' 23:59:59', 120))
+      ORDER BY counted_at, count_id`,
+    {
+      branch: { type: sql.NVarChar(50), value: branch },
+      from: { type: sql.NVarChar(10), value: /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : null },
+      to: { type: sql.NVarChar(10), value: /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : null },
+    }
+  );
+  return rows.map((r) => ({
+    date: r.date_text,
+    code: r.item_key,
+    productId: r.item_code,
+    name: r.item_name || '',
+    unit: str(r.unit),
+    qty: Number(r.remaining),
+  }));
+}
+
+/* ============================== ของเสีย ============================== */
+async function saveWaste(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  const recorder = str(body.recorder) || str(session?.username) || 'Unknown';
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!branch) throw badRequest('ไม่ระบุสาขา');
+  if (items.length === 0) throw badRequest('ไม่มีรายการที่กรอกจำนวนที่เสีย');
+
+  // วันที่ของเสียเลือกได้จากหน้าเว็บ (บันทึกย้อนหลังได้) แยกจากเวลาที่คีย์จริง
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(str(body.date)) ? str(body.date) : localStamp().slice(0, 10);
+  const keyedAt = localStamp();
+
+  const rows = [];
+  for (const it of items) {
+    const qty = Number(it.qty);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const code = str(it.productId);
+    const key = normCode(code);
+    if (!key) continue;
+    rows.push({ key, code, name: str(it.name), unit: str(it.unit), qty });
+  }
+  if (rows.length === 0) throw badRequest('ไม่มีรายการที่กรอกจำนวนที่เสียถูกต้อง');
+
+  await withTransaction(async (run) => {
+    for (const r of rows) {
+      await run(
+        `INSERT INTO dbo.stock_waste (waste_date, branch, item_key, item_code, item_name, unit, qty, recorder, keyed_at)
+         VALUES (CONVERT(DATE, @waste_date, 120), @branch, @item_key, @item_code, @item_name, @unit, @qty,
+                 @recorder, CONVERT(DATETIME2(0), @keyed_at, 120));`,
+        {
+          waste_date: { type: sql.NVarChar(10), value: date },
+          branch: { type: sql.NVarChar(50), value: branch },
+          item_key: { type: sql.NVarChar(50), value: r.key },
+          item_code: { type: sql.NVarChar(50), value: r.code },
+          item_name: { type: sql.NVarChar(255), value: r.name || null },
+          unit: { type: sql.NVarChar(50), value: r.unit || null },
+          qty: { type: sql.Decimal(18, 3), value: r.qty },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+          keyed_at: { type: sql.NVarChar(19), value: keyedAt },
+        }
+      );
+    }
+  });
+
+  return { message: `บันทึกของเสียแล้ว ${rows.length} รายการ`, count: rows.length };
+}
+
 export const STOCK_ACTIONS = {
   getStockItems,
   getStockTotal,
@@ -649,4 +873,10 @@ export const STOCK_ACTIONS = {
   getAvgPerHead,
   saveBranchPercentagesBulk,
   getBranchPercent,
+  getClosingItems,
+  saveMonthEndClosing,
+  getMonthEndClosing,
+  getMonthEndRows,
+  getStockCountRows,
+  saveWaste,
 };
