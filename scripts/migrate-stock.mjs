@@ -55,7 +55,20 @@ let describeDbError = (err) => err?.message || String(err);
 
 async function loadDb() {
   if (withTransaction) return;
-  const m = await import('../lib/mssql.js');
+  let m;
+  try {
+    m = await import('../lib/mssql.js');
+  } catch (err) {
+    // เครื่องที่ออฟฟิศมี node_modules อยู่ในโฟลเดอร์ office-server แต่สคริปต์นี้อ่านจากโฟลเดอร์รีโป
+    // ถ้ายังไม่เคย npm install ที่รีโป จะพังตรงนี้ด้วยข้อความดิบภาษาอังกฤษที่อ่านไม่ออกว่าต้องทำอะไร
+    if (err?.code === 'ERR_MODULE_NOT_FOUND' && /mssql/.test(err?.message || '')) {
+      throw new Error(
+        "ยังไม่ได้ลง package 'mssql' — รัน npm install ที่โฟลเดอร์รีโป (โฟลเดอร์ที่มี package.json) ก่อน\n" +
+        '  โหมด --inspect กับ --dry-run ใช้ได้เลยโดยไม่ต้องลง เพราะไม่แตะฐานข้อมูล'
+      );
+    }
+    throw err;
+  }
   // ตารางสต๊อกอยู่คนละฐานข้อมูลกับตารางงาน (InventoryNarai กับ narai_hr) แต่เครื่องและ login เดียวกัน
   m.useDatabase(DB_NAME);
   withTransaction = m.withTransaction;

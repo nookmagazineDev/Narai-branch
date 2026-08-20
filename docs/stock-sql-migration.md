@@ -41,6 +41,19 @@ office-server จึงต่อสอง pool จากค่าตั้งช
 
 รันบนเครื่องที่ออฟฟิศ (เครื่องเดียวกับที่รัน office-server) เพราะเป็นเครื่องที่ต่อ SQL Server ได้
 
+**ต้องรันจากโฟลเดอร์รีโป** (โฟลเดอร์ที่มี `package.json`, `docs\`, `scripts\` อยู่ข้างใน)
+ไม่ใช่ `C:\hr-migrate` ที่เคยใช้ตอนย้ายข้อมูล HR — โฟลเดอร์นั้นมีแค่ `node_modules` ทำให้
+`npm install` ขึ้นว่า "up to date" แต่หาไฟล์สคริปต์กับสคีมาไม่เจอ
+
+```powershell
+# หาว่ารีโปอยู่ที่ไหนบนเครื่องนี้
+Get-ChildItem C:\, D:\ -Filter migrate-stock.mjs -Recurse -ErrorAction SilentlyContinue |
+  Select-Object -First 3 FullName
+
+cd D:\naraiสาขา\Narai-branch    # เปลี่ยนตามที่หาเจอ
+git pull origin main
+```
+
 ```powershell
 # 0) ลง package ที่สคริปต์ใช้ (ครั้งเดียว ที่โฟลเดอร์รีโป)
 #    ถ้าข้ามขั้นนี้จะขึ้น Error: Cannot find module 'mssql' ตอนเขียนจริง
