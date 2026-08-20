@@ -9,6 +9,8 @@
  *   balance   ชีท 'ยอดยกมา'                -> stock_balance
  *   requests  ชีท 'ข้อมูลเบิก'              -> stock_request
  *   category  ชีท 'หมวดจัดเก็บสาขา'        -> stock_storage_category
+ *   avghead   ชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว'     -> stock_avg_per_head
+ *   percent   ชีท 'เปอร์เซ็นการเบิกของแต่ละสาขา' -> stock_branch_percent
  *
  * วิธีใช้ (รันจากเครื่องที่ต่อฐานข้อมูลได้ — ปกติคือเครื่อง office-server)
  *   1) สร้างตารางก่อน:  sqlcmd -S localhost -U <user> -P <pass> -i docs/schema-stock.sql
@@ -27,7 +29,7 @@
  * ตัวเลือก
  *   --dry-run        อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *   --inspect        พิมพ์แถวแรกๆ ของทุกชีทออกมาดิบๆ ไว้ตรวจว่าคอลัมน์ตรงกับที่โค้ดคาดไว้ไหม
- *   --only=counts    ย้ายเฉพาะบางชุด (items,itemtotal,counts,balance,requests,category)
+ *   --only=counts    ย้ายเฉพาะบางชุด (items,itemtotal,counts,balance,requests,category,avghead,percent)
  *   --months=6       ย้ายประวัติการนับย้อนหลังกี่เดือน (ไม่ใส่ = ทั้งหมด)
  *   --csv            ดึงผ่าน export CSV แทน gviz — ต้องใส่ถ้าชีทมีตัวกรองเปิดค้างไว้
  *   --db=InventoryNarai  ฐานข้อมูลปลายทาง (ค่าเริ่มต้นนี้ หรือตั้ง STOCK_DB_NAME ใน env)
@@ -79,7 +81,8 @@ async function loadDb() {
 
 /* ---- ไอดีชีทต้นทาง (ตรงกับที่ Apps Script เปิดอยู่ทุกวันนี้) ---- */
 const STOCK_SS = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ'; // ไฟล์สต๊อก
-const BOM_SS = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';   // ไฟล์ BOM (ชีท item)
+const BOM_SS = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';   // ไฟล์ BOM (ชีท item, ค่าเฉลี่ยต่อหัว)
+const SUP_SS = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';   // ไฟล์ supplier (เปอร์เซ็นการเบิก)
 
 const args = process.argv.slice(2);
 const argVal = (name, fallback) => {
@@ -102,6 +105,8 @@ const SOURCES = {
   balance: { ss: STOCK_SS, sheet: 'ยอดยกมา', gid: argVal('gid-balance', '') },
   requests: { ss: STOCK_SS, sheet: 'ข้อมูลเบิก', gid: argVal('gid-requests', '') },
   category: { ss: STOCK_SS, sheet: 'หมวดจัดเก็บสาขา', gid: argVal('gid-category', '') },
+  avghead: { ss: BOM_SS, sheet: 'ค่าเฉลี่ยยอดใช้ต่อหัว', gid: argVal('gid-avghead', '1722427042') },
+  percent: { ss: SUP_SS, sheet: 'เปอร์เซ็นการเบิกของแต่ละสาขา', gid: argVal('gid-percent', '') },
 };
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -579,6 +584,78 @@ async function migrateCategory() {
   }));
 }
 
+/** ชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' (ไฟล์ BOM): A=สาขา B=รหัส C=ชื่อ D=ค่าเฉลี่ยต่อหัว */
+async function migrateAvgPerHead() {
+  const rows = await loadSheet('avghead');
+  const byKey = new Map();
+  for (const row of rows) {
+    const branch = branchCode(row[0]);
+    const key = normCode(row[1]);
+    const value = num(row[3]);
+    if (!branch || !key || value === null || value <= 0) continue;
+    byKey.set(`${branch}|${key}`, { branch, key, code: str(row[1]), name: str(row[2]), value });
+  }
+
+  await runBatch('stock_avg_per_head', [...byKey.values()], (a) => ({
+    text: `
+      MERGE dbo.stock_avg_per_head AS t
+      USING (SELECT @branch AS branch, @item_key AS item_key) AS s
+        ON t.branch = s.branch AND t.item_key = s.item_key
+      WHEN MATCHED THEN UPDATE SET
+        item_code = @item_code, item_name = @item_name, avg_qty = @avg_qty, updated_at = SYSDATETIME()
+      WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, avg_qty)
+        VALUES (@branch, @item_key, @item_code, @item_name, @avg_qty);`,
+    params: {
+      branch: a.branch,
+      item_key: a.key,
+      item_code: a.code,
+      item_name: a.name || null,
+      avg_qty: a.value,
+    },
+  }));
+}
+
+/** ชีท 'เปอร์เซ็นการเบิกของแต่ละสาขา' (ไฟล์ supplier): A=วันที่ B=สาขา C=เปอร์เซ็น D=จำนวน259 E=จำนวน359 */
+async function migrateBranchPercent() {
+  const rows = await loadSheet('percent');
+  const byKey = new Map();
+  let noDate = 0;
+  for (const row of rows) {
+    const stamp = toSqlDateTime(row[0]);
+    const branch = branchCode(row[1]);
+    if (!branch) continue;
+    if (!stamp) { noDate++; continue; }
+    const date = stamp.slice(0, 10);
+    const percent = num(row[2]);
+    if (percent === null || percent <= 0) continue;
+    // แถวท้ายสุดของวัน+สาขาเดียวกันคือค่าที่ใช้จริง (ชีทเดิมเขียนทับแถวเดิมอยู่แล้ว)
+    byKey.set(`${branch}|${date}`, {
+      branch, date, percent,
+      p259: num(row[3]),
+      p359: num(row[4]),
+    });
+  }
+  if (noDate) console.log(`  ข้ามแถวที่อ่านวันที่ไม่ออก ${noDate} แถว`);
+
+  await runBatch('stock_branch_percent', [...byKey.values()], (p) => ({
+    text: `
+      MERGE dbo.stock_branch_percent AS t
+      USING (SELECT CONVERT(DATE, @percent_date, 120) AS percent_date, @branch AS branch) AS s
+        ON t.percent_date = s.percent_date AND t.branch = s.branch
+      WHEN MATCHED THEN UPDATE SET
+        percent_value = @percent_value, qty_259 = @qty_259, qty_359 = @qty_359, updated_at = SYSDATETIME()
+      WHEN NOT MATCHED THEN INSERT (percent_date, branch, percent_value, qty_259, qty_359)
+        VALUES (s.percent_date, @branch, @percent_value, @qty_259, @qty_359);`,
+    params: {
+      percent_date: p.date,
+      branch: p.branch,
+      percent_value: p.percent,
+      qty_259: p.p259,
+      qty_359: p.p359,
+    },
+  }));
+}
+
 /* -------------------------------- โหมดตรวจชีท -------------------------------- */
 
 async function inspectSheets() {
@@ -607,6 +684,8 @@ const PARTS = [
   ['balance', migrateBalance],
   ['requests', migrateRequests],
   ['category', migrateCategory],
+  ['avghead', migrateAvgPerHead],
+  ['percent', migrateBranchPercent],
 ];
 
 async function main() {

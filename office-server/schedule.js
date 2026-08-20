@@ -571,7 +571,12 @@ export async function scheduleHandler(req, res) {
 
   try {
     const data = await run(body, session);
-    return res.status(200).json({ status: 'success', data });
+    // action ที่อยากให้ผู้ใช้เห็นข้อความ (เช่น เลขที่ใบเบิกที่เพิ่งออกให้) ใส่ฟิลด์ message มาในผลลัพธ์
+    // แล้วจะถูกยกขึ้นมาไว้ระดับบนสุดให้ตรงกับที่ Apps Script เดิมตอบ ฝั่งเว็บอ่าน res.message ได้เหมือนเดิม
+    const message = data && typeof data === 'object' && !Array.isArray(data) && typeof data.message === 'string'
+      ? data.message
+      : undefined;
+    return res.status(200).json({ status: 'success', data, ...(message ? { message } : {}) });
   } catch (error) {
     if (error?.badRequest) return res.status(400).json({ status: 'error', message: error.message });
     if (error?.forbidden) return res.status(403).json({ status: 'error', message: error.message });

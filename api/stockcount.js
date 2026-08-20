@@ -1,4 +1,30 @@
-import { fetchSheet } from '../lib/upstream.js';
+import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
+
+/**
+ * เรียก action ของหน้านับสต๊อกที่ office-server (ตัวเดียวกับที่ /api/schedule ใช้)
+ *
+ * ข้อมูลสต๊อกย้ายไป SQL Server ที่ออฟฟิศแล้ว ซึ่ง Vercel ต่อตรงไม่ได้ (ไฟร์วอลล์เปิดพอร์ต
+ * ให้เฉพาะ IP ในไทย) จึงต้องเดินผ่าน office-server เหมือนหน้าตารางงาน
+ *
+ * _user ที่ส่งไปเป็นตัวแทนของ endpoint นี้เอง ตั้งสาขาเป็น all เพราะ endpoint นี้ถูกเรียก
+ * ด้วยสาขาที่ระบุมาใน query อยู่แล้ว และไม่เคยมีการตรวจสิทธิ์มาก่อนตั้งแต่ยังอ่านจากชีท
+ */
+async function callOffice(action, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.USAGE_API_TOKEN) headers['x-api-token'] = process.env.USAGE_API_TOKEN;
+  const r = await fetchUpstream(`${USAGE_API_BASE}/schedule`, {
+    method: 'POST',
+    headers,
+    timeoutMs: 12000,
+    retries: 1,
+    deadlineMs: 26000,
+    body: JSON.stringify({ action, ...payload, _user: { username: 'stockcount-api', branch: 'all' } }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!body) throw new Error(`เซิร์ฟเวอร์ที่ออฟฟิศตอบกลับมาไม่ใช่ JSON (HTTP ${r.status})`);
+  if (body.status !== 'success') throw new Error(body.message || `HTTP ${r.status}`);
+  return body.data;
+}
 // มูลค่าสต๊อกคงเหลือรายเดือน — อ่านจาก Google Sheet เดียวกัน 2 ชีท (gviz, ต้องแชร์ "ใครมีลิงก์ก็ดูได้")
 //   - ชีท "ข้อมูลนับสตอค" (gid 923363118): ยอดคงเหลือรายสินค้า/สาขา/วันที่นับ
 //   - ชีท "8.2": ตารางราคากลาง [0]รหัส [1]ชื่อ [2]ราคา/หน่วย
@@ -128,67 +154,30 @@ export default async function handler(req, res) {
     }
   }
 
-  // โหมด "ค่าเฉลี่ยยอดใช้ต่อหัว" (?avgperhead=1&branch=xxx) — จากชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' ในไฟล์ BOM
+  // โหมด "ค่าเฉลี่ยยอดใช้ต่อหัว" (?avgperhead=1&branch=xxx) — อ่านจาก SQL (dbo.stock_avg_per_head)
   // ใช้คำนวณยอดเบิกอัตโนมัติในหน้านับสต๊อก: คืน { code: avgPerHead } ของสาขานั้น
+  // ย้ายจากชีทมาที่ SQL พร้อมกับปุ่มแก้ค่าในหน้านับสต๊อก (saveAvgPerHead) — ต้องอ่านที่เดียวกับที่เขียน
   if (req.query.avgperhead) {
     const brA = String(req.query.branch || '').toLowerCase().trim();
     if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetchSheet('https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/gviz/tq?tqx=out:json&gid=1722427042');
-      const text = await r.text();
-      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทค่าเฉลี่ยยอดใช้ต่อหัวไม่ได้ (ต้องแชร์ลิงก์)' });
-      const a = text.indexOf('{'), b = text.lastIndexOf('}');
-      const j = JSON.parse(text.substring(a, b + 1));
-      // [0]=สาขา [1]=รหัส [3]=ค่าเฉลี่ยต่อหัว — เว็บใช้ zjp แทน sjp ในบางชีท เผื่อ alias ทั้งสองทาง
-      const aliases = new Set([brA]);
-      if (brA === 'zjp') aliases.add('sjp');
-      if (brA === 'sjp') aliases.add('zjp');
-      const data = {};
-      for (const rw of (j.table.rows || [])) {
-        const c = rw.c || [];
-        if (!aliases.has(String((c[0] && c[0].v) || '').toLowerCase().trim())) continue;
-        const code = normCode(c[1] && c[1].v);
-        if (!code) continue;
-        const avg = Number(c[3] && c[3].v);
-        if (!Number.isNaN(avg) && avg > 0) data[code] = avg;
-      }
-      return res.status(200).json({ status: 'success', branch: brA, count: Object.keys(data).length, data });
+      const d = await callOffice('getAvgPerHead', { branch: brA });
+      return res.status(200).json({ status: 'success', branch: brA, count: d?.count ?? 0, data: d?.data || {} });
     } catch (error) {
-      return res.status(500).json({ status: 'error', message: error.message });
+      return res.status(502).json({ status: 'error', message: error.message });
     }
   }
 
-  // โหมด "เปอร์เซ็นต์การเบิกของแต่ละสาขา" (?getpercentages=1&branch=xxx) — ดึงจากชีท เปอร์เซ็นการเบิกของแต่ละสาขา ในไฟล์ sup
+  // โหมด "เปอร์เซ็นต์การเบิกของแต่ละสาขา" (?getpercentages=1&branch=xxx) — อ่านจาก SQL (dbo.stock_branch_percent)
+  // ย้ายมาพร้อมกับ saveBranchPercentagesBulk ด้วยเหตุผลเดียวกับค่าเฉลี่ยต่อหัว
   if (req.query.getpercentages) {
     const brA = String(req.query.branch || '').toLowerCase().trim();
     if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent('เปอร์เซ็นการเบิกของแต่ละสาขา')}`);
-      const text = await r.text();
-      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีทเปอร์เซ็นการเบิกของแต่ละสาขาไม่ได้ (ต้องแชร์ลิงก์)' });
-      const a = text.indexOf('{'), b = text.lastIndexOf('}');
-      const j = JSON.parse(text.substring(a, b + 1));
-      
-      const aliases = new Set([brA]);
-      if (brA === 'zjp') aliases.add('sjp');
-      if (brA === 'sjp') aliases.add('zjp');
-      
-      const data = [];
-      for (const rw of (j.table.rows || [])) {
-        const c = rw.c || [];
-        const dateVal = cellYmd(c[0]);
-        if (!dateVal) continue;
-        const branchName = String((c[1] && c[1].v) || '').toLowerCase().trim();
-        if (!aliases.has(branchName)) continue;
-        const percent = parseFloat(c[2] && c[2].v) || 0;
-        // คอลัมน์ D/E (จำนวน259/จำนวน359) — มีเฉพาะสาขาที่มีหัว 2 ราคาและเคยบันทึกแยกไว้ ไม่มีก็เป็น undefined
-        const p259 = c[3] && c[3].v !== null && c[3].v !== '' ? parseFloat(c[3].v) : undefined;
-        const p359 = c[4] && c[4].v !== null && c[4].v !== '' ? parseFloat(c[4].v) : undefined;
-        data.push({ date: dateVal, percent, percent259: p259, percent359: p359 });
-      }
-      return res.status(200).json({ status: 'success', branch: brA, data });
+      const d = await callOffice('getBranchPercent', { branch: brA });
+      return res.status(200).json({ status: 'success', branch: brA, data: d?.data || [] });
     } catch (error) {
-      return res.status(500).json({ status: 'error', message: error.message });
+      return res.status(502).json({ status: 'error', message: error.message });
     }
   }
 

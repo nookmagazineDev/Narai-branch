@@ -28,6 +28,8 @@ const READ_ONLY = new Set([
   'getStockItems',
   'getStockTotal',
   'stockStatus',
+  'getAvgPerHead',
+  'getBranchPercent',
 ]);
 
 export default async function handler(req, res) {
