@@ -221,6 +221,55 @@ CREATE TABLE dbo.stock_branch_percent (
 );
 GO
 
+/* ========================== ปิดรอบสิ้นเดือน ==========================
+   ชีท 'ปิดรอบสิ้นเดือน': A=วันที่ปิดยอด B=สาขา C=รหัส D=ชื่อ E=หน่วย F=ยอดคงเหลือ G=มูลค่า/หน่วย H=มูลค่ารวม I=ผู้บันทึก J=เวลาบันทึก
+
+   เก็บทุกครั้งที่กดบันทึก ไม่ทับของเดิม (เหมือนชีท) เพราะฝ่ายบัญชีใช้ดูว่าใครแก้ยอดเมื่อไหร่
+   ค่าที่ถือว่าเป็นปัจจุบัน = แถวที่บันทึกทีหลังสุดของสาขา+สินค้านั้น (closing_id มากสุด) */
+IF OBJECT_ID(N'dbo.stock_month_end', N'U') IS NULL
+CREATE TABLE dbo.stock_month_end (
+    closing_id    BIGINT         IDENTITY(1,1) NOT NULL,
+    closing_date  DATE           NOT NULL,   -- วันที่ปิดยอด (ผู้ใช้เลือก)
+    branch        NVARCHAR(50)   NOT NULL,
+    item_key      NVARCHAR(50)   NOT NULL,
+    item_code     NVARCHAR(50)   NOT NULL,
+    item_name     NVARCHAR(255)  NULL,
+    unit          NVARCHAR(50)   NULL,
+    qty           DECIMAL(18,3)  NOT NULL,
+    unit_price    DECIMAL(18,4)  NOT NULL CONSTRAINT DF_stock_month_end_price DEFAULT (0),
+    amount        DECIMAL(18,2)  NOT NULL CONSTRAINT DF_stock_month_end_amount DEFAULT (0),
+    recorder      NVARCHAR(255)  NULL,
+    saved_at      DATETIME2(0)   NOT NULL CONSTRAINT DF_stock_month_end_saved_at DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_stock_month_end PRIMARY KEY (closing_id)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_stock_month_end_branch_item')
+CREATE INDEX IX_stock_month_end_branch_item
+    ON dbo.stock_month_end (branch, item_key, closing_id) INCLUDE (qty, unit_price, amount, closing_date);
+GO
+
+/* ============================== ของเสีย ==============================
+   ชีท waste (gid 1493705916): A=วันที่ของเสีย B=สาขา C=รหัส D=ชื่อ E=หน่วย F=จำนวนที่เสีย G=ผู้บันทึก H=เวลาที่คีย์
+   เป็น log ต่อเนื่อง ไม่ใช่ยอดสรุป — บันทึกย้อนหลังได้ วันที่ของเสียจึงแยกจากเวลาที่คีย์ */
+IF OBJECT_ID(N'dbo.stock_waste', N'U') IS NULL
+CREATE TABLE dbo.stock_waste (
+    waste_id    BIGINT         IDENTITY(1,1) NOT NULL,
+    waste_date  DATE           NOT NULL,
+    branch      NVARCHAR(50)   NOT NULL,
+    item_key    NVARCHAR(50)   NOT NULL,
+    item_code   NVARCHAR(50)   NOT NULL,
+    item_name   NVARCHAR(255)  NULL,
+    unit        NVARCHAR(50)   NULL,
+    qty         DECIMAL(18,3)  NOT NULL,
+    recorder    NVARCHAR(255)  NULL,
+    keyed_at    DATETIME2(0)   NOT NULL CONSTRAINT DF_stock_waste_keyed_at DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_stock_waste PRIMARY KEY (waste_id)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_stock_waste_branch_date')
+CREATE INDEX IX_stock_waste_branch_date ON dbo.stock_waste (branch, waste_date DESC) INCLUDE (item_key, qty);
+GO
+
 /* ==================== สิทธิ์ของ login ที่เว็บใช้ ====================
    office-server ต่อด้วย login เดียวกับตารางงาน (ดูท้ายไฟล์ docs/schema-hr.sql)
    แต่ login นั้นมีสิทธิ์เฉพาะใน narai_hr จึงต้องเพิ่ม user ในฐานข้อมูลนี้ให้ด้วย

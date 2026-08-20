@@ -33,10 +33,23 @@ const SQL_ACTIONS = new Set([
   // เพราะมันจัดการ fallback ตอน SQL ว่าง และการซิงก์กลับให้ครบ
   'getScheduleEmployees',  // ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
 
-  // หน้านับสต๊อก (getStockItems / getStockTotal) ยังไม่ใส่ที่นี่ ทั้งที่ฝั่ง office-server
-  // ทำเสร็จแล้ว — เพราะการกดบันทึกยังเขียนลงชีทอย่างเดียว ถ้าเปิดให้อ่านจาก SQL ตอนนี้
+  // กลุ่มที่ 3 — เมนูสต๊อก (นับสต๊อก/ขอเบิก, รวมสต๊อกทุกสาขา, ปิดยอดสิ้นเดือน, ของเสีย)
+  //
+  // ทั้งชุดต้องสลับพร้อมกัน เพราะอ่านกับเขียนอ้างข้อมูลก้อนเดียวกัน — ถ้าเปิดแค่ฝั่งอ่าน
   // สาขานับเสร็จกดบันทึกแล้วหน้าจะยังโชว์ยอดเก่า เหมือนบันทึกไม่ติด
-  // ลำดับที่เหลืออยู่ใน docs/stock-sql-migration.md
+  //
+  // การ์ดมูลค่าสต๊อกบนหน้า Dashboard (/api/stockcount) ย้ายมาอ่าน SQL พร้อมกันแล้ว
+  // ส่วนที่ยังอยู่บนชีทคือหน้ารับของกับสถานะใบเบิก เพราะเป็นชีทที่ทีมสโตร์กรอกเอง
+  'getStockItems',              // StockList
+  'getStockTotal',              // StockTotalList
+  'saveStock',                  // StockList — บันทึกการนับ + ใบเบิก + ยอดยกมา
+  'updateStorageCategory',      // StockList
+  'saveAvgPerHead',             // StockList
+  'saveBranchPercentagesBulk',  // StockList
+  'getClosingItems',            // MonthEndClosing
+  'getMonthEndClosing',         // MonthEndClosing
+  'saveMonthEndClosing',        // MonthEndClosing
+  'saveWaste',                  // Waste
 ]);
 
 // ---------------------------------------------------------------------------
