@@ -95,19 +95,20 @@ const byStoreCat = (a, b) => {
   return ca.localeCompare(cb, 'th');
 };
 
-// หมวด "อุปกรณ์" — ของกลุ่มนี้มีเป็นพันรายการแต่ไม่ได้นับกันทุกวัน จึงไม่แสดงปนในตารางนับปกติ
-// (แถวที่ไม่ได้ใช้ทำให้หน้าโหลดช้าโดยเปล่าประโยชน์) แต่กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและเบิกได้
+// หมวดสินค้าที่ไม่แสดงปนในตารางนับปกติ — กลุ่ม "อุปกรณ์" ไม่ได้นับกันทุกวันแต่มีจำนวนแถวเยอะมาก
+// ไม่ต้อง render แถวที่ไม่ได้ใช้ หน้าจึงเปิดไวขึ้น แต่กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิกได้
 //
-// ซ่อนแค่ชั้นการแสดงผล ตัวสินค้ายังอยู่ใน items ครบ ตอนกดบันทึกจึงรวมเข้าใบเบิกใบเดียวกับหมวดอื่น
+// ซ่อนแค่ชั้นการแสดงผล ตัวสินค้ายังอยู่ใน items ครบ ตอนกดบันทึกจึงรวมเข้าใบเบิกใบเดียวกับหมวดอื่นเอง
 // อยากซ่อนหมวดอื่นเพิ่ม ใส่คำในลิสต์นี้ได้เลย — เทียบแบบ "มีคำนี้อยู่ในชื่อหมวด" จึงครอบคลุมชื่อย่อยเช่น "อุปกรณ์ครัว"
-const EQUIPMENT_CATEGORY_KEYWORDS = ['อุปกรณ์'];
+const HIDDEN_CATEGORY_KEYWORDS = ['อุปกรณ์'];
 
-// ดูทั้งหมวดสโตร์ (คอลัมน์ N ชีท item) และหมวดจัดเก็บของสาขา เพราะบางสาขาตั้งหมวดไว้คนละช่องกัน
-const isEquipmentItem = (item) => {
+// สินค้าตัวนี้อยู่ในหมวดที่ซ่อนหรือไม่ — ดูทั้งหมวดสโตร์ (คอลัมน์ N ชีท item) และหมวดจัดเก็บของสาขา
+// เพราะบางสาขาตั้งหมวด "อุปกรณ์" ไว้คนละช่องกัน
+const isHiddenCategory = (item) => {
   const cats = [item?.storeCat, item?.storageCat];
-  return cats.some((c) => {
+  return cats.some(c => {
     const name = String(c || '').trim();
-    return name !== '' && EQUIPMENT_CATEGORY_KEYWORDS.some((k) => name.includes(k));
+    return name !== '' && HIDDEN_CATEGORY_KEYWORDS.some(k => name.includes(k));
   });
 };
 
@@ -1533,24 +1534,26 @@ export default function StockList() {
     }
   };
 
-  // ตารางแสดงได้ 2 โหมด: ปกติ (ซ่อนอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มเหนือตาราง
-  const [showEquipmentOnly, setShowEquipmentOnly] = useState(false);
-  const equipmentCount = useMemo(() => items.filter(isEquipmentItem).length, [items]);
+  // ตารางมี 2 โหมด: ปกติ (ซ่อนหมวดอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มข้างช่องค้นหา
+  const [showHiddenOnly, setShowHiddenOnly] = useState(false);
 
-  // ดรอปดาวน์หมวดต้องมีเฉพาะหมวดที่อยู่ในโหมดปัจจุบัน เลือกหมวดที่ไม่ได้แสดงไปก็ได้ตารางว่าง
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
-      if (isEquipmentItem(item) !== showEquipmentOnly) return;
+      // ดรอปดาวน์มีเฉพาะหมวดของโหมดที่ดูอยู่ เลือกหมวดของอีกชุดไปก็ได้ตารางว่างโดยไม่รู้สาเหตุ
+      if (isHiddenCategory(item) !== showHiddenOnly) return;
       if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
-  }, [items, showEquipmentOnly]);
+  }, [items, showHiddenOnly]);
+
+  // จำนวนรายการหมวดอุปกรณ์ — ใช้บอกผู้ใช้ว่าของไปอยู่ไหน ไม่ใช่ข้อมูลหาย
+  const hiddenCount = useMemo(() => items.filter(isHiddenCategory).length, [items]);
 
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
       // โหมดปกติซ่อนหมวดอุปกรณ์ / โหมดอุปกรณ์แสดงเฉพาะหมวดนั้น
-      if (isEquipmentItem(item) !== showEquipmentOnly) return false;
+      if (isHiddenCategory(item) !== showHiddenOnly) return false;
 
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
@@ -1580,7 +1583,7 @@ export default function StockList() {
     });
 
     return result;
-  }, [items, searchTerm, filterCategory, sortBy, showEquipmentOnly]);
+  }, [items, searchTerm, filterCategory, sortBy, showHiddenOnly]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -2025,29 +2028,29 @@ export default function StockList() {
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
 
-              {/* สลับไปดูหมวดอุปกรณ์ — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของอีกชุดสินค้าหนึ่ง */}
-              {equipmentCount > 0 && (
+              {/* สลับไปดูหมวดอุปกรณ์ — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของสินค้าคนละชุด */}
+              {hiddenCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => { setShowEquipmentOnly(v => !v); setFilterCategory(''); setSearchTerm(''); }}
+                  onClick={() => { setShowHiddenOnly(v => !v); setFilterCategory(''); setSearchTerm(''); }}
                   className={`px-4 py-3 rounded-xl text-sm font-medium border transition-colors whitespace-nowrap ${
-                    showEquipmentOnly
+                    showHiddenOnly
                       ? 'bg-purple-600 border-purple-600 text-white hover:bg-purple-700'
                       : 'bg-white border-gray-200 text-gray-700 hover:border-purple-300 hover:text-purple-700'
                   }`}
                   title="ของหมวดอุปกรณ์มีเป็นพันรายการ จึงแยกไว้คนละหน้าจอกับของที่นับทุกวัน"
                 >
-                  {showEquipmentOnly ? '← กลับไปตารางนับปกติ' : `หมวดอุปกรณ์ (${equipmentCount})`}
+                  {showHiddenOnly ? '← กลับไปตารางนับปกติ' : `หมวดอุปกรณ์ (${hiddenCount})`}
                 </button>
               )}
             </div>
 
-            {/* บอกให้รู้ว่าของหมวดอุปกรณ์แค่ถูกแยกไว้ ไม่ได้หายไป และเบิกรวมใบเดียวกันได้ */}
-            {equipmentCount > 0 && (
+            {/* บอกให้รู้ว่าของหมวดอุปกรณ์ถูกซ่อนไว้เฉยๆ ไม่ได้หายไป และยังสั่งได้จากปุ่มสั่งเพิ่มเติม */}
+            {hiddenCount > 0 && (
               <div className="px-4 pb-3 -mt-1 text-xs text-gray-400">
-                {showEquipmentOnly
-                  ? `กำลังดูเฉพาะหมวดอุปกรณ์ ${equipmentCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
-                  : `ซ่อนสินค้าหมวดอุปกรณ์ ${equipmentCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิก`}
+                {showHiddenOnly
+                  ? `กำลังดูเฉพาะหมวดอุปกรณ์ ${hiddenCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
+                  : `ซ่อนสินค้าหมวดอุปกรณ์ ${hiddenCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิก`}
               </div>
             )}
 
