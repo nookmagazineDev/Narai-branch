@@ -65,6 +65,17 @@ function isCellCleared(data) {
     !data.hrLeave && !data.useAccum && !data.otherNote;
 }
 
+// ช่องนี้นับเป็น "วันหยุด" หรือยัง — ใช้เกณฑ์เดียวกันทั้งตอนคิดค่าแรง ตอนบันทึก และตอนแสดงผล
+//
+// เดิมแต่ละที่เขียนเงื่อนไขของตัวเอง พอเอาช่องติ๊ก "กำหนดเป็นวันหยุด" ออกไป (ใช้ '10 หยุด' แทน)
+// ฝั่งแสดงผลในตารางที่ยังดูแค่ isStop กับ leave2 ก็หลุดจากเกณฑ์ที่เหลือ ลงลารับค่าแรงแล้ว
+// ช่องจะยังขึ้นเป็นการ์ดกะทำงาน แต่พอรีเฟรชกลับมาเป็นการ์ดหยุด เพราะตอนบันทึกนับเป็นหยุด
+// (status = 'หยุด') แล้วโหลดกลับมาเข้า isStop อีกที
+function isStopCell(data) {
+  if (!data) return false;
+  return !!(data.isStop || data.leave1 || data.leave2);
+}
+
 function formatNumber(num) {
   const v = parseFloat(num);
   if (isNaN(v)) return '0';
@@ -550,7 +561,7 @@ export default function ScheduleWeekly() {
   const saveCellData = () => {
     // ป้ายบอกว่าเวลาเข้าจำเป็น แต่เดิมกดตกลงผ่านได้โดยไม่กรอก
     const cleared = isCellCleared(cellData);
-    if (!cleared && !cellData.isStop && !cellData.leave1 && !cellData.leave2 && !cellData.checkInHr) {
+    if (!cleared && !isStopCell(cellData) && !cellData.checkInHr) {
       toast.error('กรุณาระบุเวลาเข้า หรือเลือกว่าเป็นวันหยุด/วันลา');
       return;
     }
@@ -582,7 +593,7 @@ export default function ScheduleWeekly() {
     const l1 = data.leave1 || '';
     const l2 = data.leave2 || '';
     const hl = data.hrLeave || '';
-    const finalStop = data.isStop || (l1 !== '') || (l2 !== '');
+    const finalStop = isStopCell(data);
     const brDur = data.breakDur;
 
     if (isCellCleared(data)) {
@@ -647,8 +658,7 @@ export default function ScheduleWeekly() {
         const data = scheduleData[`${emp.hrCode}_${ds}`];
         if (data && !isCellCleared(data)) {
           const w = calculateCellWage(emp, data);
-          const isStop = data.isStop || data.leave1 || data.leave2;
-          if (!isStop && data.checkInHr) {
+          if (!isStopCell(data) && data.checkInHr) {
             workingEmpSet.add(emp.hrCode);
             dailyCount[ds]++;
           }
@@ -702,7 +712,7 @@ export default function ScheduleWeekly() {
           const ua = data.useAccum || '';
           const ota = data.otAccum || '0';
           const noteInput = data.otherNote || '';
-          const finalStop = data.isStop || (l1 !== '') || (l2 !== '');
+          const finalStop = isStopCell(data);
 
           let brRange = '';
           if (bs && brDur && brDur !== '0') {
@@ -828,7 +838,7 @@ export default function ScheduleWeekly() {
       );
     }
 
-    if (cell.isStop || cell.leave2) {
+    if (isStopCell(cell)) {
       const reasons = [];
       if (cell.leave1) reasons.push(leaveText(cell.leave1));
       if (cell.leave2) reasons.push(leaveText(cell.leave2));
