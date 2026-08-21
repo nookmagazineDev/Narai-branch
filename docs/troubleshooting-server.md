@@ -79,6 +79,66 @@ curl http://storenarai.dyndns.tv:8787/health
   (ค่าเริ่มต้นอยู่ที่ `lib/upstream.js`)
 - **MySQL**: ตั้ง env `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` บน Vercel (ค่าเริ่มต้นอยู่ที่ `lib/mysql.js`)
 
+## ตารางงาน/นับสต๊อกขึ้น "ชื่อผู้ใช้/รหัสผ่านไม่ถูกต้อง" ทั้งที่รหัสถูก
+
+อาการหลอกที่สุดที่เคยเจอ — **รหัสผ่านถูกต้อง แต่ login ถูกล็อก**
+
+`narai_web` เป็น SQL login ที่ office-server ใช้ต่อทั้ง `narai_hr` (ตารางงาน)
+และ `InventoryNarai` (นับสต๊อก) ถ้ามันล็อก **สองหน้านั้นล่มพร้อมกัน**
+
+เกิดจาก: เปลี่ยนรหัสใน SQL Server แต่ยังไม่ได้แก้ `.env` (หรือแก้แล้วยังไม่รีสตาร์ต)
+office-server จะยิงล็อกอินด้วยรหัสเก่าซ้ำๆ ทุกครั้งที่มีคนเปิดหน้าเว็บ
+ผิดครบตามนโยบาย Windows ภายในไม่กี่วินาที → บัญชีล็อกตัวเอง → ทุกทางเข้าไม่ได้หมด
+รวมถึง `sqlcmd` ด้วย
+
+### เช็คว่าใช่ไหม (รันบนเครื่องที่ออฟฟิศ)
+
+```powershell
+sqlcmd -S localhost -E -W -s"|" -Q "SELECT name, is_disabled, LOGINPROPERTY(name,'IsLocked') AS locked, LOGINPROPERTY(name,'IsMustChange') AS must_change, PWDCOMPARE('<รหัสที่คิดว่าถูก>', password_hash) AS pw_ok FROM sys.sql_logins WHERE name='narai_web'"
+```
+
+`locked = 1` พร้อม `pw_ok = 1` = **ถูกล็อก ไม่ใช่รหัสผิด**
+
+### แก้
+
+```powershell
+sqlcmd -S localhost -E -d master -Q "ALTER LOGIN narai_web WITH CHECK_POLICY = OFF; ALTER LOGIN narai_web WITH PASSWORD = N'<รหัส>'; ALTER LOGIN narai_web ENABLE;"
+Restart-Service NaraiUsageAPI
+```
+
+`CHECK_POLICY = OFF` ล้างสถานะล็อกและปิดการล็อกบัญชีของ login ตัวนี้ถาวร
+**ตั้งใจให้เป็นแบบนั้น** เพราะเป็น login ของโปรแกรมไม่ใช่ของคน โปรแกรมยิงซ้ำอัตโนมัติเสมอ
+ถ้ารหัสไม่ตรงชั่วคราวมันจะล็อกตัวเองแล้วทำให้ระบบล่มทั้งระบบ ซึ่งแย่กว่าความเสี่ยงที่กันได้
+
+### เวลาจะเปลี่ยนรหัส `narai_web` ให้ทำตามลำดับนี้เสมอ
+
+1. `Stop-Service NaraiUsageAPI` — หยุดก่อน อย่าให้มันยิงด้วยรหัสเก่า
+2. เปลี่ยนรหัสใน SQL Server
+3. แก้ `HR_DB_PASSWORD` ใน `office-server/.env`
+4. `Start-Service NaraiUsageAPI`
+
+สลับลำดับเมื่อไหร่ บัญชีจะล็อกตัวเองระหว่างทาง
+
+### ยืนยันว่ากลับมาใช้ได้จริง
+
+```powershell
+cd D:\Narai-branch-main\office-server
+node scripts/test-schedule.mjs
+```
+
+ทดสอบครบวงจรตั้งแต่ยิง API จนไปอ่านแถวจริงในตาราง SQL แล้วลบข้อมูลทดสอบทิ้งให้เอง
+
+### เกร็ดตอนไล่หาสาเหตุ
+
+- `sqlcmd -S localhost` กับ `sqlcmd -S tcp:localhost,1433` อาจให้ผลต่างกัน (คนละโปรโตคอล)
+  ถ้าจะเทียบกับที่ Node เห็น ให้ใช้แบบ `tcp:` เสมอ
+- สาเหตุจริงของ "Login failed" อยู่ในเลข State ของ error log ฝั่งเซิร์ฟเวอร์
+  (ไดรเวอร์จะเห็นแค่ข้อความกลางๆ เพื่อความปลอดภัย):
+  ```powershell
+  sqlcmd -S localhost -E -Q "EXEC xp_readerrorlog 0, 1, N'Login failed', N'narai_web'" -W -s"|"
+  ```
+  State 8 = รหัสผิดจริง, 5 = ไม่มี login นี้, 7 = ถูก disable, 38/40 = เข้าฐานข้อมูลไม่ได้
+
 ## หน้า "ปิดยอดสิ้นเดือน" ขึ้น "เซิร์ฟเวอร์ตอบกลับช้าเกินไป (หมดเวลารอ)"
 
 ข้อความนี้คือ fetch ถูกตัดตอนครบ timeout (`src/services/api.js`) ไม่ใช่เน็ตขาด สาเหตุที่เจอและแก้ไปแล้ว:
