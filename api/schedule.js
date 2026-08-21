@@ -15,7 +15,8 @@ import { USAGE_API_BASE, fetchUpstream, applyCors, replyUpstreamError } from '..
 
 /* action ที่แค่อ่าน — ยิงซ้ำได้ปลอดภัยเมื่อ office-server ตอบ 5xx หรือเน็ตสะดุด
    ที่เหลือคือคำสั่งเขียน ห้ามลองใหม่ให้อัตโนมัติ เพราะคำสั่งอาจถึงปลายทางแล้วแต่คำตอบหายกลางทาง
-   (ตัวตารางเขียนทับตามคีย์อยู่แล้ว แต่ hr_timesheet_log เป็นแบบต่อท้าย จะได้ประวัติซ้ำ) */
+   (ตัวตารางเขียนทับตามคีย์อยู่แล้ว แต่ hr_timesheet_log เป็นแบบต่อท้าย จะได้ประวัติซ้ำ)
+   login ไม่อยู่ในลิสต์นี้ทั้งที่เป็นการตรวจรหัส เพราะมันเขียน hr_user ด้วยตอนย้ายคนเข้ามาจากชีท */
 const READ_ONLY = new Set([
   'ping',
   'getBranches',
@@ -56,9 +57,14 @@ export default async function handler(req, res) {
 
   // ฝั่งหน้าเว็บรอสูงสุด 30 วิต่อหนึ่งครั้ง (TIMEOUT_MS ใน src/services/api.js)
   // ตรงนี้จึงต้องยอมแพ้ก่อนหน้านั้น ไม่งั้นผู้ใช้เห็นแค่ error เน็ตกลางๆ ไม่เห็นสาเหตุจริง
-  const opts = READ_ONLY.has(action)
-    ? { timeoutMs: 12000, retries: 1, deadlineMs: 26000 }
-    : { timeoutMs: 25000, retries: 0 };
+  // login ต้องเผื่อเวลาให้ยาวเป็นพิเศษ: ถ้าคนนั้นยังไม่มีใน hr_user (ล็อกอินครั้งแรกหลังย้าย)
+  // office-server จะไปถามชีทเดิมให้ก่อนแล้วค่อยคัดลอกเข้า SQL ซึ่งช้าตามจังหวะของ Apps Script
+  // และไม่ลองใหม่ให้ เพราะรอบที่ผ่านอาจเขียนผู้ใช้ลงตารางไปแล้ว
+  const opts = action === 'login'
+    ? { timeoutMs: 25000, retries: 0 }
+    : READ_ONLY.has(action)
+      ? { timeoutMs: 12000, retries: 1, deadlineMs: 26000 }
+      : { timeoutMs: 25000, retries: 0 };
 
   const headers = { 'Content-Type': 'application/json' };
   if (process.env.USAGE_API_TOKEN) headers['x-api-token'] = process.env.USAGE_API_TOKEN;

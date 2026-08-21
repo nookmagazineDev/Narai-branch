@@ -50,6 +50,10 @@ const SQL_ACTIONS = new Set([
   'getMonthEndClosing',         // MonthEndClosing
   'saveMonthEndClosing',        // MonthEndClosing
   'saveWaste',                  // Waste
+
+  // กลุ่มที่ 4 — หน้าล็อกอิน (ผู้ใช้ย้ายจากชีท User ไปตาราง hr_user)
+  // ห้ามเรียกด้วย apiCall() ตรงๆ ให้ใช้ loginUser() แทน เพราะมันมีทางถอยเมื่อ office-server ล่ม
+  'login',                      // Login
 ]);
 
 // ---------------------------------------------------------------------------
@@ -156,13 +160,38 @@ export const fetchScheduleEmployees = async (branch, { onRefresh } = {}) => {
   return sqlRes;
 };
 
+/**
+ * เข้าสู่ระบบ — ตรวจกับตาราง hr_user ใน SQL เป็นหลัก
+ *
+ * ห้ามเรียก apiCall('login') ตรงๆ ให้ใช้ฟังก์ชันนี้เสมอ เพราะมีทางถอยที่หน้าเว็บต้องมี
+ *
+ * ทำไมต้องมีทางถอย: ทุก action อื่นถ้า office-server ล่มก็แค่หน้านั้นใช้ไม่ได้
+ * แต่ถ้า "ล็อกอิน" ล่มด้วยคือเข้าระบบไม่ได้เลยสักหน้า รวมถึงหน้าที่ยังวิ่งไปชีทและยังทำงานได้ปกติ
+ * (หน้ารายชื่อพนักงาน หน้ารับของ หน้าใบเบิก) จึงต้องยอมเสียเวลาอีกรอบเพื่อไม่ให้เกิดกรณีนั้น
+ *
+ * แยกให้ชัดว่าล้มเพราะอะไร
+ *   kind 'server' = SQL ตอบชัดว่ารหัสไม่ถูก/บัญชีถูกปิด -> จบตรงนี้ ไม่ต้องถามชีทซ้ำ
+ *                   (ฝั่ง office-server ถามชีทให้แล้วก่อนจะตอบแบบนี้ — ดู login() ใน schedule.js)
+ *   kind 'network' = ต่อ office-server ไม่ได้/ตอบ 5xx -> ยังไม่รู้ว่ารหัสถูกไหม ไปถามชีทเอง
+ */
+export const loginUser = async (username, password) => {
+  try {
+    return await apiCall('login', { username, password }, { via: 'sql', retries: 1 });
+  } catch (err) {
+    if (err.kind === 'server') throw err;
+    console.warn('ล็อกอินผ่าน SQL ไม่สำเร็จ จะลองผ่านชีทแทน:', err?.message || err);
+    return await apiCall('login', { username, password }, { via: 'sheet' });
+  }
+};
+
 export const isSqlBackedAction = (action) => SQL_ACTIONS.has(action);
 
 // ---------------------------------------------------------------------------
 // ผู้ใช้ที่ล็อกอินไว้ตั้งแต่แรก — ฝั่ง SQL ไม่มีการล็อกอินซ้อนอีกชั้น
-// login ยังทำที่เดิม (Apps Script) แล้วเก็บ user ไว้ที่ localStorage 'hr_user'
-// (ดู src/contexts/AuthContext.jsx) ทุกคำสั่งที่วิ่งไป SQL จะแนบ user คนนี้ไปด้วยอัตโนมัติ
-// เพื่อใช้เป็น "คนที่กดบันทึก" และใช้จำกัดสาขาฝั่งเซิร์ฟเวอร์ หน้าเว็บจึงไม่ต้องส่งเอง
+// login ทำครั้งเดียวที่หน้าเข้าสู่ระบบ (loginUser() ด้านล่าง) แล้วเก็บ user ไว้ที่
+// localStorage 'hr_user' (ดู src/contexts/AuthContext.jsx) ทุกคำสั่งที่วิ่งไป SQL
+// จะแนบ user คนนี้ไปด้วยอัตโนมัติ เพื่อใช้เป็น "คนที่กดบันทึก" และใช้จำกัดสาขาฝั่งเซิร์ฟเวอร์
+// หน้าเว็บจึงไม่ต้องส่งเอง
 // ---------------------------------------------------------------------------
 const sessionUser = () => {
   try {

@@ -65,9 +65,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_employee      TO narai_web;
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_timesheet     TO narai_web;
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_timesheet_log TO narai_web;
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_daily_sales   TO narai_web;
+-- ผู้ใช้เว็บ (หน้าล็อกอิน) — ต้องเขียนได้ด้วย เพราะระบบคัดลอกผู้ใช้จากชีทเข้ามาเอง
+-- ตอนล็อกอินครั้งแรก และเข้ารหัสรหัสผ่านที่ยังเป็นข้อความล้วนทับให้
+GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_user          TO narai_web;
 GO
 
--- เช็คผล: ต้องได้ narai_hr และสิทธิ์ครบ 5 ตาราง ตารางละ 4 สิทธิ์ = 20 บรรทัด
+-- เช็คผล: ต้องได้ narai_hr และสิทธิ์ครบ 6 ตาราง ตารางละ 4 สิทธิ์ = 24 บรรทัด
 SELECT DB_NAME() AS current_db;
 GO
 SELECT o.name AS table_name, p.permission_name

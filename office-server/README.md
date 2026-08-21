@@ -28,6 +28,11 @@
 ต้องตั้ง `HR_DB_USER` / `HR_DB_PASSWORD` ใน `.env` ก่อนใช้งาน (ดู `.env.example`) แล้ว `Restart-Service NaraiUsageAPI`
 ทดสอบว่าบันทึกลงฐานข้อมูลได้จริงด้วย `node scripts/test-schedule.mjs`
 
+**หน้าล็อกอินก็มาทางนี้แล้ว** (action `login` → ตาราง `hr_user`) เป็น action เดียวที่เรียกได้โดยยังไม่มี `_user`
+รหัสผ่านเก็บเป็นค่าที่ย้อนกลับไม่ได้ ไม่ใช่ข้อความล้วนแบบในชีท — ทดสอบด้วย `node scripts/test-login.mjs`
+เพิ่มผู้ใช้/รีเซ็ตรหัสด้วยมือ: `node scripts/hash-password.mjs "รหัสที่ต้องการ"`
+รายละเอียดทั้งหมดอยู่ใน [docs/hr-sql-migration.md](../docs/hr-sql-migration.md)
+
 ## จุดเด่น
 - **Cache รายวัน**: ตอนสตาร์ทจะอุ่น cache ย้อนหลัง ~70 วัน (เบื้องหลัง ~3-4 นาที) หลังจากนั้น query เร็ว <10ms
 - ข้อมูล "วันนี้" รีเฟรชอัตโนมัติทุก 20 นาที
@@ -101,6 +106,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
 - `WARM_DAYS` (จำนวนวันที่อุ่น cache, ค่าเริ่มต้น 70)
 - `SALES_BASE` (URL ของ ctranbetweendate)
 - `UPNP=off` ถ้าจะปิด UPnP (กรณี forward พอร์ตเองที่ router)
+- `SHEET_LOGIN_URL=off` ปิดการถามชีท User ตอนล็อกอิน (ตั้งเมื่อผู้ใช้ย้ายเข้า `hr_user` ครบแล้ว)
 
 ## Routes
 - `GET /usagebymenu?branch&start&end` — ยอดใช้วัตถุดิบแยกตามเมนู

@@ -18,6 +18,7 @@ import sql from 'mssql';
 import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-db.js';
 import { STOCK_ACTIONS } from './stock.js';
 import { sessionOf, branchFor, branchGroup, sameBranch } from './hr-session.js';
+import { hashPassword, verifyPassword } from './hr-password.js';
 
 export { isConfigured };
 
@@ -100,6 +101,174 @@ const HISTORY_COLUMNS = `
   wage, status, leave_note, unpaid_leave, other_note, work_station, ot_approver, updated_at`;
 
 /* ------------------------------- actions -------------------------------- */
+
+/* ------------------------------- ล็อกอิน --------------------------------
+   ผู้ใช้เว็บย้ายจากชีท User มาอยู่ในตาราง dbo.hr_user แล้ว (ดู docs/schema-hr.sql)
+
+   สิ่งที่เปลี่ยนไปจากชีท: ไม่เก็บรหัสผ่านเป็นข้อความล้วนอีกแล้ว เก็บเป็นค่าที่ย้อนกลับไม่ได้
+   (scrypt — ดู hr-password.js) ตารางหลุดออกไปก็เอาไปล็อกอินไม่ได้
+
+   ชีทยังเป็น "ทางถอย" ไว้ชั่วคราว ไม่ใช่ตัวหลัก
+   ---------------------------------------------------------------------
+   ตอนเปิดใช้ครั้งแรก ตาราง hr_user ยังว่าง ถ้าตัดชีททิ้งทันทีคือทุกสาขาล็อกอินไม่ได้พร้อมกัน
+   ทั้งระบบหยุดในนาทีเดียว (เคสเดียวกับตอนเปิด getScheduleEmployees ทั้งที่ hr_employee ยังว่าง
+   แล้วหน้านับสต๊อกใช้ไม่ได้ทั้งหน้า — ดู SQL_ACTIONS ใน src/services/api.js)
+
+   จึงทำเป็น: หาใน SQL ก่อน ไม่เจอ (หรือรหัสไม่ตรง) ค่อยถามชีท ถ้าชีทผ่านก็คัดลอกเข้ามาให้เลย
+   พร้อมเข้ารหัสรหัสผ่าน ครั้งต่อไปคนนั้นจะเข้าทาง SQL ล้วนๆ ไม่แตะชีทอีก
+   -> ย้ายเองทีละคนตามการใช้งานจริง ไม่ต้องรันสคริปต์ย้ายข้อมูล ไม่มีช่วงที่ใครล็อกอินไม่ได้
+
+   ทำไมไม่เขียนสคริปต์ย้ายเหมือนพนักงาน/ตารางงาน: สคริปต์พวกนั้นอ่านชีทผ่าน gviz ซึ่งต้องตั้งชีท
+   เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" ก่อน — ชีท User มีรหัสผ่านของทุกสาขาอยู่ การเปิดลิงก์สาธารณะ
+   แม้ชั่วคราวคือเอารหัสทั้งหมดไปวางไว้กลางแจ้ง จึงย้ายผ่านการล็อกอินจริงแทน
+
+   เมื่อทุกคนล็อกอินครบแล้ว ปิดทางถอยได้ด้วยการตั้ง SHEET_LOGIN_URL=off ใน .env
+------------------------------------------------------------------------- */
+
+/* URL ของ Apps Script เดิม (ตัวเดียวกับ SCRIPT_URL ใน src/services/api.js ซึ่งเปิดเผยอยู่แล้ว
+   เพราะอยู่ในโค้ดหน้าเว็บ) ใส่ค่าเริ่มต้นไว้เพื่อไม่ให้ "ลืมตั้ง .env" กลายเป็นล็อกอินไม่ได้ทั้งระบบ
+   ตั้ง SHEET_LOGIN_URL=off เมื่อย้ายครบแล้วและต้องการตัดชีทออกจากเส้นทางล็อกอินถาวร */
+const DEFAULT_SHEET_LOGIN_URL =
+  'https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec';
+
+function sheetLoginUrl() {
+  const v = str(process.env.SHEET_LOGIN_URL || DEFAULT_SHEET_LOGIN_URL);
+  return /^(off|none|disabled|0)$/i.test(v) ? '' : v;
+}
+
+/**
+ * ถามชีทเดิมว่าชื่อ/รหัสนี้ผ่านไหม — ใช้เฉพาะตอน SQL ยังไม่มีคนนี้ (หรือรหัสในชีทถูกแก้)
+ * @returns {Promise<{branch: string, outletId: string}|null>} null = ชีทบอกว่าไม่ผ่าน
+ * @throws  เมื่อติดต่อชีทไม่ได้ — ต่างจาก "ไม่ผ่าน" คนละเรื่องกัน ผู้เรียกต้องแยกให้ออก
+ */
+async function sheetLogin(username, password) {
+  const url = sheetLoginUrl();
+  if (!url) return null;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    // ไม่ใส่ Content-Type ให้เป็น text/plain เหมือนที่หน้าเว็บทำ (GAS ไม่รองรับ preflight)
+    body: JSON.stringify({ action: 'login', username, password }),
+    redirect: 'follow',
+    signal: AbortSignal.timeout(20000),
+  });
+
+  const text = await res.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    // GAS ล่ม/ติดลิมิตจะตอบเป็นหน้า HTML — ถือเป็น "ติดต่อไม่ได้" ไม่ใช่ "รหัสผิด"
+    throw new Error('ชีทผู้ใช้ตอบกลับมาไม่ใช่ JSON (Apps Script อาจล่มหรือถูกจำกัดชั่วคราว)');
+  }
+
+  if (payload?.status === 'success' && payload.data) {
+    return { branch: str(payload.data.branch), outletId: str(payload.data.outletId) };
+  }
+  return null; // ชีทตอบชัดว่าชื่อ/รหัสไม่ถูก
+}
+
+/** เพิ่ม/อัปเดตผู้ใช้หนึ่งคนใน hr_user พร้อมเข้ารหัสรหัสผ่าน */
+async function upsertUser({ username, password, branch, outletId, displayName }) {
+  const password_hash = await hashPassword(password);
+  await withTransaction(async (run) => {
+    await run(
+      `MERGE dbo.hr_user WITH (HOLDLOCK) AS t
+         USING (SELECT @username AS username) AS s
+            ON t.username = s.username
+       WHEN MATCHED THEN UPDATE SET
+            password_hash = @hash,
+            branch        = COALESCE(NULLIF(@branch, N''), t.branch),
+            outlet_id     = COALESCE(NULLIF(@outletId, N''), t.outlet_id),
+            display_name  = COALESCE(NULLIF(@displayName, N''), t.display_name),
+            last_login_at = SYSDATETIME(),
+            updated_at    = SYSDATETIME()
+       WHEN NOT MATCHED THEN
+            INSERT (username, password_hash, branch, outlet_id, display_name, last_login_at)
+            VALUES (@username, @hash, @branch, NULLIF(@outletId, N''), NULLIF(@displayName, N''), SYSDATETIME());`,
+      {
+        username: { type: sql.NVarChar(100), value: username },
+        hash: { type: sql.NVarChar(255), value: password_hash },
+        branch: { type: sql.NVarChar(50), value: branch },
+        outletId: { type: sql.NVarChar(50), value: outletId || '' },
+        displayName: { type: sql.NVarChar(150), value: displayName || '' },
+      }
+    );
+  });
+}
+
+/** รูปแบบที่หน้าเว็บเก็บลง localStorage['hr_user'] — ต้องตรงกับที่ Apps Script เคยตอบ */
+const userPayload = (row) => ({
+  username: row.username,
+  branch: row.branch || '',
+  outletId: row.outlet_id ?? '',
+  name: row.display_name || '',
+});
+
+/**
+ * ตรวจชื่อผู้ใช้/รหัสผ่าน — action เดียวที่เรียกได้โดยยังไม่มีเซสชัน (ดู NO_SESSION ท้ายไฟล์)
+ *
+ * ตอบข้อความเดียวกันทั้งกรณี "ไม่มีชื่อนี้" กับ "รหัสผิด" โดยตั้งใจ
+ * ไม่งั้นคนที่ไล่เดาจะรู้ได้ว่าชื่อผู้ใช้ไหนมีอยู่จริง แล้วไปทุ่มเดารหัสเฉพาะชื่อนั้น
+ */
+async function login(body) {
+  const username = str(body.username);
+  const password = String(body.password ?? '');
+  if (!username || !password) {
+    throw Object.assign(new Error('กรุณากรอกชื่อผู้ใช้งานและรหัสผ่าน'), { badRequest: true });
+  }
+
+  const invalid = () =>
+    Object.assign(new Error('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง'), { badRequest: true });
+
+  const rows = await queryRead(
+    `SELECT username, password_hash, branch, outlet_id, display_name, is_active
+       FROM dbo.hr_user WHERE username = @username`,
+    { username: { type: sql.NVarChar(100), value: username } }
+  );
+  const row = rows[0] || null;
+
+  if (row && !row.is_active) {
+    // ปิดการใช้งานไว้ = ห้ามเข้า และห้ามไปถามชีทต่อ ไม่งั้นการปิดบัญชีจะไม่มีผลจริง
+    throw Object.assign(new Error('บัญชีนี้ถูกปิดการใช้งาน กรุณาติดต่อผู้ดูแลระบบ'), { badRequest: true });
+  }
+
+  if (row) {
+    const { ok, needsRehash } = await verifyPassword(password, row.password_hash);
+    if (ok) {
+      if (needsRehash) {
+        // รหัสที่แอดมินพิมพ์ลงตารางเป็นข้อความล้วน -> เข้ารหัสทับให้ตอนนี้เลย
+        await upsertUser({ username: row.username, password, branch: row.branch, outletId: row.outlet_id, displayName: row.display_name });
+      } else {
+        await withTransaction((run) =>
+          run(`UPDATE dbo.hr_user SET last_login_at = SYSDATETIME() WHERE username = @username`,
+            { username: { type: sql.NVarChar(100), value: username } })
+        );
+      }
+      return userPayload(row);
+    }
+  }
+
+  // ไม่มีชื่อนี้ใน SQL หรือรหัสไม่ตรง (เช่น เพิ่งไปแก้รหัสในชีท) -> ถามชีทเป็นทางถอย
+  const fromSheet = await sheetLogin(username, password);
+  if (!fromSheet) throw invalid();
+
+  await upsertUser({
+    username,
+    password,
+    branch: fromSheet.branch,
+    outletId: fromSheet.outletId,
+    displayName: row?.display_name,
+  });
+  console.info(`คัดลอกผู้ใช้ "${username}" (สาขา ${fromSheet.branch}) จากชีทเข้า hr_user แล้ว`);
+
+  return {
+    username,
+    branch: fromSheet.branch,
+    outletId: fromSheet.outletId,
+    name: row?.display_name || '',
+  };
+}
 
 /** รายชื่อสาขา — ตอบเป็น [{name, outletId}] ให้ตรงกับที่หน้าเว็บอ่าน (br.name) */
 async function getBranches(body, session) {
@@ -567,6 +736,7 @@ async function ping() {
 
 const ACTIONS = {
   ping,
+  login,
   getBranches,
   getBranchList: getBranches,
   getScheduleEmployees,
@@ -582,6 +752,10 @@ const ACTIONS = {
   // เพราะฝั่ง Vercel มีตัวส่งต่ออยู่แล้วที่ /api/schedule ไม่ต้องเพิ่มไฟล์ใหม่บน Vercel
   ...STOCK_ACTIONS,
 };
+
+/* action ที่เรียกได้ทั้งที่ยังไม่ได้ล็อกอิน — มีตัวเดียวคือ login เอง
+   (ที่เหลือถ้าไม่มี _user ต้องเด้ง 401 เสมอ ไม่งั้นการจำกัดสาขาจะข้ามได้ด้วยการไม่ส่ง _user มา) */
+const NO_SESSION = new Set(['login']);
 
 /**
  * endpoint เดียวรวมทุก action — ผูกกับ app.post('/schedule') ใน server.js
@@ -603,9 +777,9 @@ export async function scheduleHandler(req, res) {
     });
   }
 
-  // ใช้ user ที่ล็อกอินเข้าระบบมาตั้งแต่แรก ไม่มีการล็อกอินซ้ำที่นี่
+  // ทุก action ใช้ user ที่ล็อกอินไว้แล้ว ยกเว้น login เองที่เป็นตัวออก user ให้ตั้งแต่แรก
   const session = sessionOf(body);
-  if (!session) {
+  if (!session && !NO_SESSION.has(action)) {
     return res.status(401).json({ status: 'error', message: 'เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่' });
   }
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { apiCall } from '../services/api';
+import { loginUser } from '../services/api';
 import toast from 'react-hot-toast';
 import { LogIn, User, Lock } from 'lucide-react';
 
@@ -21,7 +21,7 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const response = await apiCall('login', { username, password });
+      const response = await loginUser(username, password);
       if (response.status === 'success') {
         login(response.data);
         toast.success(`เข้าสู่ระบบสำเร็จ สาขา: ${response.data.branch}`);

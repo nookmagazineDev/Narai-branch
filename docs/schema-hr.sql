@@ -41,6 +41,32 @@ CREATE TABLE dbo.hr_branch (
 );
 GO
 
+/* ========================= ผู้ใช้เว็บ (หน้าล็อกอิน) ========================= */
+/* ย้ายมาจากชีท User — คอลัมน์ A/B/C/D เดิมคือ username / password / สาขา / outlet id
+   ต่างจากชีทหนึ่งอย่างที่สำคัญ: ไม่เก็บรหัสผ่านเป็นข้อความล้วนอีกแล้ว
+   คอลัมน์ password_hash เก็บค่าที่ย้อนกลับไม่ได้ (scrypt — ดู office-server/hr-password.js)
+   ข้อมูลตารางนี้หลุดออกไปก็เอาไปล็อกอินไม่ได้ ต่างจากชีทที่ใครเปิดได้ก็อ่านรหัสได้ทุกสาขา
+
+   ไม่ต้องกรอกเองทีละคน: ครั้งแรกที่ใครล็อกอินแล้วยังไม่มีชื่อในตารางนี้
+   ระบบจะไปถามชีทให้ตามเดิม แล้วคัดลอกเข้ามาพร้อมเข้ารหัสรหัสผ่านให้เอง
+   (ดูหัวข้อ "การล็อกอิน" ใน docs/hr-sql-migration.md)
+
+   branch = 'all' คือผู้ใช้ที่เห็นได้ทุกสาขา ใช้กติกาเดียวกับ hr-session.js */
+IF OBJECT_ID(N'dbo.hr_user', N'U') IS NULL
+CREATE TABLE dbo.hr_user (
+    username      NVARCHAR(100) NOT NULL,       -- ชื่อผู้ใช้ที่กรอกหน้าล็อกอิน (ชีทคอลัมน์ A)
+    password_hash NVARCHAR(255) NOT NULL,       -- scrypt$... — ห้ามเก็บรหัสจริง
+    branch        NVARCHAR(50)  NOT NULL,       -- รหัสสาขา หรือ 'all' (ชีทคอลัมน์ C)
+    outlet_id     NVARCHAR(50)  NULL,           -- รหัสสาขาฝั่ง POS (ชีทคอลัมน์ D)
+    display_name  NVARCHAR(150) NULL,           -- ชื่อที่แสดง (ชีทเดิมไม่มี ปล่อยว่างได้)
+    is_active     BIT           NOT NULL CONSTRAINT DF_hr_user_is_active DEFAULT (1),
+    last_login_at DATETIME2(0)  NULL,
+    created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_user_created_at DEFAULT (SYSDATETIME()),
+    updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_user_updated_at DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_hr_user PRIMARY KEY (username)
+);
+GO
+
 /* ============================== พนักงาน ================================ */
 IF OBJECT_ID(N'dbo.hr_employee', N'U') IS NULL
 CREATE TABLE dbo.hr_employee (
