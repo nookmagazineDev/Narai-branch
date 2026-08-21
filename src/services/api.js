@@ -161,6 +161,16 @@ export const fetchScheduleEmployees = async (branch, { onRefresh } = {}) => {
 };
 
 /**
+ * office-server เวอร์ชันเก่าที่ยังไม่มี action 'login' ตอบ 400 พร้อมข้อความนี้
+ *
+ * 400 ปกติแปลว่า "เซิร์ฟเวอร์ตอบชัดแล้วว่าทำไม่ได้" ซึ่งไม่ควรถามชีทซ้ำ
+ * แต่กรณีนี้คนละเรื่อง — มันแปลว่าเครื่องที่ออฟฟิศยังไม่ได้อัปเดตโค้ด ไม่ใช่ว่ารหัสผิด
+ * ถ้าไม่แยกออก การ deploy หน้าเว็บก่อนอัปเดตเครื่องออฟฟิศจะทำให้ทุกสาขาล็อกอินไม่ได้พร้อมกัน
+ * แยกไว้แล้วจึง deploy สองฝั่งลำดับไหนก่อนก็ได้
+ */
+const isUnknownAction = (err) => /ไม่รู้จักคำสั่ง/.test(err?.message || '');
+
+/**
  * เข้าสู่ระบบ — ตรวจกับตาราง hr_user ใน SQL เป็นหลัก
  *
  * ห้ามเรียก apiCall('login') ตรงๆ ให้ใช้ฟังก์ชันนี้เสมอ เพราะมีทางถอยที่หน้าเว็บต้องมี
@@ -178,7 +188,7 @@ export const loginUser = async (username, password) => {
   try {
     return await apiCall('login', { username, password }, { via: 'sql', retries: 1 });
   } catch (err) {
-    if (err.kind === 'server') throw err;
+    if (err.kind === 'server' && !isUnknownAction(err)) throw err;
     console.warn('ล็อกอินผ่าน SQL ไม่สำเร็จ จะลองผ่านชีทแทน:', err?.message || err);
     return await apiCall('login', { username, password }, { via: 'sheet' });
   }
