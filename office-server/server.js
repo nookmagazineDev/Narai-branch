@@ -8,6 +8,7 @@ import express from 'express';
 import natUpnp from 'nat-upnp';
 import sql from 'mssql';
 import { scheduleHandler } from './schedule.js';
+import { branchGroup } from './hr-session.js';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
@@ -741,7 +742,17 @@ app.get('/attendance', async (req, res) => {
       .input('start', sql.VarChar(10), start)
       .input('endEx', sql.VarChar(10), endExclusive);
     let where = 'punch_time >= CONVERT(datetime2, @start, 23) AND punch_time < CONVERT(datetime2, @endEx, 23)';
-    if (branch) { rq.input('branch', sql.NVarChar(64), branch); where += ' AND UPPER(area_alias) = @branch'; }
+    if (branch) {
+      // เครื่องสแกนตั้ง area_alias ไว้ตามชื่อที่ POS/ชีทใช้ ซึ่งบางสาขาไม่ตรงกับรหัสที่ล็อกอิน
+      // (เช่น ล็อกอิน zjp แต่เครื่องสแกนเขียนว่า SJP — ร้านเดียวกัน outlet 7)
+      // ถ้าเทียบตรงตัวจะไม่เจอประวัติสแกนเลยทั้งที่มีข้อมูลอยู่ จึงรับทุกรหัสในกลุ่ม
+      const group = branchGroup(branch);
+      const names = group.map((code, i) => {
+        rq.input(`brg${i}`, sql.NVarChar(64), code.toUpperCase());
+        return `@brg${i}`;
+      });
+      where += ` AND UPPER(area_alias) IN (${names.join(', ')})`;
+    }
     if (req.query.emp) { rq.input('emp', sql.NVarChar(64), String(req.query.emp).trim()); where += ' AND emp_code = @emp'; }
 
     // แปลงเวลาเป็นข้อความในฝั่ง SQL (style 120 = yyyy-mm-dd hh:mi:ss)

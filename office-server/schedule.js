@@ -17,7 +17,7 @@
 import sql from 'mssql';
 import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-db.js';
 import { STOCK_ACTIONS } from './stock.js';
-import { sessionOf, branchFor } from './hr-session.js';
+import { sessionOf, branchFor, branchGroup, sameBranch } from './hr-session.js';
 
 export { isConfigured };
 
@@ -29,6 +29,26 @@ const POSITION_PRIORITY = {
   'Pre.Sup': 7, 'แคชเชียร์': 8, 'บริการ': 9, 'หัวหน้ากุ๊ก': 10, 'กุ๊ก': 11, 'ล้างจาน': 12,
 };
 const positionPriority = (p) => POSITION_PRIORITY[String(p || '').trim()] || 99;
+
+/**
+ * เงื่อนไขสาขาที่ครอบคลุมรหัสพี่น้องด้วย (เช่น zjp กับ sjp คือร้านเดียวกัน)
+ *
+ * ใช้กับ "การอ่าน" เท่านั้น — ข้อมูลเก่าถูกลงไว้ด้วยรหัสไหนก็เห็นครบ
+ * ส่วนการเขียนยังใช้รหัสเดียวที่หน้าเว็บส่งมา ไม่แปลง
+ *
+ * ไม่ครอบด้วย LOWER() เพราะ collation ของฐานข้อมูลไม่สนตัวพิมพ์อยู่แล้ว
+ * และถ้าครอบจะใช้ index ของคอลัมน์ branch ไม่ได้
+ *
+ * @param {string} branch รหัสสาขาที่ขอมา
+ * @param {string} [col] ชื่อคอลัมน์ (เผื่อมี alias ตาราง เช่น 't.branch')
+ */
+function branchScope(branch, col = 'branch') {
+  const group = branchGroup(branch);
+  const names = group.map((_, i) => `@brg${i}`);
+  const params = {};
+  group.forEach((b, i) => { params[`brg${i}`] = { type: sql.NVarChar(50), value: b }; });
+  return { clause: `${col} IN (${names.join(', ')})`, params };
+}
 
 const CLEAR_NOTE = 'ล้างข้อมูล'; // ค่าที่ฝั่งเว็บส่งมาเมื่อสั่งล้างช่องนั้นทิ้ง
 
@@ -86,21 +106,31 @@ async function getBranches(body, session) {
   const rows = await queryRead(
     `SELECT branch, branch_name, outlet_id FROM dbo.hr_branch WHERE is_active = 1 ORDER BY branch`
   );
+  const seen = new Set();
   return rows
-    // user ที่ไม่ใช่สิทธิ์ all เห็นแค่สาขาตัวเอง
-    .filter((r) => !session || session.isAll || str(r.branch).toLowerCase() === session.branch.toLowerCase())
+    // user ที่ไม่ใช่สิทธิ์ all เห็นแค่สาขาตัวเอง (รวมรหัสพี่น้องที่เป็นร้านเดียวกัน)
+    .filter((r) => !session || session.isAll || sameBranch(r.branch, session.branch))
+    // รหัสที่เป็นร้านเดียวกันให้เหลือรายการเดียวในดรอปดาวน์ ไม่งั้นผู้ใช้สิทธิ์ all
+    // จะเห็น zjp กับ sjp เป็นสองสาขาทั้งที่เป็นร้านเดียว แล้วเลือกผิดกันได้
+    .filter((r) => {
+      const key = branchGroup(r.branch).slice().sort().join('|');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((r) => ({ name: r.branch, fullName: r.branch_name || r.branch, outletId: r.outlet_id ?? null }));
 }
 
 /** พนักงานที่ยังทำงานอยู่ของสาขานั้น เรียงตามลำดับตำแหน่งแบบเดิม */
 async function getScheduleEmployees(body, session) {
   const branch = branchFor(session, body.branch);
+  const scope = branchScope(branch);
   if (!branch) return [];
   const rows = await queryRead(
     `SELECT hr_code, full_name, branch, emp_type, position, daily_wage
        FROM dbo.hr_employee
-      WHERE branch = @branch AND status = N'ทำงาน'`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+      WHERE ${scope.clause} AND status = N'ทำงาน'`,
+    scope.params
   );
   return rows
     .map((r) => ({
@@ -128,6 +158,7 @@ async function getScheduleEmployees(body, session) {
  */
 async function syncEmployees(body, session) {
   const branch = branchFor(session, body.branch);
+  const scope = branchScope(branch);
   const list = Array.isArray(body.employees) ? body.employees : [];
   if (!branch || list.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีข้อมูล' };
 
@@ -143,8 +174,8 @@ async function syncEmployees(body, session) {
   if (rows.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีรหัส/ชื่อที่ใช้ได้' };
 
   const activeNow = await queryRead(
-    `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE branch = @branch AND status = N'ทำงาน'`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE ${scope.clause} AND status = N'ทำงาน'`,
+    scope.params
   );
   const before = Number(activeNow[0]?.n || 0);
   // รายชื่อหดลงเกินครึ่ง = น่าจะได้ข้อมูลมาไม่ครบ อย่าไปตั้งใครเป็นลาออก
@@ -182,9 +213,9 @@ async function syncEmployees(body, session) {
       const r = await run(
         `UPDATE dbo.hr_employee
             SET status = N'ลาออก', updated_at = SYSDATETIME()
-          WHERE branch = @branch AND status = N'ทำงาน'
+          WHERE ${scope.clause} AND status = N'ทำงาน'
             AND hr_code NOT IN (SELECT hr_code FROM OPENJSON(@rows) WITH (hr_code NVARCHAR(30) '$.hrCode'));`,
-        { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
+        { rows: rowsJson, ...scope.params }
       );
       resigned = r.rowsAffected?.[0] || 0;
     }
@@ -200,9 +231,13 @@ async function syncEmployees(body, session) {
 /** เป้าขาย/ค่าแรงสูงสุดต่อวันของสาขา */
 async function getBranchStats(body, session) {
   const branch = branchFor(session, body.branch);
+  const scope = branchScope(branch);
   const rows = await queryRead(
-    `SELECT daily_target, monthly_target, max_wage FROM dbo.hr_branch WHERE branch = @branch`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT TOP (1) daily_target, monthly_target, max_wage
+       FROM dbo.hr_branch
+      WHERE ${scope.clause}
+      ORDER BY CASE WHEN daily_target > 0 THEN 0 ELSE 1 END`,
+    scope.params
   );
   const r = rows[0];
   return {
@@ -215,11 +250,13 @@ async function getBranchStats(body, session) {
 /** ยอดขายของวัน (หน้าประวัติใช้เทียบกับค่าแรง) */
 async function getDailySales(body, session) {
   const branch = branchFor(session, body.searchBranch || body.branch);
+  const scope = branchScope(branch);
   const date = str(body.searchDateStr || body.searchDate || body.date);
   if (!isDateStr(date)) return { sales: 0 };
   const rows = await queryRead(
-    `SELECT sales FROM dbo.hr_daily_sales WHERE sale_date = @d AND branch = @branch`,
-    { d: { type: sql.Date, value: date }, branch: { type: sql.NVarChar(50), value: branch } }
+    `SELECT TOP (1) sales FROM dbo.hr_daily_sales
+      WHERE sale_date = @d AND ${scope.clause} ORDER BY sales DESC`,
+    { d: { type: sql.Date, value: date }, ...scope.params }
   );
   return { sales: rows[0] ? Number(rows[0].sales) : 0 };
 }
@@ -231,6 +268,7 @@ async function getDailySales(body, session) {
  */
 async function getHistoryData(body, session) {
   const branch = branchFor(session, body.branch || body.searchBranch);
+  const scope = branchScope(branch);
   if (!branch) return [];
 
   const single = str(body.searchDate);
@@ -243,9 +281,9 @@ async function getHistoryData(body, session) {
   const rows = await queryRead(
     `SELECT ${HISTORY_COLUMNS}
        FROM dbo.hr_timesheet
-      WHERE branch = @branch AND work_date BETWEEN @start AND @end`,
+      WHERE ${scope.clause} AND work_date BETWEEN @start AND @end`,
     {
-      branch: { type: sql.NVarChar(50), value: branch },
+      ...scope.params,
       start: { type: sql.Date, value: start },
       end: { type: sql.Date, value: end },
     }
@@ -417,6 +455,7 @@ async function saveTimesheet(body, session) {
 async function updateOTApprovalBulk(body, session) {
   const dateStr = str(body.dateStr);
   const branch = branchFor(session, body.branch);
+  const scope = branchScope(branch);
   const updates = Array.isArray(body.updates) ? body.updates : [];
   // ผู้อนุมัติ = user ที่ล็อกอินไว้เสมอ จะได้ปลอมชื่อผู้อนุมัติจากหน้าเว็บไม่ได้
   const approver = str(session?.username) || str(body.approverName) || 'Admin';
@@ -436,11 +475,11 @@ async function updateOTApprovalBulk(body, session) {
       const r = await run(
         `UPDATE dbo.hr_timesheet
             SET ot_approver = @approver, updated_at = SYSDATETIME()
-          WHERE work_date = @d AND branch = @branch
+          WHERE work_date = @d AND ${scope.clause}
             AND (${hrCode ? 'hr_code = @hrCode' : 'emp_name = @name'})`,
         {
+          ...scope.params,
           d: { type: sql.Date, value: dateStr },
-          branch: { type: sql.NVarChar(50), value: branch },
           hrCode: { type: sql.NVarChar(30), value: hrCode || null },
           name: { type: sql.NVarChar(150), value: name || null },
           approver: { type: sql.NVarChar(100), value: value },
@@ -469,6 +508,7 @@ async function updateOTApprovalBulk(body, session) {
 async function updateWorkStation(body, session) {
   const dateStr = str(body.dateStr);
   const branch = branchFor(session, body.branch);
+  const scope = branchScope(branch);
   const updates = Array.isArray(body.updates) ? body.updates : [];
   if (!isDateStr(dateStr) || !branch) {
     throw Object.assign(new Error('ระบุวันที่หรือสาขาไม่ถูกต้อง'), { badRequest: true });
@@ -483,11 +523,11 @@ async function updateWorkStation(body, session) {
       const r = await run(
         `UPDATE dbo.hr_timesheet
             SET work_station = @station, updated_at = SYSDATETIME()
-          WHERE work_date = @d AND branch = @branch
+          WHERE work_date = @d AND ${scope.clause}
             AND (${hrCode ? 'hr_code = @hrCode' : 'emp_name = @name'})`,
         {
+          ...scope.params,
           d: { type: sql.Date, value: dateStr },
-          branch: { type: sql.NVarChar(50), value: branch },
           hrCode: { type: sql.NVarChar(30), value: hrCode || null },
           name: { type: sql.NVarChar(150), value: name || null },
           station: { type: sql.NVarChar(100), value: textOrNull(u.station) },
