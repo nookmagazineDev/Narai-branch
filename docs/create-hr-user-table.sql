@@ -1,4 +1,4 @@
--- สร้างตาราง hr_user สำหรับหน้าล็อกอิน — รันไฟล์นี้ไฟล์เดียวจบ
+﻿-- สร้างตาราง hr_user สำหรับหน้าล็อกอิน — รันไฟล์นี้ไฟล์เดียวจบ
 -- ============================================================================
 -- ใช้ตอนที่ฐานข้อมูล narai_hr มีอยู่แล้ว (ตารางงาน/พนักงานใช้งานอยู่) แล้วต้องการ
 -- เพิ่มเฉพาะตารางของหน้าล็อกอิน ไม่ต้องรัน docs\schema-hr.sql ทั้งไฟล์
@@ -32,9 +32,9 @@
 USE narai_hr;
 GO
 
-/* ---------------------------- 1) สร้างตาราง ---------------------------- */
-/* คอลัมน์ A/B/C/D ของชีท User เดิม = username / password / สาขา / outlet id
-   branch = 'all' คือผู้ใช้ที่เห็นได้ทุกสาขา ใช้กติกาเดียวกับ office-server/hr-session.js */
+-- ---------------------------- 1) สร้างตาราง ----------------------------
+-- คอลัมน์ A/B/C/D ของชีท User เดิม = username / password / สาขา / outlet id
+-- branch = 'all' คือผู้ใช้ที่เห็นได้ทุกสาขา ใช้กติกาเดียวกับ office-server/hr-session.js
 IF OBJECT_ID(N'dbo.hr_user', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.hr_user (
@@ -49,29 +49,29 @@ BEGIN
         updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_user_updated_at DEFAULT (SYSDATETIME()),
         CONSTRAINT PK_hr_user PRIMARY KEY (username)
     );
-    PRINT 'สร้างตาราง dbo.hr_user แล้ว';
+    PRINT N'สร้างตาราง dbo.hr_user แล้ว';
 END
 ELSE
-    PRINT 'มีตาราง dbo.hr_user อยู่แล้ว — ข้ามให้ (ข้อมูลเดิมไม่ถูกแตะ)';
+    PRINT N'มีตาราง dbo.hr_user อยู่แล้ว — ข้ามให้ (ข้อมูลเดิมไม่ถูกแตะ)';
 GO
 
-/* --------------------- 2) ให้สิทธิ์ login ที่เว็บใช้ --------------------- */
-/* ต้องให้ INSERT/UPDATE ด้วย ไม่ใช่แค่ SELECT เพราะระบบคัดลอกผู้ใช้จากชีทเข้ามาเอง
-   ตอนล็อกอินครั้งแรก และเข้ารหัสรหัสผ่านที่ยังเป็นข้อความล้วนทับให้
-
-   ข้ามให้เองถ้ายังไม่มี narai_web (เครื่องที่ยังใช้ sa อยู่) — ไม่ให้สคริปต์ล้มทั้งไฟล์
-   วิธีสร้าง narai_web อยู่ใน docs\create-app-login.sql */
+-- --------------------- 2) ให้สิทธิ์ login ที่เว็บใช้ ---------------------
+-- ต้องให้ INSERT/UPDATE ด้วย ไม่ใช่แค่ SELECT เพราะระบบคัดลอกผู้ใช้จากชีทเข้ามาเอง
+-- ตอนล็อกอินครั้งแรก และเข้ารหัสรหัสผ่านที่ยังเป็นข้อความล้วนทับให้
+-- 
+-- ข้ามให้เองถ้ายังไม่มี narai_web (เครื่องที่ยังใช้ sa อยู่) — ไม่ให้สคริปต์ล้มทั้งไฟล์
+-- วิธีสร้าง narai_web อยู่ใน docs\create-app-login.sql
 IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'narai_web')
 BEGIN
     GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_user TO narai_web;
-    PRINT 'ให้สิทธิ์ dbo.hr_user กับ narai_web แล้ว';
+    PRINT N'ให้สิทธิ์ dbo.hr_user กับ narai_web แล้ว';
 END
 ELSE
-    PRINT 'ยังไม่มี user narai_web ในฐานข้อมูลนี้ — ข้ามการให้สิทธิ์ (ดู docs\create-app-login.sql)';
+    PRINT N'ยังไม่มี user narai_web ในฐานข้อมูลนี้ — ข้ามการให้สิทธิ์ (ดู docs\create-app-login.sql)';
 GO
 
-/* ------------------------------ 3) เช็คผล ------------------------------ */
-/* ต้องได้: ตาราง 9 คอลัมน์ และสิทธิ์ 4 บรรทัด (DELETE/INSERT/SELECT/UPDATE) */
+-- ------------------------------ 3) เช็คผล ------------------------------
+-- ต้องได้: ตาราง 9 คอลัมน์ และสิทธิ์ 4 บรรทัด (DELETE/INSERT/SELECT/UPDATE)
 SELECT c.name AS column_name, t.name AS data_type, c.max_length, c.is_nullable
   FROM sys.columns c
   JOIN sys.types t ON t.user_type_id = c.user_type_id
@@ -86,7 +86,7 @@ SELECT u.name AS granted_to, p.permission_name
  ORDER BY u.name, p.permission_name;
 GO
 
-/* จำนวนผู้ใช้ที่ย้ายเข้ามาแล้ว — รันซ้ำได้เรื่อยๆ เพื่อดูความคืบหน้าการย้าย
-   ตอนเพิ่งสร้างจะเป็น 0 ถูกต้องแล้ว เดี๋ยวเพิ่มเองตามที่แต่ละสาขาล็อกอินเข้ามา */
-SELECT COUNT(*) AS ผู้ใช้ที่ย้ายเข้ามาแล้ว FROM dbo.hr_user;
+-- จำนวนผู้ใช้ที่ย้ายเข้ามาแล้ว — รันซ้ำได้เรื่อยๆ เพื่อดูความคืบหน้าการย้าย
+-- ตอนเพิ่งสร้างจะเป็น 0 ถูกต้องแล้ว เดี๋ยวเพิ่มเองตามที่แต่ละสาขาล็อกอินเข้ามา
+SELECT COUNT(*) AS [users_migrated] FROM dbo.hr_user;
 GO
