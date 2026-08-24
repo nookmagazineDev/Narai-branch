@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
-import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
 import { PAID_LEAVE, UNPAID_LEAVE, leaveText } from '../utils/leaveCodes';
+import {
+  buildOffscreenExportEl, captureElementToCanvas, downloadCanvasAsPng, safeFileName,
+} from '../utils/exportImage';
 import {
   loadDraft, saveDraftCells, savePendingLogs, clearDraft, listDrafts, countPendingLogs,
 } from '../utils/scheduleDrafts';
@@ -208,73 +210,38 @@ export default function ScheduleWeekly() {
       return;
     }
 
-    const tableEl = document.getElementById('weekly-schedule-table-container');
-    if (!tableEl) return;
-    
+    const sourceTable = document.querySelector('#weekly-schedule-table-container table');
+    if (!sourceTable) {
+      toast.error('ยังไม่มีตารางให้บันทึกเป็นรูปภาพ');
+      return;
+    }
+
     const loadingToast = toast.loading('กำลังสร้างรูปภาพ...');
 
-    // การ์ดครอบตารางตั้ง overflow-hidden ไว้ ถ้าไม่ปลดด้วย ภาพที่ได้จะโดนตัดเท่าที่มองเห็นบนจอ
-    const cardEl = tableEl.parentElement;
-    const saved = [tableEl, cardEl].filter(Boolean).map(el => ({
-      el,
-      maxHeight: el.style.maxHeight,
-      overflow: el.style.overflow,
-      width: el.style.width,
-    }));
-    const restore = () => saved.forEach(s => {
-      s.el.style.maxHeight = s.maxHeight;
-      s.el.style.overflow = s.overflow;
-      s.el.style.width = s.width;
-    });
+    const end = new Date(weekStartDate);
+    end.setDate(end.getDate() + 6);
+    const dateOpts = { day: 'numeric', month: 'short', year: 'numeric' };
+    const weekStr = `${weekStartDate.toLocaleDateString('th-TH', dateOpts)} - ${end.toLocaleDateString('th-TH', dateOpts)}`;
 
-    let titleEl;
+    let exportEl;
     try {
-      saved.forEach(s => {
-        s.el.style.maxHeight = 'none';
-        s.el.style.overflow = 'visible';
-      });
-      tableEl.style.width = tableEl.scrollWidth + 'px';
-
-      titleEl = document.createElement('h4');
-      titleEl.className = 'text-center mb-3 mt-2 font-bold text-gray-800 text-lg';
-      
-      const end = new Date(weekStartDate);
-      end.setDate(end.getDate() + 6);
-      const weekStr = `${weekStartDate.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })} - ${end.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-      
-      titleEl.innerText = `ตารางงาน สาขา: ${b} | สัปดาห์: ${weekStr}`;
-      tableEl.insertBefore(titleEl, tableEl.firstChild);
-      
-      const canvas = await html2canvas(tableEl, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        width: tableEl.scrollWidth,
-        height: tableEl.scrollHeight,
-        windowWidth: tableEl.scrollWidth,
-        windowHeight: tableEl.scrollHeight,
-        // Tailwind v4 กำหนดสีพื้นฐานของ body/html เป็น oklch() ซึ่ง html2canvas parse ไม่ได้ (throw error)
-        // บังคับตั้งเป็น hex สีธรรมดาในเอกสารที่ clone ไว้ก่อนแคปเจอร์ ป้องกัน error ตอน export
-        onclone: (clonedDoc) => {
-          clonedDoc.documentElement.style.setProperty('background-color', '#ffffff', 'important');
-          clonedDoc.body.style.setProperty('background-color', '#ffffff', 'important');
-          clonedDoc.body.style.setProperty('color', '#111111', 'important');
-        },
+      // แคปเจอร์จาก <table> ทั้งก้อน ไม่ใช่กรอบที่เลื่อนดู จึงได้ทั้ง 7 วันและพนักงานครบทุกคน
+      exportEl = buildOffscreenExportEl(sourceTable, {
+        title: `ตารางงาน สาขา: ${b}`,
+        subtitle: `สัปดาห์ ${weekStr} • พนักงาน ${employees.length} คน`,
+        minWidth: 1040,
       });
 
-      const link = document.createElement('a');
-      link.download = `ตารางงาน_${b}_${weekStr.replace(/ /g, '_')}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      const canvas = await captureElementToCanvas(exportEl, { scale: 2, backgroundColor: '#ffffff' });
+      await downloadCanvasAsPng(canvas, safeFileName(`ตารางงาน_${b}_${formatDateLocal(weekStartDate)}`));
 
       toast.success('บันทึกรูปภาพสำเร็จ', { id: loadingToast });
     } catch (err) {
       console.error(err);
       toast.error('เกิดข้อผิดพลาดในการสร้างรูปภาพ', { id: loadingToast });
     } finally {
-      // ต้องคืนค่าสไตล์เสมอ ไม่งั้นถ้า html2canvas พัง ตารางจะค้างในสภาพกางเต็มหน้าจอ
-      restore();
-      if (titleEl) titleEl.remove();
+      // ต้องเก็บกวาดสำเนาเสมอ ไม่งั้นถ้าแคปเจอร์พังจะมีตารางค้างอยู่นอกจอเรื่อยๆ
+      if (exportEl) exportEl.remove();
     }
   };
 
