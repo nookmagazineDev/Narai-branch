@@ -44,6 +44,23 @@ function isPublicHoliday(dateStr) {
   return (LUNAR_HOLIDAYS_BY_YEAR[dateStr.slice(0, 4)] || []).includes(dateStr);
 }
 
+/**
+ * บรรทัด "โดย <ชื่อคนกดอนุมัติ>" ที่ต่อท้ายป้ายอนุมัติ OT ในช่องตาราง
+ *
+ * แยกเป็นบรรทัดของตัวเองเพราะช่องตารางแคบ (min-w 120px) ถ้าต่อท้ายในบรรทัดเดียวกัน
+ * ชื่อคนไทยเต็มๆ จะโดนบีบจนอ่านไม่ออก — และคนที่เปิดดูต้องรู้ให้ได้ว่า "ใครเป็นคนอนุมัติ"
+ * ชื่อว่าง (ข้อมูลเก่าที่อนุมัติไว้ตอนยังไม่เก็บชื่อ) = ไม่ต้องขึ้นบรรทัดเปล่า
+ */
+const approvedByLine = (approver) => {
+  const name = String(approver || '').trim();
+  if (!name) return null;
+  return (
+    <span className="block text-[9px] font-normal leading-tight opacity-95" style={{ whiteSpace: 'normal' }}>
+      โดย {name}
+    </span>
+  );
+};
+
 const EMPTY_CELL = {
   // ไม่มีช่องติ๊ก "กำหนดเป็นวันหยุด" ในหน้าจอแล้ว — ใช้ '10 หยุด' ในช่องลารับ/ไม่รับค่าแรงแทน
   // แต่ยังต้องเก็บฟิลด์นี้ไว้ เพราะแถวเก่าที่บันทึกไว้ตอนยังมีช่องติ๊กมีค่านี้เป็น true อยู่
@@ -762,6 +779,9 @@ export default function ScheduleWeekly() {
    *
    * ชื่อผู้อนุมัติไม่ได้ส่งจากหน้าเว็บ ฝั่งเซิร์ฟเวอร์ใช้ user ที่ล็อกอินไว้เสมอ (ปลอมไม่ได้)
    * แล้วเก็บลงคอลัมน์ ot_approver พร้อมบันทึกลง hr_timesheet_log ว่าใครกดเมื่อไหร่
+   * ชื่อที่เก็บคือ display_name ของบัญชีนั้น ไม่มีก็ใช้ username — ต้องคิดให้ตรงกับ
+   * updateOTApprovalBulk ใน office-server/schedule.js ไม่งั้นชื่อที่ขึ้นทันทีหลังกด
+   * จะไม่ตรงกับชื่อที่เห็นหลังรีเฟรช
    *
    * อนุมัติได้เฉพาะช่องที่ขึ้นระบบไปแล้ว เพราะคำสั่งนี้ไปอัปเดตแถวในฐานข้อมูลตามคีย์ (วัน+สาขา+รหัส)
    * ถ้าแถวยังไม่มี คำสั่งจะไม่โดนอะไรเลยแล้วเงียบหายไป ผู้ใช้จะนึกว่าอนุมัติแล้ว
@@ -772,6 +792,7 @@ export default function ScheduleWeekly() {
       toast.error('ช่องนี้ยังไม่ได้ส่งขึ้นระบบ กดบันทึกตารางก่อนแล้วค่อยอนุมัติ');
       return;
     }
+    const approverName = user?.name || user?.username || '';
     setOtSavingKey(key);
     try {
       await apiCall('updateOTApprovalBulk', {
@@ -781,7 +802,7 @@ export default function ScheduleWeekly() {
       });
       // ไม่ต้อง markDirty — การอนุมัติเขียนลงฐานข้อมูลไปแล้ว ไม่ใช่ร่างที่รอบันทึก
       setScheduleData((prev) => (
-        prev[key] ? { ...prev, [key]: { ...prev[key], otApprover: approve ? (user?.username || '') : '' } } : prev
+        prev[key] ? { ...prev, [key]: { ...prev[key], otApprover: approve ? approverName : '' } } : prev
       ));
       toast.success(approve ? 'อนุมัติ OT แล้ว' : 'ยกเลิกการอนุมัติ OT แล้ว');
     } catch (err) {
@@ -868,11 +889,11 @@ export default function ScheduleWeekly() {
                   title={`อนุมัติโดย ${cell.otApprover} — กดเพื่อยกเลิกการอนุมัติ`}
                   className="w-full rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold leading-tight text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
-                  {otBusy ? 'กำลังบันทึก…' : `✓ อนุมัติ OT · ${cell.otApprover}`}
+                  {otBusy ? 'กำลังบันทึก…' : <>✓ อนุมัติ OT{approvedByLine(cell.otApprover)}</>}
                 </button>
               ) : (
                 <span className="block rounded bg-emerald-600 px-1.5 py-0.5 text-center text-[10px] font-semibold leading-tight text-white">
-                  ✓ อนุมัติ OT · {cell.otApprover}
+                  ✓ อนุมัติ OT{approvedByLine(cell.otApprover)}
                 </span>
               )
             ) : isAll ? (

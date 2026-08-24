@@ -627,7 +627,13 @@ async function updateOTApprovalBulk(body, session) {
   const scope = branchScope(branch);
   const updates = Array.isArray(body.updates) ? body.updates : [];
   // ผู้อนุมัติ = user ที่ล็อกอินไว้เสมอ จะได้ปลอมชื่อผู้อนุมัติจากหน้าเว็บไม่ได้
-  const approver = str(session?.username) || str(body.approverName) || 'Admin';
+  //
+  // ช่อง ot_approver เอาไปโชว์บนตารางให้คนอ่าน จึงเก็บ "ชื่อที่แสดง" (hr_user.display_name) ก่อน
+  // ไม่มีชื่อนั้นค่อยถอยไปใช้ username — บัญชีที่ย้ายมาจากชีทยังไม่มี display_name
+  // ส่วน actor ใน hr_timesheet_log ยังเป็น username เสมอ เพราะเป็นบันทึกไว้ตรวจย้อนหลัง
+  // ต้องชี้ไปที่บัญชีตัวจริงตัวเดียวกับที่ saveTimesheet เขียนไว้ ไม่ใช่ชื่อที่ตั้งซ้ำกันได้
+  const account = str(session?.username);
+  const approver = str(session?.name) || account || str(body.approverName) || 'Admin';
 
   if (!isDateStr(dateStr) || !branch) {
     throw Object.assign(new Error('ระบุวันที่หรือสาขาไม่ถูกต้อง'), { badRequest: true });
@@ -663,7 +669,7 @@ async function updateOTApprovalBulk(body, session) {
           d: { type: sql.Date, value: dateStr },
           branch: { type: sql.NVarChar(50), value: branch },
           hrCode: { type: sql.NVarChar(30), value: hrCode || name },
-          actor: { type: sql.NVarChar(100), value: approver },
+          actor: { type: sql.NVarChar(100), value: account || approver },
           payload: { type: sql.NVarChar(sql.MAX), value: JSON.stringify(u) },
         }
       );

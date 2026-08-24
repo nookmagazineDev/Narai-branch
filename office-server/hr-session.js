@@ -19,7 +19,10 @@ export function sessionOf(body) {
   const username = str(u?.username);
   if (!username) return null;
   const branch = str(u?.branch);
-  return { username, branch, isAll: branch.toLowerCase() === 'all' };
+  // name = ชื่อที่แสดง (hr_user.display_name) เอาไว้เขียนลงช่อง "ผู้อนุมัติ" ให้คนอ่านรู้ว่าใครกด
+  // บัญชีที่ย้ายมาจากชีทยังไม่มีชื่อนี้ ฝั่งที่ใช้ต้องถอยไปใช้ username เสมอ
+  const name = str(u?.name);
+  return { username, name, branch, isAll: branch.toLowerCase() === 'all' };
 }
 
 /* ------------------------- สาขาที่เป็นตัวเดียวกัน -------------------------

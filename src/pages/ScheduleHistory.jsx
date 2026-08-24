@@ -312,16 +312,25 @@ export default function ScheduleHistory() {
                       {/* OT Approval Column */}
                       <td className={`px-3 py-2 text-center ${hasOT ? 'bg-green-50 border-l border-r border-green-100' : ''}`}>
                         {hasOT && (
-                          <input 
-                            type="checkbox"
-                            checked={isApproved}
-                            onChange={() => toggleApproval(key)}
-                            className={`w-5 h-5 rounded cursor-pointer transition-all ${
-                              isApproved 
-                                ? 'text-green-600 focus:ring-green-500' 
-                                : 'text-red-500 bg-red-100 border-red-300 focus:ring-red-500'
-                            }`}
-                          />
+                          <div className="flex flex-col items-center gap-0.5">
+                            <input
+                              type="checkbox"
+                              checked={isApproved}
+                              onChange={() => toggleApproval(key)}
+                              className={`w-5 h-5 rounded cursor-pointer transition-all ${
+                                isApproved 
+                                  ? 'text-green-600 focus:ring-green-500' 
+                                  : 'text-red-500 bg-red-100 border-red-300 focus:ring-red-500'
+                              }`}
+                            />
+                            {/* ใครเป็นคนกดอนุมัติ — อ่านจากช่องที่บันทึกไว้จริง ไม่ใช่ช่องติ๊กที่ยังไม่ได้บันทึก
+                                ติ๊กใหม่แล้วยังไม่กดบันทึกจึงขึ้น "รอบันทึก" ไม่ใช่ชื่อคนที่กำลังดูหน้านี้ */}
+                            {isApproved && (
+                              <span className={`text-[10px] leading-tight ${item.otApprover ? 'text-green-700' : 'text-amber-600'}`}>
+                                {item.otApprover ? `โดย ${item.otApprover}` : 'รอบันทึก'}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
                       
