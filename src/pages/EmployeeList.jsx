@@ -5,6 +5,7 @@ import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
+import { branchGroup } from '../utils/branchAlias';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -142,10 +143,34 @@ export default function EmployeeList() {
   const fetchEmployees = async () => {
     try {
       setLoading(true);
-      const response = await apiCall('getEmployees', { branch: user?.branch || 'all' });
-      if (response.status === 'success') {
-        setEmployees(response.data || []);
+      const branch = user?.branch || 'all';
+      // สาขาที่มีรหัสสองแบบ (zjp กับ sjp = ร้านเดียวกัน) ต้องถามชีททีละรหัสแล้วรวมกัน
+      // เพราะชีท DATA จับคู่สาขาแบบตรงตัว พนักงานที่ลงไว้ใต้อีกรหัสจะไม่ขึ้นเลย
+      // ('all' ของแอดมินได้ทุกสาขาอยู่แล้ว ไม่ต้องแตกเป็นหลายคำขอ)
+      const codes = branch.toLowerCase() === 'all' ? [branch] : branchGroup(branch);
+      // รหัสแรกคือสาขาที่ล็อกอิน ถ้าพลาดถือว่าโหลดไม่สำเร็จ
+      // ส่วนรหัสพี่น้องเป็นของเสริม ชีทตอบไม่ไหวก็ยังเห็นรายชื่อของตัวเองตามปกติ
+      const [main, ...aliases] = await Promise.all([
+        apiCall('getEmployees', { branch: codes[0] }),
+        ...codes.slice(1).map((b) => apiCall('getEmployees', { branch: b }).catch(() => null)),
+      ]);
+      if (main.status !== 'success') return;
+
+      // รวมรายชื่อโดยตัดคนซ้ำด้วยรหัส HR (คนเดิมอาจมีแถวใต้ทั้งสองรหัสสาขา)
+      const seen = new Set();
+      const merged = [];
+      for (const res of [main, ...aliases]) {
+        if (res?.status !== 'success') continue;
+        for (const emp of res.data || []) {
+          const key = String(emp.hrCode || '').trim().toLowerCase();
+          if (key) {
+            if (seen.has(key)) continue;
+            seen.add(key);
+          }
+          merged.push(emp);
+        }
       }
+      setEmployees(merged);
     } catch (error) {
       toast.error(error.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลพนักงาน');
     } finally {
