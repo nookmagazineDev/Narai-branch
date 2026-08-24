@@ -16,6 +16,18 @@ import { hhmm, summarizeDaily, attachSchedule } from '../utils/attendance';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+/** วันจันทร์ของสัปดาห์ที่วันนั้นอยู่ — สัปดาห์เริ่มวันจันทร์ให้ตรงกับหน้าลงตารางสัปดาห์ */
+const mondayOf = (d) => addDays(d, -((d.getDay() + 6) % 7));
+
+// ปุ่มเลือกช่วงวันที่สำเร็จรูป — คิดจาก "วันนี้" ตอนที่กดทุกครั้ง (เผื่อเปิดหน้าค้างข้ามวัน)
+// "สัปดาห์นี้" จบที่วันนี้ ไม่ใช่วันอาทิตย์ เพราะวันข้างหน้ายังไม่มีใครสแกน
+const RANGE_PRESETS = [
+  { key: 'today', label: 'วันนี้', range: (t) => [t, t] },
+  { key: 'yesterday', label: 'เมื่อวาน', range: (t) => [addDays(t, -1), addDays(t, -1)] },
+  { key: 'thisWeek', label: 'สัปดาห์นี้', range: (t) => [mondayOf(t), t] },
+  { key: 'lastWeek', label: 'สัปดาห์ที่แล้ว', range: (t) => [addDays(mondayOf(t), -7), addDays(mondayOf(t), -1)] },
+];
 
 const Dash = () => <span className="text-gray-300">—</span>;
 const timeCell = (t, cls = '') => (t ? <span className={`font-mono ${cls}`}>{t}</span> : <Dash />);
@@ -43,6 +55,7 @@ export default function Attendance() {
   const [schedRows, setSchedRows] = useState([]); // ตารางงานที่สาขาลงไว้ ในช่วงวันเดียวกัน
   const [loadedRange, setLoadedRange] = useState('');
   const [search, setSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState(''); // '' = ทุกวันในช่วงที่โหลดมา
   const [view, setView] = useState('daily'); // 'daily' = สรุปรายวัน | 'raw' = รายการสแกนทั้งหมด
 
   useEffect(() => {
@@ -59,6 +72,12 @@ export default function Attendance() {
       .catch(() => {});
   }, [isAdmin]);
 
+  const applyPreset = (preset) => {
+    const [s, e] = preset.range(new Date());
+    setStartDate(fmtDate(s));
+    setEndDate(fmtDate(e));
+  };
+
   const load = async () => {
     if (!branch) { toast.error('กรุณาเลือกสาขา'); return; }
     if (!startDate || !endDate) { toast.error('กรุณาเลือกช่วงวันที่'); return; }
@@ -71,6 +90,7 @@ export default function Attendance() {
       ]);
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setRows(res.data || []);
+      setDateFilter('');
       setSchedRows(Array.isArray(sched?.data) ? sched.data : []);
       if (!sched) toast('ดึงตารางงานมาเทียบไม่ได้ — แสดงเฉพาะเวลาสแกน', { icon: '⚠️' });
       setLoadedRange(startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`);
@@ -84,10 +104,23 @@ export default function Attendance() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = rows || [];
+    let list = rows || [];
+    if (dateFilter) list = list.filter((r) => r.date === dateFilter);
     if (!q) return list;
     return list.filter((r) => String(r.empCode).toLowerCase().includes(q) || String(r.name || '').toLowerCase().includes(q));
-  }, [rows, search]);
+  }, [rows, search, dateFilter]);
+
+  // วันที่ที่มีสแกนจริงในชุดที่โหลดมา (ล่าสุดก่อน) — ใช้เป็นตัวเลือกในหัวคอลัมน์วันที่
+  const dateOptions = useMemo(() => [...new Set((rows || []).map((r) => r.date))].sort().reverse(), [rows]);
+
+  // ตัวกรองในหัวคอลัมน์ — ช่วงที่มีวันเดียวไม่ต้องมีให้เลือก
+  const dateFilterEl = dateOptions.length > 1 ? (
+    <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}
+      className="mt-1 max-w-[132px] bg-white border border-gray-200 rounded-md px-1.5 py-0.5 text-[11px] font-normal text-gray-600 focus:ring-2 focus:ring-teal-500 outline-none cursor-pointer">
+      <option value="">ทุกวัน ({dateOptions.length})</option>
+      {dateOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+    </select>
+  ) : null;
 
   // สรุปรายวัน: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
   // แล้วเทียบกับตารางงานที่สาขาลงไว้ เพื่อคิดว่าสาย/ออกก่อนเวลากี่นาที
@@ -127,8 +160,18 @@ export default function Attendance() {
         <span className="text-gray-400">ถึง</span>
         <input type="date" value={endDate} min={startDate} max={today} onChange={(e) => setEndDate(e.target.value)}
           className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
-        <button onClick={() => { setStartDate(today); setEndDate(today); }}
-          className="px-3 py-2 rounded-xl text-sm border border-gray-200 text-gray-600 hover:bg-gray-50">วันนี้</button>
+        {RANGE_PRESETS.map((p) => {
+          const [s, e] = p.range(new Date());
+          const active = startDate === fmtDate(s) && endDate === fmtDate(e);
+          return (
+            <button key={p.key} onClick={() => applyPreset(p)}
+              className={`px-3 py-2 rounded-xl text-sm border ${active
+                ? 'border-teal-500 bg-teal-50 text-teal-700 font-medium'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+              {p.label}
+            </button>
+          );
+        })}
         <button onClick={load} disabled={loading}
           className="inline-flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50">
           {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
@@ -167,14 +210,21 @@ export default function Attendance() {
               <p className="text-gray-400 text-xs">ลองเปลี่ยนช่วงวันที่ หรือตรวจว่าเครื่องสแกนของสาขาส่งข้อมูลเข้าระบบแล้วหรือยัง</p>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="py-16 text-center text-gray-400 text-sm">ไม่พบพนักงานที่ค้นหา</div>
+            <div className="py-16 text-center text-gray-400 text-sm">
+              {search.trim() ? 'ไม่พบพนักงานที่ค้นหา' : `ไม่พบการสแกนของวันที่ ${dateFilter}`}
+            </div>
           ) : view === 'daily' ? (
             <div className="overflow-auto max-h-[65vh]">
               <table className="w-full text-sm border-collapse">
                 {/* หัวตารางสองชั้น — แยกให้เห็นชัดว่าฝั่งไหนคือเวลาที่สาขาลงตารางไว้ ฝั่งไหนคือเวลาที่สแกนจริง */}
                 <thead className="text-[11px] text-gray-600">
                   <tr>
-                    <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                    {/* หัวคอลัมน์นี้กินสองแถว (รวมสูง ~60px) — ป้าย + ตัวกรองต้องไม่เกินนั้น
+                        ไม่งั้นแถวหัวตารางจะสูงขึ้นจนหลุดกับ sticky top-8 ของหัวแถวล่าง */}
+                    <th rowSpan={2} className="px-3 py-1 text-left align-top sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <div className="h-7 flex items-center">วันที่</div>
+                      {dateFilterEl}
+                    </th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-gray-200 font-semibold">ตารางงานที่ลงไว้</th>
@@ -257,7 +307,10 @@ export default function Attendance() {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="text-gray-600 text-xs">
-                    <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">เวลา</th>
+                    <th className="px-4 py-2 text-left align-top sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <div>เวลา</div>
+                      {dateFilterEl}
+                    </th>
                     <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
                     <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
                     <th className="px-4 py-2.5 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ประเภท</th>
