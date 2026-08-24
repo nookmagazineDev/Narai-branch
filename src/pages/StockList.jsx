@@ -1499,12 +1499,17 @@ export default function StockList() {
     }
   };
 
-  // แก้ไข "ค่าเฉลี่ย/หัว" ในตาราง แล้วบันทึกลงชีทอัตโนมัติ (ไม่มีค่าเดิม = เพิ่มแถวใหม่ในชีท)
+  // แก้ไข "ค่าเฉลี่ย/หัว" ในตาราง แล้วบันทึกอัตโนมัติ (ไม่มีค่าเดิม = เพิ่มแถวใหม่)
+  //
+  // แก้ได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของทั้งสาขา
+  // แก้ผิดตัวเดียวยอดเบิกเพี้ยนทั้งรายการโดยไม่มีอะไรเตือน สาขาจึงเห็นได้อย่างเดียว
+  // (หน้าจอซ่อนช่องกรอกให้แล้ว ตรงนี้กันซ้ำเผื่อค่าเก่าค้างใน avgDraft ตอนสลับผู้ใช้)
   const saveAvgPerHead = async (item) => {
     const pid = item.productId;
     const raw = avgDraft[pid];
     const clearDraft = () => setAvgDraft(d => { const n = { ...d }; delete n[pid]; return n; });
     if (raw === undefined) return;                 // ไม่ได้แก้อะไร
+    if (!isAll) { clearDraft(); return; }
     const trimmed = String(raw).trim();
     if (trimmed === '') { clearDraft(); return; }  // ปล่อยว่าง = ยกเลิก คืนค่าเดิม
     const num = Number(trimmed);
@@ -2070,7 +2075,7 @@ export default function StockList() {
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase min-w-[200px]">ชื่อสินค้า</th>
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-24">หมวดจัดเก็บ</th>
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-14">หน่วย</th>
-                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-fuchsia-600 uppercase w-20 bg-fuchsia-50/60" title="จากชีท ค่าเฉลี่ยยอดใช้ต่อหัว">ค่าเฉลี่ย/หัว</th>
+                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-fuchsia-600 uppercase w-20 bg-fuchsia-50/60" title={isAll ? 'ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้' : 'ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all'}>ค่าเฉลี่ย/หัว</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-teal-600 uppercase w-24 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-purple-600 uppercase w-24 bg-purple-50/60">ยอดนับก่อนหน้า</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-indigo-600 uppercase w-28 bg-indigo-50/60">คงเหลือล่าสุด</th>
@@ -2111,23 +2116,33 @@ export default function StockList() {
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้ บันทึกลงชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' อัตโนมัติ (ไม่มีค่าเดิม = เพิ่มใหม่) */}
+                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้เฉพาะ user สิทธิ์ all (สาขาเห็นอย่างเดียว)
+                              เพราะเป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของทั้งสาขา แก้ผิดแล้วยอดเบิกเพี้ยนทั้งรายการ */}
                           <td className="px-2 py-2.5 text-center bg-fuchsia-50/30">
-                            <div className="flex items-center justify-center gap-1">
-                              <input
-                                type="number" min="0" step="any" inputMode="decimal"
-                                disabled={savingAvg[item.productId] || !effectiveBranch}
-                                value={avgDraft[item.productId] !== undefined ? avgDraft[item.productId] : (item.avgPerHead === undefined ? '' : item.avgPerHead)}
-                                onChange={(e) => setAvgDraft(d => ({ ...d, [item.productId]: e.target.value }))}
-                                onFocus={(e) => e.target.select()}
-                                onBlur={() => saveAvgPerHead(item)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                placeholder="-"
-                                title={item.avgPerHead === undefined ? 'ยังไม่มีค่าในชีท — กรอกแล้วบันทึกใหม่อัตโนมัติ' : 'ค่าเฉลี่ยต่อหัว (แก้ไขแล้วบันทึกลงชีทอัตโนมัติ)'}
-                                className="w-20 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
-                              />
-                              {savingAvg[item.productId] && <Loader2 className="w-3 h-3 animate-spin text-fuchsia-400 shrink-0" />}
-                            </div>
+                            {isAll ? (
+                              <div className="flex items-center justify-center gap-1">
+                                <input
+                                  type="number" min="0" step="any" inputMode="decimal"
+                                  disabled={savingAvg[item.productId] || !effectiveBranch}
+                                  value={avgDraft[item.productId] !== undefined ? avgDraft[item.productId] : (item.avgPerHead === undefined ? '' : item.avgPerHead)}
+                                  onChange={(e) => setAvgDraft(d => ({ ...d, [item.productId]: e.target.value }))}
+                                  onFocus={(e) => e.target.select()}
+                                  onBlur={() => saveAvgPerHead(item)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                  placeholder="-"
+                                  title={item.avgPerHead === undefined ? 'ยังไม่มีค่าเดิม — กรอกแล้วบันทึกใหม่อัตโนมัติ' : 'ค่าเฉลี่ยต่อหัว (แก้ไขแล้วบันทึกอัตโนมัติ)'}
+                                  className="w-20 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
+                                />
+                                {savingAvg[item.productId] && <Loader2 className="w-3 h-3 animate-spin text-fuchsia-400 shrink-0" />}
+                              </div>
+                            ) : (
+                              <div
+                                className={`text-sm font-semibold ${item.avgPerHead === undefined ? 'text-fuchsia-300 font-normal' : 'text-fuchsia-700'}`}
+                                title="ค่าเฉลี่ยต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all"
+                              >
+                                {item.avgPerHead === undefined ? '-' : item.avgPerHead}
+                              </div>
+                            )}
                           </td>
 
                           {/* ยอดยกมาเดือนที่แล้ว — ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน)

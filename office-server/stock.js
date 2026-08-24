@@ -51,6 +51,7 @@ const thaiDateTime = (v) => {
 };
 
 const badRequest = (msg) => Object.assign(new Error(msg), { badRequest: true });
+const forbidden = (msg) => Object.assign(new Error(msg), { forbidden: true });
 
 /**
  * รหัสสินค้าที่ normalize แล้ว — ต้องให้ผลตรงกับ normalizeId() ของ Apps Script และ
@@ -503,6 +504,10 @@ async function updateStorageCategory(body, session) {
 /* ===================== ค่าเฉลี่ยยอดใช้ต่อหัว (สูตรเบิก) =====================
    หน้านับสต๊อกใช้คำนวณยอดเบิกอัตโนมัติ: ยอดเบิก = ค่าเฉลี่ยต่อหัว x จำนวนหัวที่คาด */
 async function saveAvgPerHead(body, session) {
+  // แก้ค่าเฉลี่ยต่อหัวได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของสาขา
+  // (หน้าเว็บซ่อนช่องกรอกให้แล้ว ตรงนี้กันซ้ำอีกชั้นเผื่อเรียก API ตรงๆ เหมือนกติกาสาขาใน branchFor)
+  if (!session?.isAll) throw forbidden('แก้ไขค่าเฉลี่ยต่อหัวได้เฉพาะผู้ใช้สิทธิ์ all');
+
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   const code = str(body.code);
   const key = normCode(code);
