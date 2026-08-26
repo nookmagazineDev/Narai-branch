@@ -38,6 +38,36 @@ const LUNAR_HOLIDAYS_BY_YEAR = {
   2026: ['2026-03-03', '2026-06-03']
 };
 
+// ลำดับการเรียงพนักงานในตาราง — ระดับหัวหน้าอยู่บน ท้ายสุดไล่จากล่างขึ้นมาคือ ล้างจาน > บริการ > กุ๊ก
+//
+// ตำแหน่งเป็นข้อความอิสระ (หน้าเพิ่มพนักงานให้พิมพ์เอาเอง ไม่ใช่ดรอปดาวน์) จึงจับด้วยคำสำคัญ
+// ไม่เทียบตรงตัว — สาขาพิมพ์ว่า "หัวหน้ากะ" "หัวหน้าครัว" "หน.เสิร์ฟ" ก็ต้องเข้าพวกเดียวกัน
+//
+// ตำแหน่งที่ไม่เข้าคำไหนเลยได้ลำดับกลาง (50) ไม่ใช่ท้ายสุด — คนที่สาขาพิมพ์ตำแหน่งแปลกๆ
+// จะได้ไม่หล่นไปกองรวมกับล้างจานโดยไม่มีใครตั้งใจ
+//
+// เรียงตามลำดับในลิสต์นี้ ตัวที่เจาะจงกว่าต้องมาก่อน ("ผู้ช่วยผู้จัดการ" มีคำว่า "ผู้จัดการ" อยู่ข้างใน
+// ถ้าเช็ค "ผู้จัดการ" ก่อน ผู้ช่วยจะถูกจัดเป็นผู้จัดการทั้งหมด)
+const POSITION_RANKS = [
+  { rank: 10, keywords: ['ผู้ช่วยผู้จัดการ', 'ผช.ผจก', 'ผช.ผู้จัดการ', 'assistant manager'] },
+  { rank: 0,  keywords: ['ผู้จัดการ', 'ผจก', 'manager'] },
+  { rank: 20, keywords: ['หัวหน้า', 'หน.', 'supervisor', 'leader'] },
+  // ท้ายตาราง — ตัวเลขมากอยู่ล่าง
+  { rank: 70, keywords: ['กุ๊ก', 'กุ้ก', 'cook'] },
+  { rank: 80, keywords: ['บริการ', 'เสิร์ฟ', 'service'] },
+  { rank: 90, keywords: ['ล้างจาน', 'ล้างชาม', 'dish'] },
+];
+const DEFAULT_POSITION_RANK = 50;
+
+function positionRank(position) {
+  const p = String(position || '').toLowerCase().trim();
+  if (!p) return DEFAULT_POSITION_RANK;
+  for (const g of POSITION_RANKS) {
+    if (g.keywords.some(k => p.includes(k.toLowerCase()))) return g.rank;
+  }
+  return DEFAULT_POSITION_RANK;
+}
+
 function isPublicHoliday(dateStr) {
   if (!dateStr || dateStr.length < 10) return false;
   if (FIXED_HOLIDAYS_MMDD.includes(dateStr.slice(5, 10))) return true;
@@ -626,6 +656,17 @@ export default function ScheduleWeekly() {
     return parseFloat(wage.toFixed(2));
   };
 
+  // รายชื่อที่เอาไปวาดตาราง — เรียงตามระดับตำแหน่ง (หัวหน้าบน, ล้างจานล่างสุด)
+  //
+  // ไม่ไปเรียงตอน setEmployees เพราะรายชื่อถูกเซ็ตจากสองทาง (SQL ตอนแรก + ชีทที่ตามมาทีหลัง
+  // ผ่าน onRefresh) เรียงที่นี่ที่เดียวจบ ไม่ต้องไล่ใส่ให้ครบทุกทาง
+  //
+  // sort ของ JS เป็น stable — คนที่ตำแหน่งระดับเดียวกันจะคงลำดับเดิมจากฝั่งข้อมูลไว้เหมือนเดิม
+  const sortedEmployees = React.useMemo(
+    () => [...employees].sort((a, b) => positionRank(a.position) - positionRank(b.position)),
+    [employees]
+  );
+
   // Calculate Summary + per-day stats (เหมือนตัวเดิม: รวมค่าแรง F/T วันที่ยังไม่ลงด้วย)
   const summary = React.useMemo(() => {
     const dates = daysOfWeek.map(d => d.dateStr);
@@ -1062,7 +1103,7 @@ export default function ScheduleWeekly() {
                 </tr>
               </thead>
               <tbody>
-                {employees.map(emp => (
+                {sortedEmployees.map(emp => (
                   <tr key={emp.hrCode} className="border-b hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-2 border-r bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#f3f4f6]">
                       <div className="font-medium text-gray-900 leading-tight">{emp.name}</div>
