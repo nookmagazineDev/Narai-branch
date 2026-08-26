@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { tryGetJson } from '../services/dashboardApi';
@@ -175,8 +175,8 @@ export default function StockList() {
   const [sortBy, setSortBy] = useState('storageCat');
   const [isSaving, setIsSaving] = useState(false);
   const [isEditingCat, setIsEditingCat] = useState(false);
-  const [avgDraft, setAvgDraft] = useState({});   // productId -> ค่าที่กำลังพิมพ์ในช่องค่าเฉลี่ย/หัว (string)
-  const [savingAvg, setSavingAvg] = useState({}); // productId -> กำลังบันทึกค่าเฉลี่ย/หัว
+  const [avgDraft, setAvgDraft] = useState({});   // productId -> ค่าที่กำลังพิมพ์ในช่องค่าตั้งเบิก (string)
+  const [savingAvg, setSavingAvg] = useState({}); // productId -> กำลังบันทึกค่าตั้งเบิก/สลับโหมด
   const [requestDate, setRequestDate] = useState('');
   const [requesterName, setRequesterName] = useState('');
   const [counterName, setCounterName] = useState('');
@@ -546,6 +546,10 @@ export default function StockList() {
       if (itemsRes.status === 'success') {
         const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
         const avgMap = (avgRes?.status === 'success') ? avgRes.data : {};
+        // โหมดคำนวณของแต่ละสินค้า — office-server รุ่นก่อนมีโหมด par ไม่ส่งสองก้อนนี้มา
+        // ({} ทั้งคู่) ทุกตัวจึงตกเป็นโหมดค่าเฉลี่ยต่อหัวเหมือนเดิม
+        const modeMap = (avgRes?.status === 'success') ? (avgRes.modes || {}) : {};
+        const parMap = (avgRes?.status === 'success') ? (avgRes.par || {}) : {};
         const closingMap = (closingRes?.status === 'success') ? closingRes.data : {};
         setItems(itemsRes.data.map(item => {
           const nid = String(item.productId).replace(/^0+/, '');
@@ -562,6 +566,8 @@ export default function StockList() {
             incomingDate: incoming ? incoming.deldate : '',
             incomingOrderNo: incoming ? incoming.orderNo : '',
             avgPerHead: avgMap[nid.toLowerCase()] !== undefined ? Number(avgMap[nid.toLowerCase()]) : undefined,
+            calcMode: modeMap[nid.toLowerCase()] === 'par' ? 'par' : 'avg',
+            parQty: parMap[nid.toLowerCase()] !== undefined ? Number(parMap[nid.toLowerCase()]) : undefined,
           };
         }));
       } else {
@@ -906,7 +912,11 @@ export default function StockList() {
   const [calcParts, setCalcParts] = useState({});  // productId -> number[]
 
   // ── คำนวณยอดเบิกอัตโนมัติ ──
-  // สูตร: ยอดเบิก = ค่าเฉลี่ยต่อหัว (ชีทค่าเฉลี่ยยอดใช้ต่อหัว) × (จำนวนหัวลูกค้าช่วงนับก่อนหน้า→นับล่าสุด ÷ จำนวนวันห่าง) × ตัวคูณวัน
+  // สินค้าแต่ละตัวเลือกวิธีคิดได้ 2 แบบ (ตั้งที่คอลัมน์ "ค่าตั้งเบิก" — เฉพาะผู้ใช้สิทธิ์ all)
+  //   โหมดค่าเฉลี่ย/หัว : ยอดเบิก = ค่าเฉลี่ยต่อหัว × ผลรวมจำนวนหัวลูกค้าคาดการณ์ - คงเหลือ
+  //   โหมดเติมเต็มสตอค  : ยอดเบิก = ค่าเติมเต็มสตอค - คงเหลือ
+  // แบบเติมเต็มมีไว้ให้ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า (กล่อง ถุง น้ำยา อุปกรณ์) ซึ่งแบบค่าเฉลี่ย
+  // คำนวณให้ไม่ได้เลยเพราะไม่มีค่าเฉลี่ยต่อหัวที่มีความหมาย — และไม่ต้องใช้วันนับล่าสุดกับยอดขายด้วย
   // ตัวคูณวันที่ใช้ของ: จ-พฤ ×1 | ศ ×1.1 | ส-อา/นักขัตฤกษ์ ×1.2
   const tomorrowYMD = () => {
     const d = new Date(); d.setDate(d.getDate() + 1);
@@ -926,11 +936,15 @@ export default function StockList() {
     if (!useDate) { toast.error('กรุณาเลือกวันที่ใช้ของ'); return; }
     setIsCalcReq(true);
     try {
-      // 1) ค่าเฉลี่ยต่อหัวของสาขานี้
+      // 1) ค่าตั้งเบิกของสาขานี้ (ค่าเฉลี่ยต่อหัว + ค่าเติมเต็มสตอค + โหมดของแต่ละสินค้า)
       const avgRes = await tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`);
-      if (avgRes.status !== 'success') throw new Error(avgRes.message || 'ดึงค่าเฉลี่ยต่อหัวไม่สำเร็จ');
+      if (avgRes.status !== 'success') throw new Error(avgRes.message || 'ดึงค่าตั้งเบิกไม่สำเร็จ');
       const avgMap = avgRes.data || {};
-      if (!Object.keys(avgMap).length) throw new Error('ไม่พบค่าเฉลี่ยต่อหัวของสาขานี้ในชีท');
+      const modeMap = avgRes.modes || {};
+      const parMap = avgRes.par || {};
+      if (!Object.keys(avgMap).length && !Object.keys(parMap).length) {
+        throw new Error('ยังไม่ได้ตั้งค่าตั้งเบิกของสาขานี้ (ค่าเฉลี่ยต่อหัว หรือ ค่าเติมเต็มสตอค)');
+      }
 
       // 1.5) หน่วยเบิกของแต่ละสินค้า (คอลัมน์ L ชีท item) — ใช้ปัดเศษยอดเบิกเป็นจำนวนเต็มหน่วย
       let unitMap = {};
@@ -939,17 +953,29 @@ export default function StockList() {
         if (uRes.status === 'success') unitMap = uRes.units || {};
       } catch (e) { /* ไม่มีหน่วยเบิก → ปัดเป็นจำนวนเต็มปกติ */ }
 
-      // 2) หารายการที่พร้อมคำนวณ (ต้องมีทั้งค่าเฉลี่ยต่อหัว + วันนับล่าสุด)
+      // 2) หารายการที่พร้อมคำนวณ แยกตามโหมดของสินค้าตัวนั้น
+      //    โหมดค่าเฉลี่ย — ต้องมีทั้งค่าเฉลี่ยต่อหัว + วันนับล่าสุด (ไว้ตั้งต้นช่วงคาดการณ์)
+      //    โหมดเติมเต็ม  — ขอแค่ค่าเติมเต็ม > 0 ของที่ยังไม่เคยนับก็คำนวณได้ (คงเหลือนับเป็น 0 = เบิกเต็มจำนวน)
       const jobs = [];
       items.forEach((item, idx) => {
         const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+        if (modeMap[nid] === 'par') {
+          const par = Number(parMap[nid]) || 0;
+          if (par <= 0) return;
+          jobs.push({ idx, mode: 'par', par });
+          return;
+        }
         const avg = Number(avgMap[nid]) || 0;
         if (avg <= 0) return;
         const lastD = parseDMY(item.lastStockDate);
         if (!lastD) return;
-        jobs.push({ idx, avg, lastD, isPremium359Only: PREMIUM_359_ONLY_CODES.has(nid) });
+        jobs.push({ idx, mode: 'avg', avg, lastD, isPremium359Only: PREMIUM_359_ONLY_CODES.has(nid) });
       });
-      if (!jobs.length) throw new Error('ไม่มีรายการที่มีทั้งยอดคงเหลือล่าสุด + ค่าเฉลี่ยต่อหัว');
+      if (!jobs.length) throw new Error('ไม่มีรายการที่พร้อมคำนวณ (ต้องมีค่าเฉลี่ยต่อหัว + ยอดคงเหลือล่าสุด หรือ ค่าเติมเต็มสตอค)');
+
+      // ข้อมูลจำนวนหัวลูกค้าใช้เฉพาะโหมดค่าเฉลี่ย — ถ้าคำนวณแต่ของโหมดเติมเต็มก็ไม่ต้องยิงไปดึงเลย
+      const avgJobs = jobs.filter(j => j.mode === 'avg');
+      const needCovers = avgJobs.length > 0;
 
       // 3) จำนวนหัวลูกค้ารายวันในช่วงคำนวณ เรียงลำดับความสำคัญ:
       //    ก) วันที่ผ่านไปแล้วจริง (ก่อนวันนี้) → ใช้ยอดขายจริงจากแดชบอร์ด (แม่นกว่าค่าประมาณเสมอ)
@@ -960,17 +986,22 @@ export default function StockList() {
       const targetForecast = new Date(useDate + 'T00:00:00');
 
       let realRangeStart = null;
-      jobs.forEach(j => {
+      avgJobs.forEach(j => {
         const sf = new Date(j.lastD); sf.setDate(sf.getDate() + 1);
         if (!realRangeStart || sf < realRangeStart) realRangeStart = sf;
       });
       const yesterday = new Date(todayDate); yesterday.setDate(yesterday.getDate() - 1);
       const realRangeEnd = targetForecast < yesterday ? targetForecast : yesterday;
 
+      const emptyBucket = buildCoverBuckets({});
       const [pctRes, bucketInfo, realRes] = await Promise.all([
-        tryGetJson(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`),
-        fetchCoverBuckets(effectiveBranch),
-        (realRangeStart && realRangeStart <= realRangeEnd)
+        needCovers
+          ? tryGetJson(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(effectiveBranch)}`)
+          : Promise.resolve({ status: 'success', data: [] }),
+        needCovers
+          ? fetchCoverBuckets(effectiveBranch)
+          : Promise.resolve({ buckets: emptyBucket, buckets259: emptyBucket, buckets359: emptyBucket, hasTwoTier: false, label: '' }),
+        (needCovers && realRangeStart && realRangeStart <= realRangeEnd)
           ? tryGetJson(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(realRangeStart)}&endDate=${toYMD(realRangeEnd)}`)
           : Promise.resolve(null),
       ]);
@@ -1013,36 +1044,46 @@ export default function StockList() {
       let filled = 0;
       let maxForecastCovers = 0;
       for (const j of jobs) {
-        // ช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
-        const startForecast = new Date(j.lastD);
-        startForecast.setDate(startForecast.getDate() + 1);
-
-        // ไอเทมในกลุ่มราคา 359 (PREMIUM_359_ONLY_CODES) + สาขามี 2 ราคา → ใช้หัวลูกค้า 359 ล้วนๆ
-        // ไอเทมที่ไม่ได้ระบุกลุ่มราคา → ใช้ยอดรวมทั้ง 2 ราคา (percent = 259+359 ที่ระบบรวมให้ตอนบันทึก)
-        const usePremiumOnly = j.isPremium359Only && isTwoTierCalc;
-        const getDayCovers = usePremiumOnly ? covers359ForDate : coversForDate;
-
-        let totalForecastCovers = 0;
-        const tempD = new Date(startForecast);
-        while (tempD <= targetForecast) {
-          totalForecastCovers += getDayCovers(tempD);
-          tempD.setDate(tempD.getDate() + 1);
-        }
-        if (totalForecastCovers <= 0) continue;
-
-        // สูตรยอดใช้คาดการณ์รวม: ค่าเฉลี่ยต่อหัว × ผลรวมจำนวนหัวลูกค้าที่คาดการณ์แต่ละวัน
-        const predictedUsage = j.avg * totalForecastCovers;
-
-        // หักลบด้วยยอดคงเหลือปัจจุบัน: ช่อง "กรอกคงเหลือ" (remaining) ถ้าไม่มีใช้ "คงเหลือล่าสุด" (lastStock)
+        // ยอดคงเหลือปัจจุบัน (ใช้ร่วมกันทั้งสองโหมด): ช่อง "กรอกคงเหลือ" (remaining) ถ้าไม่มีใช้ "คงเหลือล่าสุด" (lastStock)
+        // ของที่ยังไม่เคยนับเลยจะได้ 0 — โหมดเติมเต็มจะเบิกเต็มจำนวนที่ตั้งไว้ ซึ่งถูกต้องแล้ว
         const currentItem = newItems[j.idx];
         const remVal = (currentItem.remaining !== '' && currentItem.remaining !== null && currentItem.remaining !== undefined)
           ? Number(currentItem.remaining)
           : (Number(currentItem.lastStock) || 0);
 
-        const rawNeed = Math.max(0, predictedUsage - remVal);
+        let rawNeed;
+        let totalForecastCovers;
+
+        if (j.mode === 'par') {
+          // โหมดเติมเต็มสตอค — เบิกให้กลับขึ้นไปถึงระดับที่ตั้งไว้ ไม่ยุ่งกับจำนวนหัวลูกค้าเลย
+          // ไม่หักสินค้ารอเข้าเหมือนโหมดค่าเฉลี่ย (กติกาเดียวกันทั้งหน้า ของที่ยังไม่ถึงสาขาไม่นับเป็นสต๊อก)
+          rawNeed = Math.max(0, j.par - remVal);
+        } else {
+          // ช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
+          const startForecast = new Date(j.lastD);
+          startForecast.setDate(startForecast.getDate() + 1);
+
+          // ไอเทมในกลุ่มราคา 359 (PREMIUM_359_ONLY_CODES) + สาขามี 2 ราคา → ใช้หัวลูกค้า 359 ล้วนๆ
+          // ไอเทมที่ไม่ได้ระบุกลุ่มราคา → ใช้ยอดรวมทั้ง 2 ราคา (percent = 259+359 ที่ระบบรวมให้ตอนบันทึก)
+          const usePremiumOnly = j.isPremium359Only && isTwoTierCalc;
+          const getDayCovers = usePremiumOnly ? covers359ForDate : coversForDate;
+
+          totalForecastCovers = 0;
+          const tempD = new Date(startForecast);
+          while (tempD <= targetForecast) {
+            totalForecastCovers += getDayCovers(tempD);
+            tempD.setDate(tempD.getDate() + 1);
+          }
+          if (totalForecastCovers <= 0) continue;
+
+          // สูตรยอดใช้คาดการณ์รวม: ค่าเฉลี่ยต่อหัว × ผลรวมจำนวนหัวลูกค้าที่คาดการณ์แต่ละวัน
+          const predictedUsage = j.avg * totalForecastCovers;
+          rawNeed = Math.max(0, predictedUsage - remVal);
+        }
 
         // ปัดเศษเป็นจำนวนเต็มตามหน่วยเบิก (คอลัมน์ L): เศษเกิน 30% ของหน่วย → ปัดขึ้น, ไม่เกิน → ปัดลง
         // เช่น หน่วยเบิก 5: คำนวณได้ 12 → 12/5=2.4 → ปัดขึ้น 3 → เบิก 15 | ได้ 10.5 → 2.1 → ปัดลง 2 → เบิก 10
+        // ใช้กฎเดียวกันทั้งสองโหมด สาขาจะได้ไม่ต้องจำว่าของตัวไหนปัดคนละแบบ
         const unitSize = Number(unitMap[String(currentItem.productId).trim()]) || 1;
         const ratio = rawNeed / unitSize;
         const whole = Math.floor(ratio);
@@ -1052,16 +1093,21 @@ export default function StockList() {
         newItems[j.idx] = {
           ...newItems[j.idx],
           requested: String(suggested),
-          calcCovers: totalForecastCovers
+          // โหมดเติมเต็มไม่มีจำนวนหัวลูกค้าให้แสดง — ล้างค่าจากการคำนวณรอบก่อนด้วย ไม่งั้นเลขเก่าค้าง
+          calcCovers: j.mode === 'par' ? undefined : totalForecastCovers,
         };
         filled++;
-        maxForecastCovers = Math.max(maxForecastCovers, totalForecastCovers);
+        if (j.mode !== 'par') maxForecastCovers = Math.max(maxForecastCovers, totalForecastCovers);
       }
       setItems(newItems);
       if (filled === 0) {
         toast.error('ไม่พบจำนวนหัวลูกค้าคาดการณ์สำหรับช่วงวันที่เลือก กรุณาตรวจสอบข้อมูลยอดขายเดือนที่แล้ว หรือตั้งค่าจำนวนหัวลูกค้ารายวันเอง');
       } else {
-        toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ (จำนวนหัวลูกค้าคาดการณ์สะสมสูงสุด: ${maxForecastCovers} คน)`, { duration: 6000 });
+        // ของโหมดเติมเต็มไม่ได้ใช้จำนวนหัวลูกค้า จึงบอกจำนวนหัวเฉพาะตอนที่มีของโหมดค่าเฉลี่ยจริงๆ
+        const coversNote = maxForecastCovers > 0 ? ` (จำนวนหัวลูกค้าคาดการณ์สะสมสูงสุด: ${maxForecastCovers} คน)` : '';
+        const parCount = jobs.filter(j => j.mode === 'par').length;
+        const parNote = parCount > 0 ? ` · เติมเต็มสตอค ${parCount} รายการ` : '';
+        toast.success(`คำนวณยอดเบิกเสร็จสิ้น ${filled} รายการ${coversNote}${parNote}`, { duration: 6000 });
       }
     } catch (e) {
       toast.error(e.message || 'คำนวณยอดเบิกไม่สำเร็จ');
@@ -1499,44 +1545,104 @@ export default function StockList() {
     }
   };
 
-  // แก้ไข "ค่าเฉลี่ย/หัว" ในตาราง แล้วบันทึกอัตโนมัติ (ไม่มีค่าเดิม = เพิ่มแถวใหม่)
+  // ── คอลัมน์ "ค่าตั้งเบิก" ──
+  // สินค้าหนึ่งตัวเลือกวิธีคิดยอดเบิกได้แบบเดียว (ติ๊ก = เติมเต็มสตอค, ไม่ติ๊ก = ค่าเฉลี่ย/หัว)
+  // ช่องตัวเลขจึงมีช่องเดียว แก้ค่าของโหมดที่เลือกอยู่ ส่วนค่าของอีกโหมดเก็บไว้ในฐานข้อมูลเหมือนเดิม
+  // สลับกลับไปกลับมาได้โดยไม่ต้องกรอกใหม่
   //
   // แก้ได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของทั้งสาขา
   // แก้ผิดตัวเดียวยอดเบิกเพี้ยนทั้งรายการโดยไม่มีอะไรเตือน สาขาจึงเห็นได้อย่างเดียว
   // (หน้าจอซ่อนช่องกรอกให้แล้ว ตรงนี้กันซ้ำเผื่อค่าเก่าค้างใน avgDraft ตอนสลับผู้ใช้)
+  const isParMode = (item) => item.calcMode === 'par';
+  const calcValueOf = (item) => (isParMode(item) ? item.parQty : item.avgPerHead);
+
+  // คิวการเขียนค่าตั้งเบิก — ต่อคำขอเรียงกันตามลำดับที่ผู้ใช้กด ไม่ยิงพร้อมกัน
+  //
+  // เคสจริงที่ต้องกัน: พิมพ์ตัวเลขเสร็จแล้วคลิกช่องติ๊กเลย จะเกิดสองคำขอติดกัน (blur บันทึกตัวเลข
+  // ของโหมดเดิม → คลิกสลับโหมด) apiCall ยิงพร้อมกันได้ถึง 3 คำขอ ถ้าคำขอสลับโหมดไปถึงก่อน
+  // คำขอบันทึกตัวเลขจะเขียนทับ calc_mode กลับเป็นโหมดเดิม เหมือนติ๊กแล้วเด้งกลับเอง
+  const calcWriteQueue = useRef(Promise.resolve());
+  const queueCalcWrite = (task) => {
+    const next = calcWriteQueue.current.then(task, task);
+    calcWriteQueue.current = next.catch(() => {});
+    return next;
+  };
+
   const saveAvgPerHead = async (item) => {
     const pid = item.productId;
     const raw = avgDraft[pid];
     const clearDraft = () => setAvgDraft(d => { const n = { ...d }; delete n[pid]; return n; });
     if (raw === undefined) return;                 // ไม่ได้แก้อะไร
     if (!isAll) { clearDraft(); return; }
+    const mode = isParMode(item) ? 'par' : 'avg';
+    const label = mode === 'par' ? 'ค่าเติมเต็มสตอค' : 'ค่าเฉลี่ยต่อหัว';
+    const current = calcValueOf(item);
     const trimmed = String(raw).trim();
     if (trimmed === '') { clearDraft(); return; }  // ปล่อยว่าง = ยกเลิก คืนค่าเดิม
     const num = Number(trimmed);
-    if (!Number.isFinite(num) || num < 0) { toast.error('ค่าเฉลี่ยต่อหัวไม่ถูกต้อง'); clearDraft(); return; }
-    if (item.avgPerHead !== undefined && num === item.avgPerHead) { clearDraft(); return; } // ไม่เปลี่ยน
+    if (!Number.isFinite(num) || num < 0) { toast.error(`${label}ไม่ถูกต้อง`); clearDraft(); return; }
+    if (current !== undefined && num === current) { clearDraft(); return; } // ไม่เปลี่ยน
     if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
 
     setSavingAvg(s => ({ ...s, [pid]: true }));
-    try {
-      const res = await apiCall('saveAvgPerHead', {
-        branch: String(effectiveBranch).toLowerCase(),
-        code: pid,
-        name: item.name || '',
-        value: num,
-      });
-      if (res.status === 'success') {
-        setItems(prev => prev.map(it => it.productId === pid ? { ...it, avgPerHead: num } : it));
-        clearDraft();
-        toast.success(res.message || 'บันทึกค่าเฉลี่ยต่อหัวแล้ว');
-      } else {
-        toast.error(res.message || 'บันทึกค่าเฉลี่ยต่อหัวไม่สำเร็จ');
+    await queueCalcWrite(async () => {
+      try {
+        const res = await apiCall('saveAvgPerHead', {
+          branch: String(effectiveBranch).toLowerCase(),
+          code: pid,
+          name: item.name || '',
+          mode,
+          value: num,
+        });
+        if (res.status === 'success') {
+          setItems(prev => prev.map(it => it.productId === pid
+            ? { ...it, ...(mode === 'par' ? { parQty: num } : { avgPerHead: num }) }
+            : it));
+          clearDraft();
+          toast.success(res.message || `บันทึก${label}แล้ว`);
+        } else {
+          toast.error(res.message || `บันทึก${label}ไม่สำเร็จ`);
+        }
+      } catch (e) {
+        toast.error(errMessage(e));
+      } finally {
+        setSavingAvg(s => { const n = { ...s }; delete n[pid]; return n; });
       }
-    } catch (e) {
-      toast.error(errMessage(e));
-    } finally {
-      setSavingAvg(s => { const n = { ...s }; delete n[pid]; return n; });
-    }
+    });
+  };
+
+  // ติ๊ก/เอาติ๊กออก = สลับวิธีคิดยอดเบิกของสินค้าตัวนั้น (ไม่แตะตัวเลขทั้งสองฝั่ง)
+  // ค่าที่พิมพ์ค้างอยู่ในช่องถูกบันทึกไปแล้วโดย onBlur ของช่องกรอก (คิวเดียวกัน คำขอนี้ต่อท้าย)
+  // ที่เหลือคือล้าง draft ทิ้ง เพราะพอสลับโหมดแล้วตัวเลขในช่องเป็นของอีกโหมดหนึ่งไปแล้ว
+  const toggleCalcMode = (item) => {
+    if (!isAll) return;
+    if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
+    const pid = item.productId;
+    const nextMode = isParMode(item) ? 'avg' : 'par';
+
+    setSavingAvg(s => ({ ...s, [pid]: true }));
+    return queueCalcWrite(async () => {
+      setAvgDraft(d => { const n = { ...d }; delete n[pid]; return n; });
+      try {
+        const res = await apiCall('saveAvgPerHead', {
+          branch: String(effectiveBranch).toLowerCase(),
+          code: pid,
+          name: item.name || '',
+          mode: nextMode,
+          // ไม่ส่ง value = สลับโหมดอย่างเดียว ติ๊กไว้ก่อนแล้วค่อยพิมพ์ตัวเลขทีหลังได้
+        });
+        if (res.status === 'success') {
+          setItems(prev => prev.map(it => it.productId === pid ? { ...it, calcMode: nextMode } : it));
+          toast.success(nextMode === 'par' ? 'เปลี่ยนเป็นคิดแบบเติมเต็มสตอค' : 'เปลี่ยนเป็นคิดแบบค่าเฉลี่ยต่อหัว');
+        } else {
+          toast.error(res.message || 'เปลี่ยนวิธีคิดยอดเบิกไม่สำเร็จ');
+        }
+      } catch (e) {
+        toast.error(errMessage(e));
+      } finally {
+        setSavingAvg(s => { const n = { ...s }; delete n[pid]; return n; });
+      }
+    });
   };
 
   // ตารางมี 2 โหมด: ปกติ (ซ่อนหมวดอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มข้างช่องค้นหา
@@ -1765,8 +1871,13 @@ export default function StockList() {
                   </button>
                 </div>
 
-                <div className="text-[11px] text-gray-500 leading-relaxed">
-                  สูตร: (ค่าเฉลี่ยยอดใช้ต่อหัว × ผลรวมจำนวนหัวลูกค้าคาดการณ์แต่ละวัน ตั้งแต่วันนับล่าสุดถึงวันใช้ของ) - สต๊อกคงเหลือล่าสุด
+                <div className="text-[11px] text-gray-500 leading-relaxed space-y-0.5">
+                  <div>
+                    สูตรปกติ: (<span className="text-fuchsia-600 font-semibold">ค่าเฉลี่ยยอดใช้ต่อหัว</span> × ผลรวมจำนวนหัวลูกค้าคาดการณ์แต่ละวัน ตั้งแต่วันนับล่าสุดถึงวันใช้ของ) - สต๊อกคงเหลือล่าสุด
+                  </div>
+                  <div>
+                    สินค้าที่ติ๊ก "เติมเต็ม" ในคอลัมน์ค่าตั้งเบิก: <span className="text-fuchsia-600 font-semibold">ค่าเติมเต็มสตอค</span> - สต๊อกคงเหลือล่าสุด (ไม่ใช้จำนวนหัวลูกค้าและวันใช้ของ)
+                  </div>
                 </div>
 
                 <div className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 flex items-start gap-1.5">
@@ -2075,7 +2186,10 @@ export default function StockList() {
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase min-w-[200px]">ชื่อสินค้า</th>
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-24">หมวดจัดเก็บ</th>
                       <th className="px-2 py-2.5 text-left text-[11px] leading-tight font-semibold text-gray-500 uppercase w-14">หน่วย</th>
-                      <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-fuchsia-600 uppercase w-20 bg-fuchsia-50/60" title={isAll ? 'ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้' : 'ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all'}>ค่าเฉลี่ย/หัว</th>
+                      <th
+                        className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-fuchsia-600 uppercase w-24 bg-fuchsia-50/60"
+                        title={'ค่าตั้งเบิกของสูตร "คำนวณยอดเบิก"\nไม่ติ๊ก = ค่าเฉลี่ยยอดใช้ต่อหัว (× จำนวนหัวลูกค้าคาดการณ์)\nติ๊ก เติม = ค่าเติมเต็มสตอค (เบิก = ค่านี้ - คงเหลือ)' + (isAll ? '' : '\nแก้ไขได้เฉพาะผู้ใช้สิทธิ์ all')}
+                      >ค่าตั้งเบิก</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-teal-600 uppercase w-24 bg-teal-50/60">ยอดยกมาเดือนที่แล้ว</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-purple-600 uppercase w-24 bg-purple-50/60">ยอดนับก่อนหน้า</th>
                       <th className="px-2 py-2.5 text-center text-[11px] leading-tight font-semibold text-indigo-600 uppercase w-28 bg-indigo-50/60">คงเหลือล่าสุด</th>
@@ -2116,31 +2230,54 @@ export default function StockList() {
                           </td>
                           <td className="px-2 py-2.5 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ค่าเฉลี่ยยอดใช้ต่อหัว — แก้ไขได้เฉพาะ user สิทธิ์ all (สาขาเห็นอย่างเดียว)
-                              เพราะเป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของทั้งสาขา แก้ผิดแล้วยอดเบิกเพี้ยนทั้งรายการ */}
+                          {/* ค่าตั้งเบิก — แก้ไขได้เฉพาะ user สิทธิ์ all (สาขาเห็นอย่างเดียว)
+                              เพราะเป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของทั้งสาขา แก้ผิดแล้วยอดเบิกเพี้ยนทั้งรายการ
+                              ติ๊ก "เติม" = คิดแบบเติมเต็มสตอค (เบิก = ค่านี้ - คงเหลือ) ไม่ติ๊ก = ค่าเฉลี่ยต่อหัวแบบเดิม */}
                           <td className="px-2 py-2.5 text-center bg-fuchsia-50/30">
                             {isAll ? (
-                              <div className="flex items-center justify-center gap-1">
-                                <input
-                                  type="number" min="0" step="any" inputMode="decimal"
-                                  disabled={savingAvg[item.productId] || !effectiveBranch}
-                                  value={avgDraft[item.productId] !== undefined ? avgDraft[item.productId] : (item.avgPerHead === undefined ? '' : item.avgPerHead)}
-                                  onChange={(e) => setAvgDraft(d => ({ ...d, [item.productId]: e.target.value }))}
-                                  onFocus={(e) => e.target.select()}
-                                  onBlur={() => saveAvgPerHead(item)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                  placeholder="-"
-                                  title={item.avgPerHead === undefined ? 'ยังไม่มีค่าเดิม — กรอกแล้วบันทึกใหม่อัตโนมัติ' : 'ค่าเฉลี่ยต่อหัว (แก้ไขแล้วบันทึกอัตโนมัติ)'}
-                                  className="w-20 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
-                                />
-                                {savingAvg[item.productId] && <Loader2 className="w-3 h-3 animate-spin text-fuchsia-400 shrink-0" />}
+                              <div className="flex flex-col items-center gap-0.5">
+                                <div className="flex items-center justify-center gap-1">
+                                  <input
+                                    type="number" min="0" step="any" inputMode="decimal"
+                                    disabled={savingAvg[item.productId] || !effectiveBranch}
+                                    value={avgDraft[item.productId] !== undefined ? avgDraft[item.productId] : (calcValueOf(item) === undefined ? '' : calcValueOf(item))}
+                                    onChange={(e) => setAvgDraft(d => ({ ...d, [item.productId]: e.target.value }))}
+                                    onFocus={(e) => e.target.select()}
+                                    onBlur={() => saveAvgPerHead(item)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                    placeholder="-"
+                                    title={isParMode(item)
+                                      ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ (แก้ไขแล้วบันทึกอัตโนมัติ)'
+                                      : 'ค่าเฉลี่ยต่อหัว — ยอดเบิก = ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - ยอดคงเหลือ (แก้ไขแล้วบันทึกอัตโนมัติ)'}
+                                    className="w-16 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
+                                  />
+                                  {savingAvg[item.productId] && <Loader2 className="w-3 h-3 animate-spin text-gray-400 shrink-0" />}
+                                </div>
+                                <label
+                                  className={`flex items-center gap-1 text-[10px] cursor-pointer select-none hover:text-fuchsia-700 ${isParMode(item) ? 'text-fuchsia-700 font-semibold' : 'text-gray-400'}`}
+                                  title="ติ๊ก = คิดยอดเบิกแบบเติมเต็มสตอค (ยอดเบิก = ค่าที่ตั้งไว้ - ยอดคงเหลือ) ไม่ต้องใช้จำนวนหัวลูกค้า"
+                                >
+                                  {/* ไม่ปิดช่องติ๊กตอน savingAvg เพราะคนมักพิมพ์ตัวเลขเสร็จแล้วคลิกติ๊กต่อทันที
+                                      (onBlur เริ่มบันทึกไปแล้ว) ถ้าปิดตอนนั้นคลิกจะหายไปเงียบๆ
+                                      สองคำขอต่อคิวกันด้วย queueCalcWrite อยู่แล้ว จึงไม่เขียนทับกัน */}
+                                  <input
+                                    type="checkbox"
+                                    checked={isParMode(item)}
+                                    disabled={!effectiveBranch}
+                                    onChange={() => toggleCalcMode(item)}
+                                    className="w-3 h-3 rounded border-gray-300 text-fuchsia-600 focus:ring-fuchsia-400 cursor-pointer disabled:opacity-50"
+                                  />
+                                  เติมเต็ม
+                                </label>
                               </div>
                             ) : (
-                              <div
-                                className={`text-sm font-semibold ${item.avgPerHead === undefined ? 'text-fuchsia-300 font-normal' : 'text-fuchsia-700'}`}
-                                title="ค่าเฉลี่ยต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all"
-                              >
-                                {item.avgPerHead === undefined ? '-' : item.avgPerHead}
+                              <div title={isParMode(item)
+                                ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ (แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all)'
+                                : 'ค่าเฉลี่ยต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all'}>
+                                <div className={`text-sm font-semibold ${calcValueOf(item) === undefined ? 'text-fuchsia-300 font-normal' : 'text-fuchsia-700'}`}>
+                                  {calcValueOf(item) === undefined ? '-' : calcValueOf(item)}
+                                </div>
+                                {isParMode(item) && <div className="text-[10px] text-fuchsia-500 leading-none">เติมเต็ม</div>}
                               </div>
                             )}
                           </td>

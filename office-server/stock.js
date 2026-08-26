@@ -501,23 +501,37 @@ async function updateStorageCategory(body, session) {
   return { message: 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว' };
 }
 
-/* ===================== ค่าเฉลี่ยยอดใช้ต่อหัว (สูตรเบิก) =====================
-   หน้านับสต๊อกใช้คำนวณยอดเบิกอัตโนมัติ: ยอดเบิก = ค่าเฉลี่ยต่อหัว x จำนวนหัวที่คาด */
+/* ===================== ค่าตั้งเบิกของแต่ละสินค้า (สูตรเบิก) =====================
+   หน้านับสต๊อกใช้คำนวณยอดเบิกอัตโนมัติ เลือกวิธีคิดได้ 2 แบบต่อสินค้าต่อสาขา (calc_mode)
+     'avg' — ยอดเบิก = ค่าเฉลี่ยต่อหัว x จำนวนหัวที่คาด - คงเหลือ
+     'par' — ยอดเบิก = ค่าเติมเต็มสตอค - คงเหลือ (ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า) */
+
+/** โหมดคำนวณที่ยอมรับ — ค่าอื่นถือว่าไม่ได้ระบุ แล้วตกเป็น 'avg' ตามพฤติกรรมเดิม */
+const calcModeOf = (v) => (str(v).toLowerCase() === 'par' ? 'par' : 'avg');
+
 async function saveAvgPerHead(body, session) {
-  // แก้ค่าเฉลี่ยต่อหัวได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของสาขา
+  // แก้ค่าตั้งเบิกได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของสาขา
   // (หน้าเว็บซ่อนช่องกรอกให้แล้ว ตรงนี้กันซ้ำอีกชั้นเผื่อเรียก API ตรงๆ เหมือนกติกาสาขาใน branchFor)
   if (!session?.isAll) throw forbidden('แก้ไขค่าเฉลี่ยต่อหัวได้เฉพาะผู้ใช้สิทธิ์ all');
 
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   const code = str(body.code);
   const key = normCode(code);
-  const value = Number(body.value);
+  // mode ไม่ส่งมา = 'avg' — คำขอเวอร์ชันเก่าที่รู้จักแต่ค่าเฉลี่ยต่อหัวจึงทำงานเหมือนเดิม
+  const mode = calcModeOf(body.mode);
+  // ส่ง value มาว่าง = แค่สลับโหมด ไม่แตะตัวเลข (ติ๊กช่องก่อนแล้วค่อยพิมพ์ตัวเลขทีหลังได้)
+  const hasValue = body.value !== undefined && body.value !== null && str(body.value) !== '';
+  const value = hasValue ? Number(body.value) : null;
+  const label = mode === 'par' ? 'ค่าเติมเต็มสตอค' : 'ค่าเฉลี่ยต่อหัว';
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   if (!key) throw badRequest('ไม่ระบุรหัสสินค้า');
-  if (!Number.isFinite(value) || value < 0) throw badRequest('ค่าเฉลี่ยต่อหัวไม่ถูกต้อง');
+  if (hasValue && (!Number.isFinite(value) || value < 0)) throw badRequest(`${label}ไม่ถูกต้อง`);
 
   // แถวเก่าของสาขานี้อาจถูกบันทึกไว้ใต้ชื่อ sjp หรือ zjp — เก็บให้เหลือชุดเดียวตามที่ส่งมา
   // ไม่งั้นแก้ค่าแล้วยังอ่านเจอค่าเก่าจากอีก alias หนึ่ง
+  //
+  // แต่ละคำขอแตะตัวเลขของโหมดที่ส่งมาโหมดเดียว อีกโหมดคงค่าเดิมไว้ (@avg_qty/@par_qty เป็น NULL
+  // แล้วใช้ ISNULL คร่อม) — สลับโหมดกลับไปกลับมาแล้วค่าที่เคยตั้งไว้ต้องไม่หาย
   await runSql(
     `DELETE FROM dbo.stock_avg_per_head
       WHERE item_key = @item_key AND branch IN (@b0, @b1) AND branch <> @branch;
@@ -527,9 +541,10 @@ async function saveAvgPerHead(body, session) {
        ON t.branch = s.branch AND t.item_key = s.item_key
      WHEN MATCHED THEN UPDATE SET
        item_code = @item_code, item_name = ISNULL(NULLIF(@item_name, N''), t.item_name),
-       avg_qty = @avg_qty, updated_at = SYSDATETIME()
-     WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, avg_qty)
-       VALUES (@branch, @item_key, @item_code, @item_name, @avg_qty);`,
+       avg_qty = ISNULL(@avg_qty, t.avg_qty), par_qty = ISNULL(@par_qty, t.par_qty),
+       calc_mode = @calc_mode, updated_at = SYSDATETIME()
+     WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, avg_qty, par_qty, calc_mode)
+       VALUES (@branch, @item_key, @item_code, @item_name, ISNULL(@avg_qty, 0), @par_qty, @calc_mode);`,
     {
       branch: { type: sql.NVarChar(50), value: branch },
       b0: { type: sql.NVarChar(50), value: branchAliases(branch)[0] },
@@ -537,28 +552,46 @@ async function saveAvgPerHead(body, session) {
       item_key: { type: sql.NVarChar(50), value: key },
       item_code: { type: sql.NVarChar(50), value: code },
       item_name: { type: sql.NVarChar(255), value: str(body.name) },
-      avg_qty: { type: sql.Decimal(18, 4), value: value },
+      calc_mode: { type: sql.NVarChar(10), value: mode },
+      avg_qty: { type: sql.Decimal(18, 4), value: mode === 'avg' ? value : null },
+      par_qty: { type: sql.Decimal(18, 4), value: mode === 'par' ? value : null },
     }
   );
-  return { message: 'บันทึกค่าเฉลี่ยต่อหัวแล้ว', branch, code, value };
+  return { message: `บันทึก${label}แล้ว`, branch, code, mode, value };
 }
 
-/** ค่าเฉลี่ยต่อหัวของสาขา — คืนเป็น { รหัสสินค้า: ค่าเฉลี่ย } เหมือนที่ /api/stockcount เคยคืน */
+/**
+ * ค่าตั้งเบิกของสาขา
+ *
+ * data ยังเป็น { รหัสสินค้า: ค่าเฉลี่ยต่อหัว } รูปแบบเดิมทุกประการ ส่วนโหมด par ต่อท้ายมาเป็น
+ * modes/par แยกก้อน — หน้าเว็บเวอร์ชันเก่าที่ยังไม่รู้จักโหมด par จึงอ่าน data ก้อนเดิมทำงานได้ปกติ
+ * (สำคัญตอน deploy: เครื่องออฟฟิศกับหน้าเว็บอัปเดตไม่พร้อมกันได้ ไม่ล็อกลำดับ)
+ *
+ * แถวโหมด par ที่ไม่เคยตั้งค่าเฉลี่ย (avg_qty = 0) ต้องติดมาด้วย ไม่งั้นหน้าเว็บจะไม่รู้ว่า
+ * สินค้าตัวนั้นถูกติ๊กเป็นโหมด par ไว้ — เงื่อนไข WHERE จึงยอมทั้งสองแบบ
+ */
 async function getAvgPerHead(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   const alias = branchAliases(branch);
   const rows = await queryRead(
-    `SELECT item_key, avg_qty FROM dbo.stock_avg_per_head
-      WHERE branch IN (@b0, @b1) AND avg_qty > 0`,
+    `SELECT item_key, avg_qty, par_qty, calc_mode FROM dbo.stock_avg_per_head
+      WHERE branch IN (@b0, @b1) AND (avg_qty > 0 OR calc_mode = N'par')`,
     {
       b0: { type: sql.NVarChar(50), value: alias[0] },
       b1: { type: sql.NVarChar(50), value: alias[1] || alias[0] },
     }
   );
-  const data = {};
-  for (const r of rows) data[r.item_key] = Number(r.avg_qty);
-  return { branch, count: rows.length, data };
+  const data = {};   // { item_key: ค่าเฉลี่ยต่อหัว } — เฉพาะที่มีค่าจริง เหมือนเดิม
+  const modes = {};  // { item_key: 'par' } — ใส่เฉพาะโหมด par, ไม่มีในนี้ = โหมด avg
+  const par = {};    // { item_key: ค่าเติมเต็มสตอค }
+  for (const r of rows) {
+    const avg = Number(r.avg_qty);
+    if (avg > 0) data[r.item_key] = avg;
+    if (calcModeOf(r.calc_mode) === 'par') modes[r.item_key] = 'par';
+    if (r.par_qty !== null && r.par_qty !== undefined) par[r.item_key] = Number(r.par_qty);
+  }
+  return { branch, count: rows.length, data, modes, par };
 }
 
 /* =================== เปอร์เซ็นต์การเบิกของแต่ละสาขา ===================

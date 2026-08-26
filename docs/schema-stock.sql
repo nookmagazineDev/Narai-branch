@@ -190,10 +190,17 @@ CREATE TABLE dbo.stock_storage_category (
 );
 GO
 
-/* ====================== ค่าเฉลี่ยยอดใช้ต่อหัว (สูตรเบิก) ======================
+/* ====================== ค่าตั้งเบิกของแต่ละสินค้า (สูตรเบิก) ======================
    ชีท 'ค่าเฉลี่ยยอดใช้ต่อหัว' ในไฟล์ BOM: A=สาขา B=รหัส C=ชื่อ D=ค่าเฉลี่ย
-   ใช้ในสูตร: ยอดเบิก = ค่าเฉลี่ยต่อหัว x ผลรวมจำนวนหัว (ดูหน้านับสต๊อก)
-   ยังไม่ได้ย้ายในเฟสนี้ (ตารางเตรียมไว้ก่อน — ดู docs/stock-sql-migration.md) */
+
+   หนึ่งแถวเก็บ "วิธีคิดยอดเบิก" ของสินค้าตัวนั้นในสาขานั้น เลือกได้ 2 แบบด้วย calc_mode
+     'avg' (ค่าตั้งต้น) — ยอดเบิก = avg_qty x ผลรวมจำนวนหัวลูกค้าคาดการณ์ - คงเหลือ
+     'par'             — ยอดเบิก = par_qty - คงเหลือ  (เติมสต๊อกให้ถึงระดับที่ตั้งไว้)
+   แบบ par มีไว้ให้ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า (กล่อง ถุง น้ำยา อุปกรณ์)
+   ซึ่งแบบ avg คำนวณให้ไม่ได้เพราะไม่มีค่าเฉลี่ยต่อหัวที่มีความหมาย
+
+   เก็บ avg_qty กับ par_qty แยกคอลัมน์ ไม่ใช้ช่องตัวเลขร่วมกัน เพราะสลับโหมดไปมา
+   แล้วค่าของอีกแบบต้องยังอยู่ ไม่ใช่ให้คนมากรอกใหม่ทุกครั้งที่เปลี่ยนใจ */
 IF OBJECT_ID(N'dbo.stock_avg_per_head', N'U') IS NULL
 CREATE TABLE dbo.stock_avg_per_head (
     branch      NVARCHAR(50)   NOT NULL,
@@ -201,9 +208,22 @@ CREATE TABLE dbo.stock_avg_per_head (
     item_code   NVARCHAR(50)   NOT NULL,
     item_name   NVARCHAR(255)  NULL,
     avg_qty     DECIMAL(18,4)  NOT NULL,
+    -- โหมด par: สินค้าที่ยังไม่เคยตั้งค่าเฉลี่ยจะมี avg_qty = 0 (คอลัมน์เป็น NOT NULL มาแต่เดิม)
+    calc_mode   NVARCHAR(10)   NOT NULL CONSTRAINT DF_stock_avg_calc_mode DEFAULT (N'avg'),
+    par_qty     DECIMAL(18,4)  NULL,
     updated_at  DATETIME2(0)   NOT NULL CONSTRAINT DF_stock_avg_updated_at DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_stock_avg_per_head PRIMARY KEY (branch, item_key)
 );
+GO
+
+/* เครื่องที่ลงตารางนี้ไปแล้วก่อนมีโหมด par — เพิ่มคอลัมน์ให้ (รันซ้ำได้ ไม่ทับของเดิม)
+   แถวเก่าทุกแถวได้ calc_mode = 'avg' จาก DEFAULT จึงคำนวณเหมือนเดิมทุกประการ */
+IF COL_LENGTH(N'dbo.stock_avg_per_head', N'calc_mode') IS NULL
+ALTER TABLE dbo.stock_avg_per_head
+    ADD calc_mode NVARCHAR(10) NOT NULL CONSTRAINT DF_stock_avg_calc_mode DEFAULT (N'avg');
+GO
+IF COL_LENGTH(N'dbo.stock_avg_per_head', N'par_qty') IS NULL
+ALTER TABLE dbo.stock_avg_per_head ADD par_qty DECIMAL(18,4) NULL;
 GO
 
 /* ==================== เปอร์เซ็นต์การเบิกของแต่ละสาขา ====================

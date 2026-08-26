@@ -148,15 +148,21 @@ export default async function handler(req, res) {
     }
   }
 
-  // โหมด "ค่าเฉลี่ยยอดใช้ต่อหัว" (?avgperhead=1&branch=xxx) — อ่านจาก SQL (dbo.stock_avg_per_head)
-  // ใช้คำนวณยอดเบิกอัตโนมัติในหน้านับสต๊อก: คืน { code: avgPerHead } ของสาขานั้น
+  // โหมด "ค่าตั้งเบิก" (?avgperhead=1&branch=xxx) — อ่านจาก SQL (dbo.stock_avg_per_head)
+  // ใช้คำนวณยอดเบิกอัตโนมัติในหน้านับสต๊อก คืนสามก้อน
+  //   data  = { code: ค่าเฉลี่ยต่อหัว }   (รูปแบบเดิม)
+  //   modes = { code: 'par' }            สินค้าที่คิดแบบเติมเต็มสตอค (ไม่มีในนี้ = คิดแบบค่าเฉลี่ย)
+  //   par   = { code: ค่าเติมเต็มสตอค }
   // ย้ายจากชีทมาที่ SQL พร้อมกับปุ่มแก้ค่าในหน้านับสต๊อก (saveAvgPerHead) — ต้องอ่านที่เดียวกับที่เขียน
   if (req.query.avgperhead) {
     const brA = String(req.query.branch || '').toLowerCase().trim();
     if (!brA) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
       const d = await callOffice('getAvgPerHead', { branch: brA });
-      return res.status(200).json({ status: 'success', branch: brA, count: d?.count ?? 0, data: d?.data || {} });
+      return res.status(200).json({
+        status: 'success', branch: brA, count: d?.count ?? 0,
+        data: d?.data || {}, modes: d?.modes || {}, par: d?.par || {},
+      });
     } catch (error) {
       return res.status(502).json({ status: 'error', message: error.message });
     }
