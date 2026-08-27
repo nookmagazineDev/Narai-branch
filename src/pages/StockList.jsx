@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { tryGetJson } from '../services/dashboardApi';
@@ -172,6 +173,7 @@ const isTwoTierBranchOf = (branch, bucketInfo, savedPcts) =>
 
 export default function StockList() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isAll = user?.branch?.toLowerCase() === 'all';
 
   const [loading, setLoading] = useState(false);
@@ -1068,7 +1070,7 @@ export default function StockList() {
           // ไม่หักสินค้ารอเข้าเหมือนโหมดค่าเฉลี่ย (กติกาเดียวกันทั้งหน้า ของที่ยังไม่ถึงสาขาไม่นับเป็นสต๊อก)
           //
           // เบิกต่อเมื่อของพร่องลงต่ำกว่าจุดสั่งซื้อ (40% ของระดับที่ตั้งไว้) เท่านั้น
-          // ยังเหลือเยอะกว่านั้น = ยังไม่ถึงคิวเบิก เติม 0 ให้เห็นว่าคำนวณแล้วไม่ใช่ลืมคิด
+          // ยังเหลือเยอะกว่านั้น = ยังไม่ถึงคิวเบิก ได้ 0 แล้วเว้นช่องขอเบิกไว้ว่าง
           const reorderPoint = j.par * PAR_REORDER_RATIO;
           rawNeed = remVal < reorderPoint - 1e-9 ? Math.max(0, j.par - remVal) : 0;
         } else {
@@ -1105,7 +1107,8 @@ export default function StockList() {
 
         newItems[j.idx] = {
           ...newItems[j.idx],
-          requested: String(suggested),
+          // คำนวณแล้วได้ 0 (ของยังเหลือพอ ยังไม่ถึงคิวเบิก) — เว้นช่องไว้ว่างๆ อ่านง่ายกว่าเลข 0 เต็มตาราง
+          requested: suggested > 0 ? String(suggested) : '',
           // โหมดเติมเต็มไม่มีจำนวนหัวลูกค้าให้แสดง — ล้างค่าจากการคำนวณรอบก่อนด้วย ไม่งั้นเลขเก่าค้าง
           calcCovers: j.mode === 'par' ? undefined : totalForecastCovers,
         };
@@ -1213,18 +1216,24 @@ export default function StockList() {
 
     const okResults = results.filter(r => r.ok);
     if (okResults.length === results.length) {
-      toast.success(
-        results.length > 1
-          ? `📦 ส่งใบเบิกสำเร็จ ${results.length} ใบ (เลขที่ ${okResults.map(r => r.no).join(', ')})`
-          : `📦 ส่งใบเบิกสำเร็จ! เลขที่ ${okResults[0].no} • ${okResults[0].count} รายการ`,
-        { duration: 8000 }
-      );
-      // สำเร็จครบทุกใบ — ปิดหน้าต่างทันที ไม่ต้องค้างให้กดปิดเอง (เลขที่ใบเบิกโชว์ผ่าน toast ด้านบนแล้ว)
+      // สำเร็จครบทุกใบ — ปิดหน้าต่างแล้วเด้งกลับหน้าจอหลักทันที
+      // เลขที่ใบเบิกส่งไปกับ location.state ให้หน้าหลักขึ้นแถบ "ส่งสำเร็จแล้ว" พร้อมเลขที่ใบ
       setShowOrderModal(false);
       setOrderResult(null);
-    } else {
-      toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางใบมีปัญหา ดูรายละเอียดด้านล่าง`);
+      navigate('/', {
+        state: {
+          orderSuccess: {
+            branch: effectiveBranch,
+            deldate: orderDelDate,
+            docs: okResults.map(r => ({ no: r.no, label: r.label, count: r.count })),
+            at: Date.now(),
+          },
+        },
+      });
+      return;
     }
+
+    toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางใบมีปัญหา ดูรายละเอียดด้านล่าง`);
     // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
     try {
       const pj = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);

@@ -1,5 +1,5 @@
 import { useAuth } from '../contexts/AuthContext';
-import { useOutletContext } from 'react-router-dom';
+import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   DollarSign, Layers, TrendingUp, FileText, Users, BarChart3,
@@ -510,9 +510,64 @@ function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId })
   );
 }
 
+// ---- แถบ "ส่งใบเบิกสำเร็จแล้ว" — ขึ้นตอนถูกเด้งกลับมาจากหน้านับสต๊อกหลังกดยืนยันสั่งของ ----
+function OrderSuccessBanner({ info, onClose }) {
+  if (!info) return null;
+  const docs = info.docs || [];
+  const totalCount = docs.reduce((s, d) => s + (Number(d.count) || 0), 0);
+  return (
+    <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 shadow-sm p-5">
+      <div className="flex items-start gap-3">
+        <div className="w-11 h-11 shrink-0 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+          <CheckCircle className="w-6 h-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-lg font-bold text-emerald-800">ส่งสำเร็จแล้ว</h3>
+          <p className="text-sm text-emerald-600 mt-0.5">
+            ส่งใบเบิก {docs.length.toLocaleString('th-TH')} ใบ
+            {totalCount > 0 && ` • รวม ${totalCount.toLocaleString('th-TH')} รายการ`}
+            {info.branch && ` • สาขา ${info.branch}`}
+            {info.deldate && ` • รับวันที่ ${info.deldate}`}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {docs.map((d) => (
+              <div key={d.no} className="bg-white border border-emerald-200 rounded-xl px-4 py-2">
+                <p className="text-[11px] font-medium text-emerald-600">เลขที่ใบเบิก{d.label ? ` • ${d.label}` : ''}</p>
+                <p className="text-xl font-bold font-mono text-emerald-700 tracking-wide">{d.no}</p>
+                {Number(d.count) > 0 && (
+                  <p className="text-[11px] text-emerald-500">{Number(d.count).toLocaleString('th-TH')} รายการ</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-emerald-500 mt-2">บันทึกไว้ในใบเบิกค้างแล้ว</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-100 shrink-0"
+          title="ปิด"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardHome() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // เลขที่ใบเบิกที่เพิ่งส่งสำเร็จ — ส่งมาทาง location.state จากหน้านับสต๊อก
+  // อ่านตอน mount ครั้งเดียว (มาจากหน้าอื่นเสมอ = หน้านี้ถูก mount ใหม่) แล้วเก็บไว้ใน state ของหน้า
+  const [orderSuccess, setOrderSuccess] = useState(() => location.state?.orderSuccess || null);
+  useEffect(() => {
+    if (!location.state?.orderSuccess) return;
+    // ล้าง state ทิ้งจากประวัติ ไม่ให้แถบเด้งซ้ำตอนรีเฟรชหรือกดย้อนกลับ (แถบยังอยู่เพราะเก็บไว้ใน state แล้ว)
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
 
   // ผู้ใช้ระดับ all: เลือกสาขาที่จะดูได้ | ผู้ใช้ปกติ: ใช้สาขาของตัวเอง
   const [branchList, setBranchList] = useState([]);
@@ -620,6 +675,8 @@ export default function DashboardHome() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      <OrderSuccessBanner info={orderSuccess} onClose={() => setOrderSuccess(null)} />
+
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
