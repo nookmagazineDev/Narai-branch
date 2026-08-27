@@ -7,6 +7,15 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import * as XLSX from 'xlsx';
 
+// โหมดเติมเต็มสตอค: เบิกต่อเมื่อของเหลือ "น้อยกว่า" สัดส่วนนี้ของระดับที่ตั้งไว้
+//
+// มีไว้กันการเบิกทีละนิดทุกรอบนับ ของที่ยังเหลือเกือบเต็มไม่ต้องสั่งเพิ่ม รอให้พร่องจริงก่อน
+// แล้วค่อยเบิกทีเดียวให้เต็ม — ลดจำนวนใบเบิกและงานรับของของสาขา
+//
+// เทียบแบบ "น้อยกว่า" ล้วนๆ: เหลือ 40% พอดี = ยังไม่เบิก (ต้องต่ำกว่า 40% จริงๆ)
+// ลบ epsilon กันเลขทศนิยมของ JS ทำให้ค่าที่ควรเท่ากันพอดีกลายเป็นน้อยกว่าไปเอง
+const PAR_REORDER_RATIO = 0.4;
+
 // ยอดยกมาเดือนที่แล้ว = ยอดนับล่าสุดของ "เดือนก่อน" จาก stockHistory (date รูปแบบ dd/MM/yyyy)
 // คำนวณฝั่ง client จากประวัติที่ getStockItems ส่งมาแล้ว (ไม่ต้องยิง API เพิ่ม)
 function prevMonthFromHistory(history) {
@@ -914,7 +923,7 @@ export default function StockList() {
   // ── คำนวณยอดเบิกอัตโนมัติ ──
   // สินค้าแต่ละตัวเลือกวิธีคิดได้ 2 แบบ (ตั้งที่คอลัมน์ "ค่าตั้งเบิก" — เฉพาะผู้ใช้สิทธิ์ all)
   //   โหมดค่าเฉลี่ย/หัว : ยอดเบิก = ค่าเฉลี่ยต่อหัว × ผลรวมจำนวนหัวลูกค้าคาดการณ์ - คงเหลือ
-  //   โหมดเติมเต็มสตอค  : ยอดเบิก = ค่าเติมเต็มสตอค - คงเหลือ
+  //   โหมดเติมเต็มสตอค  : ยอดเบิก = ค่าเติมเต็มสตอค - คงเหลือ (เฉพาะตอนเหลือน้อยกว่า 40% ของค่าที่ตั้งไว้)
   // แบบเติมเต็มมีไว้ให้ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า (กล่อง ถุง น้ำยา อุปกรณ์) ซึ่งแบบค่าเฉลี่ย
   // คำนวณให้ไม่ได้เลยเพราะไม่มีค่าเฉลี่ยต่อหัวที่มีความหมาย — และไม่ต้องใช้วันนับล่าสุดกับยอดขายด้วย
   // ตัวคูณวันที่ใช้ของ: จ-พฤ ×1 | ศ ×1.1 | ส-อา/นักขัตฤกษ์ ×1.2
@@ -1057,7 +1066,11 @@ export default function StockList() {
         if (j.mode === 'par') {
           // โหมดเติมเต็มสตอค — เบิกให้กลับขึ้นไปถึงระดับที่ตั้งไว้ ไม่ยุ่งกับจำนวนหัวลูกค้าเลย
           // ไม่หักสินค้ารอเข้าเหมือนโหมดค่าเฉลี่ย (กติกาเดียวกันทั้งหน้า ของที่ยังไม่ถึงสาขาไม่นับเป็นสต๊อก)
-          rawNeed = Math.max(0, j.par - remVal);
+          //
+          // เบิกต่อเมื่อของพร่องลงต่ำกว่าจุดสั่งซื้อ (40% ของระดับที่ตั้งไว้) เท่านั้น
+          // ยังเหลือเยอะกว่านั้น = ยังไม่ถึงคิวเบิก เติม 0 ให้เห็นว่าคำนวณแล้วไม่ใช่ลืมคิด
+          const reorderPoint = j.par * PAR_REORDER_RATIO;
+          rawNeed = remVal < reorderPoint - 1e-9 ? Math.max(0, j.par - remVal) : 0;
         } else {
           // ช่วงวางแผนใช้ของ: ตั้งแต่วันถัดจากวันนับล่าสุด (lastD + 1) ถึงวันที่ต้องการใช้ของ (useDate)
           const startForecast = new Date(j.lastD);
@@ -1877,6 +1890,8 @@ export default function StockList() {
                   </div>
                   <div>
                     สินค้าที่ติ๊ก "เติมเต็ม" ในคอลัมน์ค่าตั้งเบิก: <span className="text-fuchsia-600 font-semibold">ค่าเติมเต็มสตอค</span> - สต๊อกคงเหลือล่าสุด (ไม่ใช้จำนวนหัวลูกค้าและวันใช้ของ)
+                    <br />
+                    <span className="text-gray-400">เบิกเฉพาะตัวที่เหลือน้อยกว่า 40% ของค่าที่ตั้งไว้ — ยังเหลือเยอะกว่านั้นได้ 0 (ยังไม่ถึงคิวเบิก)</span>
                   </div>
                 </div>
 
@@ -2247,7 +2262,7 @@ export default function StockList() {
                                     onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
                                     placeholder="-"
                                     title={isParMode(item)
-                                      ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ (แก้ไขแล้วบันทึกอัตโนมัติ)'
+                                      ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ เบิกเมื่อเหลือน้อยกว่า 40% ของค่านี้ (แก้ไขแล้วบันทึกอัตโนมัติ)'
                                       : 'ค่าเฉลี่ยต่อหัว — ยอดเบิก = ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - ยอดคงเหลือ (แก้ไขแล้วบันทึกอัตโนมัติ)'}
                                     className="w-16 text-center text-sm font-semibold text-fuchsia-700 bg-transparent border border-transparent hover:border-fuchsia-200 focus:border-fuchsia-400 focus:bg-white rounded-md px-1 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50 placeholder:text-fuchsia-300 placeholder:font-normal"
                                   />
@@ -2255,7 +2270,7 @@ export default function StockList() {
                                 </div>
                                 <label
                                   className={`flex items-center gap-1 text-[10px] cursor-pointer select-none hover:text-fuchsia-700 ${isParMode(item) ? 'text-fuchsia-700 font-semibold' : 'text-gray-400'}`}
-                                  title="ติ๊ก = คิดยอดเบิกแบบเติมเต็มสตอค (ยอดเบิก = ค่าที่ตั้งไว้ - ยอดคงเหลือ) ไม่ต้องใช้จำนวนหัวลูกค้า"
+                                  title="ติ๊ก = คิดยอดเบิกแบบเติมเต็มสตอค (ยอดเบิก = ค่าที่ตั้งไว้ - ยอดคงเหลือ) เบิกเมื่อของเหลือน้อยกว่า 40% ของค่าที่ตั้งไว้ ไม่ต้องใช้จำนวนหัวลูกค้า"
                                 >
                                   {/* ไม่ปิดช่องติ๊กตอน savingAvg เพราะคนมักพิมพ์ตัวเลขเสร็จแล้วคลิกติ๊กต่อทันที
                                       (onBlur เริ่มบันทึกไปแล้ว) ถ้าปิดตอนนั้นคลิกจะหายไปเงียบๆ
@@ -2272,7 +2287,7 @@ export default function StockList() {
                               </div>
                             ) : (
                               <div title={isParMode(item)
-                                ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ (แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all)'
+                                ? 'ค่าเติมเต็มสตอค — ยอดเบิก = ค่านี้ - ยอดคงเหลือ เบิกเมื่อเหลือน้อยกว่า 40% ของค่านี้ (แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all)'
                                 : 'ค่าเฉลี่ยต่อหัว — แก้ไขได้เฉพาะผู้ใช้สิทธิ์ all'}>
                                 <div className={`text-sm font-semibold ${calcValueOf(item) === undefined ? 'text-fuchsia-300 font-normal' : 'text-fuchsia-700'}`}>
                                   {calcValueOf(item) === undefined ? '-' : calcValueOf(item)}
