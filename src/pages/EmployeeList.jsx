@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { apiCall } from '../services/api';
+import { apiCall, fetchEmployees as fetchEmployeesApi } from '../services/api';
 import toast from 'react-hot-toast';
 import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
-import { branchGroup } from '../utils/branchAlias';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -95,6 +94,8 @@ export default function EmployeeList() {
         setEmployees(prev => prev.map(e => e.hrCode === emp.hrCode ? { ...e, loga: value } : e));
         setLogaEdits(prev => { const n = { ...prev }; delete n[emp.hrCode]; return n; });
         setEditingLoga(null);
+        // อ่านชีทกลับเงียบๆ (ไม่ขึ้นตัวหมุน) เพื่อให้ค่าใหม่ถูกซิงก์เข้า SQL ด้วย
+        fetchEmployees(true, true);
       } else {
         toast.error(res.message || 'บันทึกไม่สำเร็จ', { id: toastId });
       }
@@ -123,7 +124,8 @@ export default function EmployeeList() {
         });
         if (res.status === 'success') {
           toast.success('อัปโหลดรูปสำเร็จ', { id: toastId });
-          fetchEmployees();
+          // คำสั่งเขียนลงชีทอย่างเดียว ต้องอ่านกลับจากชีท (fresh) ไม่งั้น SQL ยังเป็นของเก่า
+          fetchEmployees(true);
         } else {
           toast.error(res.message || 'อัปโหลดไม่สำเร็จ', { id: toastId });
         }
@@ -140,41 +142,30 @@ export default function EmployeeList() {
     fetchEmployees();
   }, []);
 
-  const fetchEmployees = async () => {
+  /**
+   * ดึงรายชื่อพนักงาน — ตัวเดียวกับที่หน้าลงตารางงานใช้ (fetchEmployees)
+   *
+   * อ่านจาก hr_employee ก่อนเพื่อความเร็ว แล้วเช็คชีทข้างหลังให้เอง ต่างเมื่อไหร่
+   * onRefresh จะอัปเดตหน้าให้ในการเปิดครั้งนั้นเลย — ตรรกะทั้งหมดอยู่ใน services/api.js
+   * ที่เดียว หน้านี้กับหน้าลงตารางงานจึงเห็นรายชื่อชุดเดียวกันเสมอ
+   *
+   * @param {boolean} fresh เพิ่งแก้ข้อมูลไป ให้ข้าม SQL อ่านจากชีทตรงๆ กันได้ของเก่ากลับมา
+   */
+  const fetchEmployees = async (fresh = false, quiet = false) => {
     try {
-      setLoading(true);
+      if (!quiet) setLoading(true);
       const branch = user?.branch || 'all';
-      // สาขาที่มีรหัสสองแบบ (zjp กับ sjp = ร้านเดียวกัน) ต้องถามชีททีละรหัสแล้วรวมกัน
-      // เพราะชีท DATA จับคู่สาขาแบบตรงตัว พนักงานที่ลงไว้ใต้อีกรหัสจะไม่ขึ้นเลย
-      // ('all' ของแอดมินได้ทุกสาขาอยู่แล้ว ไม่ต้องแตกเป็นหลายคำขอ)
-      const codes = branch.toLowerCase() === 'all' ? [branch] : branchGroup(branch);
-      // รหัสแรกคือสาขาที่ล็อกอิน ถ้าพลาดถือว่าโหลดไม่สำเร็จ
-      // ส่วนรหัสพี่น้องเป็นของเสริม ชีทตอบไม่ไหวก็ยังเห็นรายชื่อของตัวเองตามปกติ
-      const [main, ...aliases] = await Promise.all([
-        apiCall('getEmployees', { branch: codes[0] }),
-        ...codes.slice(1).map((b) => apiCall('getEmployees', { branch: b }).catch(() => null)),
-      ]);
-      if (main.status !== 'success') return;
-
-      // รวมรายชื่อโดยตัดคนซ้ำด้วยรหัส HR (คนเดิมอาจมีแถวใต้ทั้งสองรหัสสาขา)
-      const seen = new Set();
-      const merged = [];
-      for (const res of [main, ...aliases]) {
-        if (res?.status !== 'success') continue;
-        for (const emp of res.data || []) {
-          const key = String(emp.hrCode || '').trim().toLowerCase();
-          if (key) {
-            if (seen.has(key)) continue;
-            seen.add(key);
-          }
-          merged.push(emp);
-        }
-      }
-      setEmployees(merged);
+      const res = await fetchEmployeesApi(branch, {
+        includeResigned: true,   // หน้านี้มีตัวกรอง ทำงาน/ลาออก ของตัวเอง
+        fresh,
+        onRefresh: (list) => setEmployees(list),
+      });
+      if (res?.status !== 'success') return;
+      setEmployees(res.data || []);
     } catch (error) {
       toast.error(error.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลพนักงาน');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
@@ -207,7 +198,7 @@ export default function EmployeeList() {
       if (response.status === 'success') {
         toast.success('แจ้งลาออกสำเร็จ', { id: toastId });
         closeResignModal();
-        fetchEmployees();
+        fetchEmployees(true);
       } else {
         toast.error(response.message || 'เกิดข้อผิดพลาด', { id: toastId });
       }

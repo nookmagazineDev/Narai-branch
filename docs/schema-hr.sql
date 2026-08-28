@@ -78,9 +78,32 @@ CREATE TABLE dbo.hr_employee (
     daily_wage  DECIMAL(12,2) NOT NULL CONSTRAINT DF_hr_employee_daily_wage DEFAULT (0),
     status      NVARCHAR(20)  NOT NULL CONSTRAINT DF_hr_employee_status DEFAULT (N'ทำงาน'), -- ทำงาน / ลาออก
     resign_date DATE          NULL,
+
+    /* คอลัมน์ของหน้ารายชื่อพนักงาน — เดิมหน้านั้นอ่านชีทตรงจึงไม่เคยเก็บไว้ที่นี่
+       ตอนนี้ทั้งหน้ารายชื่อและหน้าลงตารางงานอ่านตารางนี้ตัวเดียวกัน จึงต้องมีให้ครบ */
+    start_date  DATE          NULL,            -- วันเริ่มงาน (ชีทคอลัมน์ H)
+    loga        NVARCHAR(50)  NULL,            -- เลขที่ LOGA (ชีทคอลัมน์ BR)
+    new_code    NVARCHAR(50)  NULL,            -- รหัสใหม่ ใช้ตั้งชื่อไฟล์รูป (ชีทคอลัมน์ BT)
+    photo_url   NVARCHAR(500) NULL,            -- ลิงก์รูปบน Drive (ชีทคอลัมน์ BU)
+
     updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_employee_updated_at DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_hr_employee PRIMARY KEY (hr_code)
 );
+GO
+
+/* ฐานข้อมูลที่สร้างตารางไว้ก่อนหน้านี้ไม่มี 4 คอลัมน์ข้างบน — เติมให้ตรงนี้
+   (รันสคริปต์นี้ซ้ำได้เสมอ ไม่กระทบข้อมูลเดิม) */
+IF COL_LENGTH(N'dbo.hr_employee', N'start_date') IS NULL
+    ALTER TABLE dbo.hr_employee ADD start_date DATE NULL;
+GO
+IF COL_LENGTH(N'dbo.hr_employee', N'loga') IS NULL
+    ALTER TABLE dbo.hr_employee ADD loga NVARCHAR(50) NULL;
+GO
+IF COL_LENGTH(N'dbo.hr_employee', N'new_code') IS NULL
+    ALTER TABLE dbo.hr_employee ADD new_code NVARCHAR(50) NULL;
+GO
+IF COL_LENGTH(N'dbo.hr_employee', N'photo_url') IS NULL
+    ALTER TABLE dbo.hr_employee ADD photo_url NVARCHAR(500) NULL;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_hr_employee_branch' AND object_id = OBJECT_ID(N'dbo.hr_employee'))

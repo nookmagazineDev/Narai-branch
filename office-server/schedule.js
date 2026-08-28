@@ -59,6 +59,29 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 const isDateStr = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+
+/** วันที่ (ชนิด Date) -> 'YYYY-MM-DD' ตามเวลาไทย
+    ห้ามใช้ toISOString() ตรงๆ — ค่าที่ Apps Script ส่งมาเป็นเที่ยงคืนเวลาไทย = 17:00 UTC ของวันก่อนหน้า
+    ตัดเป็น UTC เมื่อไหร่วันเริ่มงานจะเพี้ยนถอยหลังไป 1 วันทุกคน */
+const BKK_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
+const bangkokDate = (d) => BKK_DATE.format(d);
+
+/**
+ * วันที่ที่รับมาจากชีท -> 'YYYY-MM-DD' (คืน null ถ้าอ่านไม่ออก จะได้ไม่ไปทับของเดิม)
+ * รับได้ทั้ง ISO ที่ Apps Script ส่งมา, 'YYYY-MM-DD' และ 'DD/MM/YYYY' ที่เป็น พ.ศ. ก็ได้
+ */
+const toIsoDate = (v) => {
+  const t = str(v);
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const year = Number(slash[3]) > 2400 ? Number(slash[3]) - 543 : Number(slash[3]);
+    return `${year}-${slash[2].padStart(2, '0')}-${slash[1].padStart(2, '0')}`;
+  }
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? null : bangkokDate(d);
+};
 /** เก็บเวลาเป็นข้อความ 'HH:mm' — ค่า '24:00' ใช้ได้จริงในระบบเดิม จึงไม่แปลงเป็นชนิด TIME */
 const timeOrNull = (v) => (/^\d{1,2}:\d{2}$/.test(str(v)) ? str(v).padStart(5, '0') : null);
 const textOrNull = (v) => (str(v) === '' ? null : str(v));
@@ -290,28 +313,85 @@ async function getBranches(body, session) {
     .map((r) => ({ name: r.branch, fullName: r.branch_name || r.branch, outletId: r.outlet_id ?? null }));
 }
 
-/** พนักงานที่ยังทำงานอยู่ของสาขานั้น เรียงตามลำดับตำแหน่งแบบเดิม */
-async function getScheduleEmployees(body, session) {
+/* ---------------------------------------------------------------------------
+   รายชื่อพนักงาน — ทุกหน้าอ่านจากตรงนี้ตัวเดียวกัน
+
+   เดิมหน้าลงตารางงานอ่าน getScheduleEmployees (SQL) ส่วนหน้ารายชื่อพนักงานอ่าน
+   getEmployees (ชีท) คนละทางกัน ผลคือแก้ในชีทแล้วสองหน้าไม่ตรงกัน และฟิลด์ก็คนละชุด
+   (หน้าตารางงานได้ค่าแรง แต่ไม่ได้วันเริ่มงาน/LOGA/รูป — หน้ารายชื่อกลับกัน)
+
+   ตอนนี้ทั้งสองหน้าอ่าน hr_employee ตารางเดียว ผ่านตัวแปลงตัวเดียวกัน จึงได้
+   ฟิลด์ครบชุดเหมือนกันทั้งคู่ ต่างกันแค่ "เอาคนลาออกมาด้วยไหม"
+   --------------------------------------------------------------------------- */
+
+/** รหัสสาขาที่แปลว่า "ทุกสาขา" (สิทธิ์แอดมิน) ไม่ใช่ชื่อสาขาจริง */
+const isAllBranches = (b) => String(b || '').trim().toLowerCase() === 'all';
+
+const EMPLOYEE_COLUMNS = `hr_code, full_name, branch, emp_type, position, daily_wage,
+          status, resign_date, start_date, loga, new_code, photo_url`;
+
+/** วันที่จาก SQL -> 'YYYY-MM-DD' (ตัดเวลาทิ้ง หน้าเว็บใช้แค่วันที่) */
+const dateOut = (v) => {
+  if (!v) return '';
+  if (v instanceof Date) return bangkokDate(v);
+  return str(v).slice(0, 10);
+};
+
+const mapEmployee = (r) => ({
+  hrCode: r.hr_code,
+  name: r.full_name,
+  fullName: r.full_name,     // ชื่อฟิลด์ที่หน้ารายชื่อพนักงานใช้มาแต่เดิม (ชีทส่งมาชื่อนี้)
+  branch: r.branch,
+  type: r.emp_type || '',
+  empType: r.emp_type || '', // ชื่อเดิมของฟิลด์ เผื่อหน้าที่ยังอ่านชื่อนี้อยู่
+  position: r.position || '',
+  dailyWage: Number(r.daily_wage ?? 0),
+  status: r.status || '',
+  resignDate: dateOut(r.resign_date),
+  startDate: dateOut(r.start_date),
+  loga: r.loga || '',
+  newCode: r.new_code || '',
+  photoUrl: r.photo_url || '',
+});
+
+/**
+ * รายชื่อพนักงานของสาขา
+ * @param {boolean} includeResigned เอาคนที่ลาออกแล้วมาด้วยไหม (หน้ารายชื่อพนักงานเอา)
+ */
+async function listEmployees(body, session, includeResigned) {
   const branch = branchFor(session, body.branch);
-  const scope = branchScope(branch);
   if (!branch) return [];
+
+  // 'all' = ผู้ใช้สิทธิ์ดูทุกสาขา (branchFor คืนค่านี้ให้เฉพาะคนที่มีสิทธิ์ ที่เหลือโดน 403 ไปแล้ว)
+  // ต้องเป็น "ไม่กรองสาขา" ไม่ใช่ไปหาสาขาที่ชื่อว่า all ซึ่งไม่มีอยู่จริง
+  const scope = isAllBranches(branch) ? null : branchScope(branch);
+  const where = [
+    scope ? scope.clause : null,
+    includeResigned ? null : "status = N'ทำงาน'",
+  ].filter(Boolean).join(' AND ');
   const rows = await queryRead(
-    `SELECT hr_code, full_name, branch, emp_type, position, daily_wage
+    `SELECT ${EMPLOYEE_COLUMNS}
        FROM dbo.hr_employee
-      WHERE ${scope.clause} AND status = N'ทำงาน'`,
-    scope.params
+      ${where ? `WHERE ${where}` : ''}`,
+    scope ? scope.params : {}
   );
   return rows
-    .map((r) => ({
-      hrCode: r.hr_code,
-      name: r.full_name,
-      branch: r.branch,
-      type: r.emp_type || '',
-      empType: r.emp_type || '', // ชื่อเดิมของฟิลด์ เผื่อหน้าที่ยังอ่านชื่อนี้อยู่
-      position: r.position || '',
-      dailyWage: Number(r.daily_wage ?? 0),
-    }))
-    .sort((a, b) => positionPriority(a.position) - positionPriority(b.position));
+    .map(mapEmployee)
+    // คนที่ยังทำงานอยู่ขึ้นก่อนเสมอ แล้วค่อยเรียงตามลำดับตำแหน่งแบบเดิม
+    .sort((a, b) => {
+      const w = (e) => (e.status === 'ทำงาน' ? 0 : 1);
+      return w(a) - w(b) || positionPriority(a.position) - positionPriority(b.position);
+    });
+}
+
+/** หน้าลงตารางงาน / หน้านับสต๊อก — เฉพาะคนที่ยังทำงานอยู่ */
+async function getScheduleEmployees(body, session) {
+  return listEmployees(body, session, false);
+}
+
+/** หน้ารายชื่อพนักงาน — รวมคนที่ลาออกแล้ว (หน้านั้นมีตัวกรองสถานะของตัวเอง) */
+async function getEmployees(body, session) {
+  return listEmployees(body, session, body.includeResigned !== false);
 }
 
 /**
@@ -324,31 +404,55 @@ async function getScheduleEmployees(body, session) {
  * คนที่หายไปจากรายชื่อ = ลาออกแล้ว จึงตั้ง status เป็น 'ลาออก' ให้ (ไม่ลบ เพราะกะเก่ายังอ้างอิงอยู่)
  * แต่มีกันพลาดไว้: ถ้ารายชื่อที่ส่งมาน้อยกว่าครึ่งของที่มีอยู่ จะไม่ตั้งใครเป็นลาออกเลย
  * เพราะกรณีนั้นน่าจะเป็นชีทตอบมาไม่ครบ ไม่ใช่คนลาออกยกสาขา
+ *
+ * body.fullList = true เมื่อรายชื่อที่ส่งมา "รวมคนลาออกด้วย" (มาจากหน้ารายชื่อพนักงาน)
+ *   - สถานะยึดตามที่ชีทบอกมาทีละคน ไม่ใช่ตั้งเป็น 'ทำงาน' ให้ทุกคน
+ *   - และไม่ต้องเดาว่าใครลาออกจากการที่หายไปจากรายชื่อ เพราะชีทบอกมาตรงๆ อยู่แล้ว
+ *
+ * ฟิลด์ที่ "ไม่ได้ส่งมา" จะไม่ถูกเขียนทับ (COALESCE/NULLIF) เพราะสองหน้ารู้ข้อมูลคนละส่วน:
+ * หน้าลงตารางงานรู้ค่าแรง หน้ารายชื่อรู้วันเริ่มงาน/LOGA/รูป — ถ้าเขียนทับตรงๆ
+ * ฝั่งที่เปิดทีหลังจะล้างของอีกฝั่งทิ้งทุกครั้ง กลายเป็นข้อมูลกะพริบไปมา
  */
 async function syncEmployees(body, session) {
   const branch = branchFor(session, body.branch);
   const scope = branchScope(branch);
   const list = Array.isArray(body.employees) ? body.employees : [];
+  const fullList = body.fullList === true;
   if (!branch || list.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีข้อมูล' };
 
+  const allBranches = isAllBranches(branch);
   const rows = list
     .map((e) => ({
       hrCode: str(e.hrCode),
-      name: str(e.name),
+      name: str(e.name || e.fullName),
+      // สาขาของแต่ละคนตามที่ชีทบอก — ใช้เฉพาะตอนซิงก์จากผู้ใช้สิทธิ์ 'all'
+      // ซึ่งไม่มี "สาขาเดียว" ให้ยึด ถ้าเผลอเขียน @branch ลงไปทุกคนจะกลายเป็นสาขา all ทั้งระบบ
+      branch: str(e.branch).toLowerCase(),
       empType: str(e.type || e.empType),
       position: str(e.position),
       dailyWage: num(e.dailyWage),
+      status: str(e.status),
+      startDate: toIsoDate(e.startDate),
+      loga: str(e.loga),
+      newCode: str(e.newCode),
+      photoUrl: str(e.photoUrl),
     }))
-    .filter((e) => e.hrCode && e.name);
+    // สิทธิ์ 'all': คนที่ชีทไม่ได้บอกสาขามาก็ไม่รู้จะเก็บไว้ใต้สาขาไหน ข้ามไปดีกว่าเดา
+    .filter((e) => e.hrCode && e.name && (!allBranches || e.branch));
   if (rows.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีรหัส/ชื่อที่ใช้ได้' };
 
-  const activeNow = await queryRead(
-    `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE ${scope.clause} AND status = N'ทำงาน'`,
-    scope.params
-  );
-  const before = Number(activeNow[0]?.n || 0);
+  // รายชื่อที่รวมคนลาออกมาด้วยไม่ต้องเดาว่าใครลาออก จึงไม่ต้องนับของเดิมมาเทียบ
+  let before = 0;
+  if (!fullList && !allBranches) {
+    const activeNow = await queryRead(
+      `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE ${scope.clause} AND status = N'ทำงาน'`,
+      scope.params
+    );
+    before = Number(activeNow[0]?.n || 0);
+  }
   // รายชื่อหดลงเกินครึ่ง = น่าจะได้ข้อมูลมาไม่ครบ อย่าไปตั้งใครเป็นลาออก
-  const safeToRetire = rows.length * 2 >= before;
+  // 'all' ไม่ใช่สาขาเดียว จะเทียบจำนวนคนหรือตั้งใครเป็นลาออกจากรายชื่อก้อนนี้ไม่ได้
+  const safeToRetire = !fullList && !allBranches && rows.length * 2 >= before;
 
   let resigned = 0;
   await withTransaction(async (run) => {
@@ -360,22 +464,56 @@ async function syncEmployees(body, session) {
 
     await run(
       `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-         USING (SELECT * FROM OPENJSON(@rows) WITH (
+         USING (
+           SELECT hr_code, full_name, branch, emp_type, position, daily_wage,
+                  start_date, loga, new_code, photo_url,
+                  /* รายชื่อที่รวมคนลาออกมาด้วย = เชื่อสถานะที่ชีทบอก
+                     รายชื่อที่กรองมาเฉพาะคนทำงาน = ทุกคนในนั้นคือคนที่ยังทำงานอยู่ */
+                  CASE WHEN @fullList = 1 AND NULLIF(status, N'') IS NOT NULL
+                       THEN status ELSE N'ทำงาน' END AS new_status
+             FROM OPENJSON(@rows) WITH (
                   hr_code NVARCHAR(30) '$.hrCode',
                   full_name NVARCHAR(150) '$.name',
+                  branch NVARCHAR(50) '$.branch',
                   emp_type NVARCHAR(20) '$.empType',
                   position NVARCHAR(100) '$.position',
-                  daily_wage DECIMAL(12,2) '$.dailyWage'
-                )) AS s
+                  daily_wage DECIMAL(12,2) '$.dailyWage',
+                  status NVARCHAR(20) '$.status',
+                  start_date DATE '$.startDate',
+                  loga NVARCHAR(50) '$.loga',
+                  new_code NVARCHAR(50) '$.newCode',
+                  photo_url NVARCHAR(500) '$.photoUrl'
+                )
+         ) AS s
             ON t.hr_code = s.hr_code
        WHEN MATCHED THEN UPDATE SET
-            full_name = s.full_name, branch = @branch, emp_type = s.emp_type,
-            position = s.position, daily_wage = s.daily_wage,
-            status = N'ทำงาน', resign_date = NULL, updated_at = SYSDATETIME()
+            full_name = s.full_name,
+            /* สาขาปกติยึด @branch (คนย้ายสาขาจะได้ย้ายตาม) ส่วนสิทธิ์ 'all' ต้องยึดของแต่ละคน */
+            branch = CASE WHEN @allBranches = 1 THEN s.branch ELSE @branch END,
+            /* ฟิลด์ที่ฝั่งผู้ส่งอาจไม่รู้ = ส่งมาว่าง ให้คงของเดิมไว้ ไม่ล้างทิ้ง */
+            emp_type   = COALESCE(NULLIF(s.emp_type, N''), t.emp_type),
+            position   = COALESCE(NULLIF(s.position, N''), t.position),
+            daily_wage = CASE WHEN s.daily_wage > 0 THEN s.daily_wage ELSE t.daily_wage END,
+            start_date = COALESCE(s.start_date, t.start_date),
+            loga       = COALESCE(NULLIF(s.loga, N''), t.loga),
+            new_code   = COALESCE(NULLIF(s.new_code, N''), t.new_code),
+            photo_url  = COALESCE(NULLIF(s.photo_url, N''), t.photo_url),
+            status = s.new_status,
+            resign_date = CASE WHEN s.new_status = N'ทำงาน' THEN NULL ELSE t.resign_date END,
+            updated_at = SYSDATETIME()
        WHEN NOT MATCHED THEN
-            INSERT (hr_code, full_name, branch, emp_type, position, daily_wage, status)
-            VALUES (s.hr_code, s.full_name, @branch, s.emp_type, s.position, s.daily_wage, N'ทำงาน');`,
-      { rows: rowsJson, branch: { type: sql.NVarChar(50), value: branch } }
+            INSERT (hr_code, full_name, branch, emp_type, position, daily_wage,
+                    start_date, loga, new_code, photo_url, status)
+            VALUES (s.hr_code, s.full_name,
+                    CASE WHEN @allBranches = 1 THEN s.branch ELSE @branch END,
+                    s.emp_type, s.position, s.daily_wage,
+                    s.start_date, s.loga, s.new_code, s.photo_url, s.new_status);`,
+      {
+        rows: rowsJson,
+        branch: { type: sql.NVarChar(50), value: branch },
+        fullList: { type: sql.Bit, value: fullList ? 1 : 0 },
+        allBranches: { type: sql.Bit, value: allBranches ? 1 : 0 },
+      }
     );
 
     if (safeToRetire) {
@@ -393,7 +531,9 @@ async function syncEmployees(body, session) {
   return {
     upserted: rows.length,
     resigned,
-    skippedRetire: safeToRetire ? undefined : `รายชื่อที่ส่งมา ${rows.length} คน น้อยกว่าครึ่งของ ${before} คนที่มีอยู่ จึงไม่ตั้งใครเป็นลาออก`,
+    skippedRetire: (fullList || allBranches || safeToRetire)
+      ? undefined
+      : `รายชื่อที่ส่งมา ${rows.length} คน น้อยกว่าครึ่งของ ${before} คนที่มีอยู่ จึงไม่ตั้งใครเป็นลาออก`,
   };
 }
 
@@ -746,6 +886,7 @@ const ACTIONS = {
   getBranches,
   getBranchList: getBranches,
   getScheduleEmployees,
+  getEmployees,
   syncEmployees,
   getBranchStats,
   getDailySales,

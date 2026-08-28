@@ -404,11 +404,13 @@ function doPost(e) {
           employees.push({
             hrCode: row[2] || '',       // คอลัมน์ C
             fullName: row[3] || '',     // คอลัมน์ D
+            name: row[3] || '',         // ชื่อฟิลด์ที่หน้าลงตารางงาน/นับสต๊อกใช้
             branch: row[4] || '',       // คอลัมน์ E (สาขา)
             type: row[5] || '',         // คอลัมน์ F (ประเภท)
             status: row[6] || '',       // คอลัมน์ G (การทำงาน)
             startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
             position: row[8] || '',     // คอลัมน์ I (ตำแหน่ง)
+            dailyWage: row[9] || '',    // คอลัมน์ J (ค่าแรงรายวัน) — ตัวคิดค่าแรงในหน้าลงตารางงาน
             loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
             newCode: row[71] || '',     // คอลัมน์ BT (รหัสใหม่ / ใช้ตั้งชื่อไฟล์รูป)
             photoUrl: row[72] || ''     // คอลัมน์ BU (ลิงก์รูป)
@@ -554,14 +556,21 @@ function doPost(e) {
         var empBranch = row[4] ? row[4].toString().toLowerCase() : '';
         var isMatch = reqBranch === 'all' || empBranch.indexOf(reqBranch) !== -1 || reqBranch.indexOf(empBranch) !== -1;
         if (isMatch && row[6] === 'ทำงาน') {
+          // ฟิลด์ต้องเป็นชุดเดียวกับ getEmployees ด้านบน — หน้าเว็บใช้รายชื่อร่วมกันแล้ว
+          // (คนละ action เพราะตัวนี้กรองเฉพาะคนที่ยังทำงานอยู่ ที่เหลือต้องเหมือนกันหมด)
           employees.push({
-            hrCode: row[2] || '',
-            name: row[3] || '',
-            branch: row[4] || '',
-            type: row[5] || '',
-            status: row[6] || '',
-            position: row[8] || '',
-            dailyWage: row[9] || ''
+            hrCode: row[2] || '',       // คอลัมน์ C
+            name: row[3] || '',         // คอลัมน์ D
+            fullName: row[3] || '',     // ชื่อฟิลด์ที่หน้ารายชื่อพนักงานใช้
+            branch: row[4] || '',       // คอลัมน์ E
+            type: row[5] || '',         // คอลัมน์ F
+            status: row[6] || '',       // คอลัมน์ G
+            startDate: row[7] || '',    // คอลัมน์ H (วันเริ่มงาน)
+            position: row[8] || '',     // คอลัมน์ I
+            dailyWage: row[9] || '',    // คอลัมน์ J
+            loga: row[69] || '',        // คอลัมน์ BR (เลขที่ LOGA)
+            newCode: row[71] || '',     // คอลัมน์ BT (รหัสใหม่ / ใช้ตั้งชื่อไฟล์รูป)
+            photoUrl: row[72] || ''     // คอลัมน์ BU (ลิงก์รูป)
           });
         }
       }

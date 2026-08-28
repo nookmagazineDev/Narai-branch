@@ -1,3 +1,5 @@
+import { branchGroup } from '../utils/branchAlias';
+
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
 // ---------------------------------------------------------------------------
@@ -29,8 +31,12 @@ const SQL_ACTIONS = new Set([
   'getDailySales',         // ScheduleHistory (การ์ดยอดขาย)
 
   // กลุ่มที่ 2 — อ่านจาก SQL เพื่อความเร็ว แต่ยังเช็คของใหม่จากชีทเงียบๆ ข้างหลัง
-  // ห้ามเรียก action นี้ด้วย apiCall() ตรงๆ ให้ใช้ fetchScheduleEmployees() แทน
-  // เพราะมันจัดการ fallback ตอน SQL ว่าง และการซิงก์กลับให้ครบ
+  // ห้ามเรียก action นี้ด้วย apiCall() ตรงๆ ให้ใช้ fetchEmployees() แทน
+  // เพราะมันจัดการ fallback ตอน SQL ว่าง การรวมรหัสสาขาพี่น้อง และการซิงก์กลับให้ครบ
+  //
+  // getEmployees (หน้ารายชื่อพนักงาน) ไม่ได้อยู่ในลิสต์นี้ทั้งที่อ่าน SQL เหมือนกัน
+  // เพราะ fetchEmployees() สั่งเส้นทางเองด้วย via: 'sql' / 'sheet' ทีละครั้ง
+  // ถ้าใส่ไว้ที่นี่ด้วย การอ่านชีทเพื่อเช็คของใหม่จะถูกส่งไป SQL แทน กลายเป็นไม่เคยเช็คชีทเลย
   'getScheduleEmployees',  // ScheduleWeekly + StockList (หน้านับสต๊อก) ใช้ร่วมกัน
 
   // กลุ่มที่ 3 — เมนูสต๊อก (นับสต๊อก/ขอเบิก, รวมสต๊อกทุกสาขา, ปิดยอดสิ้นเดือน, ของเสีย)
@@ -69,7 +75,11 @@ const SQL_ACTIONS = new Set([
 //
 // ยิงแบบไม่รอผล ถ้าคัดลอกไม่สำเร็จก็ไม่กระทบผู้ใช้ (ชีทเป็นตัวหลักอยู่แล้ว)
 // ---------------------------------------------------------------------------
-const MIRROR_TO_SQL = new Set(['getScheduleEmployees']);
+//
+// ทั้งสอง action คือรายชื่อพนักงานเหมือนกัน ต่างกันแค่ getEmployees (หน้ารายชื่อพนักงาน)
+// เอาคนที่ลาออกแล้วมาด้วย จึงต้องบอกฝั่ง SQL ว่ารายชื่อชุดนี้ "ครบทุกสถานะ" (fullList)
+// ไม่งั้นคนลาออกที่ส่งไปจะถูกตั้งกลับเป็น 'ทำงาน' ทุกครั้งที่เปิดหน้านั้น
+const MIRROR_TO_SQL = new Set(['getScheduleEmployees', 'getEmployees']);
 
 const mirrorToSql = (action, payload, result) => {
   if (!Array.isArray(result?.data) || result.data.length === 0) return;
@@ -83,6 +93,7 @@ const mirrorToSql = (action, payload, result) => {
       action: 'syncEmployees',
       branch,
       employees: result.data,
+      fullList: action === 'getEmployees',
       _user: sessionUser(),
     }),
     keepalive: true, // ให้ยิงจบแม้ผู้ใช้เปลี่ยนหน้าไปแล้ว
@@ -101,15 +112,119 @@ const mirrorToSql = (action, payload, result) => {
     .catch((err) => console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, err?.message || err));
 };
 
-/** ลายนิ้วมือของรายชื่อ ใช้เทียบว่าชีทเปลี่ยนไปจากที่เก็บใน SQL หรือยัง */
-const rosterSignature = (list) =>
-  (list || [])
-    .map((e) => `${e.hrCode}|${e.name}|${e.position || ''}|${e.type || e.empType || ''}|${e.dailyWage || 0}`)
-    .sort()
-    .join('~');
+const BKK_DATE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+});
 
 /**
- * ดึงรายชื่อพนักงานของสาขา — เร็วจาก SQL แต่ยังตามการแก้ในชีททัน
+ * วันที่จากชีท -> 'YYYY-MM-DD' ให้อยู่รูปเดียวกับที่ SQL ส่งมา
+ *
+ * Apps Script ส่งวันที่มาเป็น ISO เต็ม ซึ่งเป็นเที่ยงคืนเวลาไทย = 17:00 UTC ของ "วันก่อนหน้า"
+ * ตัด 10 ตัวแรกตรงๆ วันเริ่มงานจะถอยหลังไป 1 วันทุกคน จึงต้องแปลงตามเวลาไทย
+ * อ่านไม่ออกก็คืนค่าเดิม (ชีทเก่าบางแถวกรอกเป็นข้อความ) ไม่ทิ้งข้อมูลของผู้ใช้
+ */
+const normalizeDate = (v) => {
+  if (!v) return '';
+  const t = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? t : BKK_DATE.format(d);
+};
+
+/**
+ * ปรับรูปข้อมูลพนักงานให้เป็นชุดเดียวกันไม่ว่ามาจากทางไหน
+ *
+ * ชีทสองคำสั่งเรียกฟิลด์ชื่อไม่เหมือนกัน (getEmployees ให้ fullName, getScheduleEmployees ให้ name)
+ * และแต่ละทางรู้ข้อมูลคนละส่วน หน้าเว็บจึงเคยต้องจำว่า "หน้านี้ต้องอ่านฟิลด์ชื่อไหน"
+ * ตรงนี้เติมให้ครบทั้งสองชื่อและใส่ค่าว่างให้ฟิลด์ที่ทางนั้นไม่มี หน้าเว็บจะได้ไม่ต้องรู้ที่มา
+ */
+const normalizeEmployee = (e) => {
+  const name = String(e?.name ?? e?.fullName ?? '').trim();
+  return {
+    ...e,
+    hrCode: String(e?.hrCode ?? '').trim(),
+    name,
+    fullName: name,
+    branch: e?.branch ?? '',
+    type: e?.type ?? e?.empType ?? '',
+    empType: e?.empType ?? e?.type ?? '',
+    position: e?.position ?? '',
+    status: e?.status ?? '',
+    dailyWage: e?.dailyWage ?? '',
+    startDate: normalizeDate(e?.startDate),
+    loga: e?.loga ?? '',
+    newCode: e?.newCode ?? '',
+    photoUrl: e?.photoUrl ?? '',
+  };
+};
+
+/** รวมรายชื่อจากหลายคำตอบ ตัดคนซ้ำด้วยรหัส HR (คนเดิมอาจมีแถวใต้ทั้งสองรหัสสาขา) */
+const mergeRosters = (responses) => {
+  const seen = new Set();
+  const out = [];
+  for (const res of responses) {
+    if (res?.status !== 'success') continue;
+    for (const emp of res.data || []) {
+      const e = normalizeEmployee(emp);
+      const key = e.hrCode.toLowerCase();
+      if (key) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      out.push(e);
+    }
+  }
+  return out;
+};
+
+/**
+ * อ่านรายชื่อจากชีท — ยิงทีละรหัสสาขาแล้วรวมกัน
+ *
+ * สาขาที่มีรหัสสองแบบ (zjp กับ sjp = ร้านเดียวกัน) ต้องถามทีละรหัส เพราะชีท DATA
+ * จับคู่สาขาแบบตรงตัว พนักงานที่ลงไว้ใต้อีกรหัสจะไม่ขึ้นเลย
+ * (ฝั่ง SQL ไม่ต้องทำแบบนี้ เพราะ branchScope() ขยายเป็น branch IN (...) ให้อยู่แล้ว)
+ *
+ * รหัสแรกคือสาขาที่ขอมา ถ้าพลาดถือว่าโหลดไม่สำเร็จทั้งคำขอ
+ * ส่วนรหัสพี่น้องเป็นของเสริม ชีทตอบไม่ไหวก็ยังเห็นรายชื่อของตัวเองตามปกติ
+ */
+const fetchRosterFromSheet = async (branch, action, options = {}) => {
+  const codes = branch.toLowerCase() === 'all' ? [branch] : branchGroup(branch);
+  const opts = { via: 'sheet', ...options };
+  const [main, ...aliases] = await Promise.all([
+    apiCall(action, { branch: codes[0] }, opts),
+    ...codes.slice(1).map((c) => apiCall(action, { branch: c }, opts).catch(() => null)),
+  ]);
+  if (main?.status !== 'success') return main;
+  return { status: 'success', data: mergeRosters([main, ...aliases]) };
+};
+
+/** ฟิลด์ที่ถือว่า "ข้อมูลคนนี้เปลี่ยนไปแล้ว" ถ้าชีทกับ SQL ไม่ตรงกัน */
+const COMPARED_FIELDS = ['name', 'position', 'empType', 'status', 'startDate', 'loga', 'newCode', 'photoUrl'];
+
+/**
+ * ชีทกับ SQL ต่างกันหรือยัง — ใช้ตัดสินว่าต้องรีเฟรชหน้าให้ผู้ใช้ไหม
+ *
+ * ข้ามฟิลด์ที่ชีท "ไม่ได้ส่งมา" (ค่าว่าง) ไม่นับเป็นความต่าง ด้วยเหตุผลเดียวกับที่ฝั่ง SQL
+ * ใช้ COALESCE ตอนซิงก์: สองคำสั่งของชีทรู้ข้อมูลคนละส่วน (ตัวหนึ่งมีค่าแรง อีกตัวมี LOGA/รูป)
+ * ถ้านับค่าว่างเป็นความต่าง หน้าเว็บจะรีเฟรชตัวเองทุกครั้งที่เปิดโดยไม่มีอะไรเปลี่ยนจริง
+ */
+const rosterDiffers = (sheetList, sqlList) => {
+  const sheet = (sheetList || []).map(normalizeEmployee);
+  const bySql = new Map((sqlList || []).map((e) => [String(e.hrCode).toLowerCase(), normalizeEmployee(e)]));
+  if (sheet.length !== bySql.size) return true;
+
+  for (const s of sheet) {
+    const q = bySql.get(s.hrCode.toLowerCase());
+    if (!q) return true;   // มีคนใหม่ในชีทที่ SQL ยังไม่รู้จัก
+    if (COMPARED_FIELDS.some((f) => s[f] !== '' && s[f] !== q[f])) return true;
+    const wage = Number(s.dailyWage) || 0;
+    if (wage > 0 && wage !== (Number(q.dailyWage) || 0)) return true;
+  }
+  return false;
+};
+
+/**
+ * ดึงรายชื่อพนักงานของสาขา — ทุกหน้าใช้ตัวนี้ตัวเดียว
  *
  * ปัญหาที่ต้องแก้พร้อมกันสองข้อ
  *   1) Apps Script ช้า (เปิดสเปรดชีตทั้งไฟล์ทุกครั้ง) เปิดหน้าลงตารางแล้วรอนาน
@@ -125,40 +240,54 @@ const rosterSignature = (list) =>
  * ไม่ปล่อยให้หน้าเว็บขึ้นรายชื่อว่างเปล่า — เคสนี้เคยทำหน้านับสต๊อกใช้งานไม่ได้ทั้งหน้า
  *
  * @param {string} branch
- * @param {{ onRefresh?: (employees: any[]) => void }} [options]
+ * @param {object} [options]
+ * @param {boolean} [options.includeResigned] เอาคนที่ลาออกแล้วมาด้วย (หน้ารายชื่อพนักงาน)
+ * @param {boolean} [options.fresh] ข้าม SQL อ่านจากชีทตรงๆ — ใช้หลังเพิ่งแก้ข้อมูลผ่านหน้าเว็บ
+ *        เพราะคำสั่งแก้ไข (แจ้งลาออก/อัปโหลดรูป/แก้ LOGA) เขียนลงชีทอย่างเดียว
+ *        ถ้าอ่าน SQL ต่อทันทีจะได้ของเก่ากลับมา เหมือนกดบันทึกแล้วไม่ติด
+ * @param {(employees: any[]) => void} [options.onRefresh]
  */
-export const fetchScheduleEmployees = async (branch, { onRefresh } = {}) => {
+export const fetchEmployees = async (branch, { includeResigned = false, fresh = false, onRefresh } = {}) => {
   const b = String(branch || '').trim();
   if (!b) return { status: 'success', data: [] };
 
+  // ชีทยังแยกเป็นสองคำสั่ง (คนละชุดฟิลด์) — เลือกตัวที่ให้ข้อมูลตรงกับที่หน้านั้นต้องการ
+  const sheetAction = includeResigned ? 'getEmployees' : 'getScheduleEmployees';
+
+  if (fresh) return await fetchRosterFromSheet(b, sheetAction);
+
   let sqlRes = null;
   try {
-    sqlRes = await apiCall('getScheduleEmployees', { branch: b }, { via: 'sql' });
+    // SQL อ่านตารางเดียวทั้งสองหน้า ต่างกันแค่เอาคนลาออกมาด้วยไหม
+    sqlRes = await apiCall('getEmployees', { branch: b, includeResigned }, { via: 'sql' });
   } catch (err) {
     console.warn('อ่านรายชื่อพนักงานจาก SQL ไม่สำเร็จ จะใช้ชีทแทน:', err?.message || err);
   }
 
-  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data : [];
+  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data.map(normalizeEmployee) : [];
 
   // SQL ไม่มีข้อมูล -> ต้องได้จากชีทก่อนคืนค่า (mirror จะซิงก์เข้า SQL ให้เอง)
   if (fromSql.length === 0) {
-    return await apiCall('getScheduleEmployees', { branch: b }, { via: 'sheet' });
+    return await fetchRosterFromSheet(b, sheetAction);
   }
 
   // มีข้อมูลแล้ว — คืนทันที แล้วค่อยเช็คของใหม่จากชีทข้างหลัง
   // ไม่ลองใหม่ (retries: 0) เพราะเป็นงานเบื้องหลัง ถ้าพลาดรอบนี้ครั้งหน้าก็เช็คใหม่
-  apiCall('getScheduleEmployees', { branch: b }, { via: 'sheet', retries: 0 })
+  fetchRosterFromSheet(b, sheetAction, { retries: 0 })
     .then((sheetRes) => {
-      const fresh = Array.isArray(sheetRes?.data) ? sheetRes.data : [];
-      if (fresh.length === 0) return;
-      if (rosterSignature(fresh) === rosterSignature(fromSql)) return;
+      const freshList = Array.isArray(sheetRes?.data) ? sheetRes.data : [];
+      if (freshList.length === 0) return;
+      if (!rosterDiffers(freshList, fromSql)) return;
       console.info(`รายชื่อพนักงานสาขา ${b} ในชีทเปลี่ยนไปจากใน SQL — อัปเดตให้แล้ว`);
-      if (typeof onRefresh === 'function') onRefresh(fresh);
+      if (typeof onRefresh === 'function') onRefresh(freshList);
     })
     .catch((err) => console.warn(`เช็ครายชื่อพนักงานสาขา ${b} จากชีทไม่สำเร็จ:`, err?.message || err));
 
-  return sqlRes;
+  return { status: 'success', data: fromSql };
 };
+
+/** ชื่อเดิมของ fetchEmployees() — หน้าลงตารางงานกับหน้านับสต๊อกยังเรียกชื่อนี้อยู่ */
+export const fetchScheduleEmployees = (branch, options) => fetchEmployees(branch, options);
 
 /**
  * office-server เวอร์ชันเก่าที่ยังไม่มี action 'login' ตอบ 400 พร้อมข้อความนี้

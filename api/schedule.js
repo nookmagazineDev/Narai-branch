@@ -22,6 +22,7 @@ const READ_ONLY = new Set([
   'getBranches',
   'getBranchList',
   'getScheduleEmployees',
+  'getEmployees',
   'getBranchStats',
   'getDailySales',
   'getHistoryData',
