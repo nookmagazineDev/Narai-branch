@@ -56,6 +56,18 @@ export function branchGroup(code) {
   return hit ? [...hit] : [b];
 }
 
+/**
+ * แยกรหัสสาขาที่เขียนติดกันมาในช่องเดียว -> ['sum', 'xum']
+ * ช่องสังกัดในชีทกรอกได้อิสระ จึงเจอทั้ง "SUM, XUM" / "sum/xum" / "sum xum"
+ */
+export function branchCodes(value) {
+  return str(value)
+    .toLowerCase()
+    .split(/[,;/|\s]+/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
 /** สองรหัสนี้เป็นร้านเดียวกันไหม */
 export function sameBranch(a, b) {
   const x = str(a).toLowerCase();
@@ -69,13 +81,23 @@ export function sameBranch(a, b) {
  * user สิทธิ์ all เลือกสาขาไหนก็ได้ นอกนั้นถูกล็อกไว้ที่สาขาตัวเองเสมอ
  * (หน้าเว็บล็อกไว้อยู่แล้ว ตรงนี้กันซ้ำอีกชั้นเผื่อเรียก API ตรงๆ)
  */
-export function branchFor(session, requested) {
-  const want = str(requested);
+export function branchFor(session, requested, preferred = '') {
+  const codes = branchCodes(requested);
+  // ช่อง "สังกัด" ในชีทบางคนใส่ไว้หลายสาขา (เช่น "SUM, XUM" = ช่วยงานสองสาขา)
+  // ต้องเลือกให้เหลือรหัสเดียวก่อน ไม่งั้นทั้งก้อนจะถูกมองเป็นชื่อสาขาแปลกๆ
+  // แล้วโดนปฏิเสธสิทธิ์ทั้งที่สาขาที่กำลังทำงานอยู่ก็อยู่ในนั้นด้วย
+  //   preferred = สาขาของหน้าที่กำลังเปิดอยู่ (ผู้ใช้สิทธิ์ all ยึดตัวนี้)
+  //   ไม่มี preferred ก็ยึดสาขาที่ล็อกอิน
+  const want = codes.length > 1
+    ? (codes.find((c) => sameBranch(c, preferred))
+       || codes.find((c) => sameBranch(c, session?.branch))
+       || codes[0])
+    : str(requested);
   if (!session) return want;
   if (session.isAll) return want;
   // sameBranch() ครอบคลุมรหัสที่เป็นร้านเดียวกัน (เช่น zjp กับ sjp) จึงข้ามกันได้
   if (want && !sameBranch(want, session.branch)) {
-    throw Object.assign(new Error(`ไม่มีสิทธิ์ดูข้อมูลของสาขา ${want}`), { forbidden: true });
+    throw Object.assign(new Error(`ไม่มีสิทธิ์ดูข้อมูลของสาขา ${str(requested)}`), { forbidden: true });
   }
   // ผ่านด่านสิทธิ์แล้วยังคืน "รหัสที่ล็อกอิน" เสมอ ไม่ใช่รหัสพี่น้องที่ขอมา
   // เพื่อให้ข้อมูลที่บันทึกใหม่ลงใต้รหัสเดียวตลอด ไม่แตกเป็นสองกองเพิ่มอีก

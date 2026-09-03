@@ -619,6 +619,9 @@ async function saveTimesheet(body, session) {
   }
   // คนที่กดบันทึก = user ที่ล็อกอินไว้ ไม่ได้เอาค่าที่หน้าเว็บส่งมาเอง
   const actor = textOrNull(session?.username);
+  // สาขาของหน้าที่กดบันทึก — ใช้ตัดสินตอนที่ช่องสังกัดของพนักงานมีหลายสาขาปนกัน
+  // (เช่น "SUM, XUM") ว่าแถวนี้ต้องลงใต้สาขาไหน และใช้แทนเมื่อแถวไม่ได้บอกสาขามาเลย
+  const pageBranch = str(body.branch);
 
   // แยกเป็นสองกอง: ที่ต้องเขียน กับที่สั่งล้าง
   const upserts = [];
@@ -626,7 +629,7 @@ async function saveTimesheet(body, session) {
   const logRows = [];
   for (const item of logs) {
     const workDate = str(item.workDate);
-    const branch = branchFor(session, item.branch);
+    const branch = branchFor(session, str(item.branch) || pageBranch, pageBranch);
     const hrCode = str(item.hrCode);
     if (!isDateStr(workDate) || !branch || !hrCode) continue;
 

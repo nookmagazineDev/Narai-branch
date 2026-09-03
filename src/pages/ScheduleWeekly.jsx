@@ -518,7 +518,10 @@ export default function ScheduleWeekly() {
 
     for (const d of drafts) {
       try {
-        await apiCall('saveTimesheet', { logs: d.pendingLogs });
+        // ร่างเก่าที่ค้างอยู่อาจเก็บ "สาขา" มาจากช่องสังกัดของพนักงาน ซึ่งบางคนมีหลายสาขา
+        // ปนกัน ("SUM, XUM") แล้วโดนปฏิเสธสิทธิ์ทุกครั้งที่ส่ง — ตีเป็นสาขาของร่างให้ตรงกัน
+        const logs = d.pendingLogs.map((l) => ({ ...l, branch: d.branch || l.branch }));
+        await apiCall('saveTimesheet', { branch: d.branch, logs });
         sent += d.pendingLogs.length;
         clearDraft(d.branch, d.weekStart);
         // ล้างเฉพาะช่องที่ส่งขึ้นไปแล้วจริง — ถ้าผู้ใช้แก้ช่องอื่นเพิ่มระหว่างรอ
@@ -761,7 +764,9 @@ export default function ScheduleWeekly() {
 
           logs.push({
             workDate: dateStr,
-            branch: emp.branch,
+            // สาขาของหน้าที่กำลังลงตารางเสมอ ไม่ใช่ช่องสังกัดของพนักงาน
+            // เพราะบางคนสังกัดหลายสาขา ("SUM, XUM") ซึ่งไม่ใช่รหัสสาขาที่บันทึกได้
+            branch: effectiveBranch || emp.branch,
             hrCode: emp.hrCode,
             name: emp.name,
             position: emp.position,
@@ -795,7 +800,7 @@ export default function ScheduleWeekly() {
       try {
         // ไม่ต้องส่งชื่อคนบันทึกเอง — apiCall แนบ user ที่ล็อกอินไว้ไปให้อัตโนมัติ
         // แล้วฝั่ง SQL เก็บลง hr_timesheet_log ให้ (Apps Script เดิมไม่ได้เก็บไว้)
-        await apiCall('saveTimesheet', { logs });
+        await apiCall('saveTimesheet', { branch: effectiveBranch, logs });
         clearDraft(effectiveBranch, weekKey);
         setPendingCount(countPendingLogs());
         const done = keysOfLogs(logs);
@@ -841,7 +846,7 @@ export default function ScheduleWeekly() {
     try {
       await apiCall('updateOTApprovalBulk', {
         dateStr,
-        branch: emp.branch || effectiveBranch,
+        branch: effectiveBranch || emp.branch,
         updates: [{ hrCode: emp.hrCode, name: emp.name, isApproved: approve }],
       });
       // ไม่ต้อง markDirty — การอนุมัติเขียนลงฐานข้อมูลไปแล้ว ไม่ใช่ร่างที่รอบันทึก
