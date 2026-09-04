@@ -10,6 +10,7 @@ import {
 import {
   loadDraft, saveDraftCells, savePendingLogs, clearDraft, listDrafts, countPendingLogs,
 } from '../utils/scheduleDrafts';
+import { primaryBranch } from '../utils/branchAlias';
 
 function getStartOfWeek(date) {
   const d = new Date(date);
@@ -518,7 +519,11 @@ export default function ScheduleWeekly() {
 
     for (const d of drafts) {
       try {
-        await apiCall('saveTimesheet', { logs: d.pendingLogs });
+        // ร่างที่ค้างจากเวอร์ชันก่อนอาจเก็บสาขาไว้เป็นพวง ('SUM, IPR') ตามช่องสาขาของพนักงาน
+        // ซึ่งเป็นสาเหตุที่มันส่งไม่ผ่านตั้งแต่แรก — แก้ให้เป็นสาขาของร่างนั้นก่อนส่ง
+        // ไม่งั้นของที่ค้างอยู่จะถูกปฏิเสธซ้ำไปเรื่อยๆ ไม่มีวันขึ้นระบบ
+        const logs = d.pendingLogs.map((l) => ({ ...l, branch: d.branch || primaryBranch(l.branch) }));
+        await apiCall('saveTimesheet', { logs });
         sent += d.pendingLogs.length;
         clearDraft(d.branch, d.weekStart);
         // ล้างเฉพาะช่องที่ส่งขึ้นไปแล้วจริง — ถ้าผู้ใช้แก้ช่องอื่นเพิ่มระหว่างรอ
@@ -761,7 +766,10 @@ export default function ScheduleWeekly() {
 
           logs.push({
             workDate: dateStr,
-            branch: emp.branch,
+            // สาขาของ "ตารางที่กำลังลง" ไม่ใช่ช่องสาขาในทะเบียนพนักงาน
+            // เพราะคนที่ดูแลสองร้านมีช่องสาขาเป็นพวง ('SUM, IPR') ส่งไปตรงๆ
+            // ฝั่งเซิร์ฟเวอร์เทียบกับสาขาที่ล็อกอินไม่ผ่าน แล้วตอบ 403 จนบันทึกทั้งสัปดาห์ไม่ผ่าน
+            branch: effectiveBranch || primaryBranch(emp.branch),
             hrCode: emp.hrCode,
             name: emp.name,
             position: emp.position,
@@ -841,7 +849,7 @@ export default function ScheduleWeekly() {
     try {
       await apiCall('updateOTApprovalBulk', {
         dateStr,
-        branch: emp.branch || effectiveBranch,
+        branch: effectiveBranch || primaryBranch(emp.branch),
         updates: [{ hrCode: emp.hrCode, name: emp.name, isApproved: approve }],
       });
       // ไม่ต้อง markDirty — การอนุมัติเขียนลงฐานข้อมูลไปแล้ว ไม่ใช่ร่างที่รอบันทึก

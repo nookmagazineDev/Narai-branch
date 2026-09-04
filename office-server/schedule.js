@@ -17,7 +17,7 @@
 import sql from 'mssql';
 import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-db.js';
 import { STOCK_ACTIONS } from './stock.js';
-import { sessionOf, branchFor, branchGroup, sameBranch } from './hr-session.js';
+import { sessionOf, branchFor, branchGroup, sameBranch, primaryBranch } from './hr-session.js';
 import { hashPassword, verifyPassword } from './hr-password.js';
 
 export { isConfigured };
@@ -427,7 +427,10 @@ async function syncEmployees(body, session) {
       name: str(e.name || e.fullName),
       // สาขาของแต่ละคนตามที่ชีทบอก — ใช้เฉพาะตอนซิงก์จากผู้ใช้สิทธิ์ 'all'
       // ซึ่งไม่มี "สาขาเดียว" ให้ยึด ถ้าเผลอเขียน @branch ลงไปทุกคนจะกลายเป็นสาขา all ทั้งระบบ
-      branch: str(e.branch).toLowerCase(),
+      //
+      // ยึดรหัสแรกของคนที่สังกัดหลายสาขา ('SUM, IPR' -> 'sum') เพราะคอลัมน์นี้เก็บได้รหัสเดียว
+      // ถ้าเก็บทั้งพวง คนคนนั้นจะหายจากรายชื่อทุกสาขา (ฝั่งอ่านเทียบ branch IN (...) แบบตรงตัว)
+      branch: primaryBranch(e.branch),
       empType: str(e.type || e.empType),
       position: str(e.position),
       dailyWage: num(e.dailyWage),
