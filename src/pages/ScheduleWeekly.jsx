@@ -10,7 +10,7 @@ import {
 import {
   loadDraft, saveDraftCells, savePendingLogs, clearDraft, listDrafts, countPendingLogs,
 } from '../utils/scheduleDrafts';
-import { primaryBranch } from '../utils/branchAlias';
+import { primaryBranch, sameBranch } from '../utils/branchAlias';
 
 function getStartOfWeek(date) {
   const d = new Date(date);
@@ -675,7 +675,19 @@ export default function ScheduleWeekly() {
     [employees]
   );
 
-  // Calculate Summary + per-day stats (เหมือนตัวเดิม: รวมค่าแรง F/T วันที่ยังไม่ลงด้วย)
+  /**
+   * คนนี้สังกัดสาขาอื่นด้วยไหม (นอกจากสาขาที่กำลังเปิดอยู่)
+   *
+   * ใช้กับการ "เผื่อค่าแรง F/T ของวันที่ยังไม่ลงกะ" เท่านั้น — คนของสองร้านจะถูกลงกะ
+   * ที่อีกสาขาในวันที่ว่างอยู่นี้ ถ้าทั้งสองสาขาต่างเผื่อค่าแรงเต็มให้เขา ค่าแรงรวมจะซ้ำกันสองที่
+   */
+  const worksAtOtherBranch = React.useCallback(
+    (emp) => !!effectiveBranch && (emp?.branches || []).some((code) => !sameBranch(code, effectiveBranch)),
+    [effectiveBranch]
+  );
+
+  // Calculate Summary + per-day stats (เหมือนตัวเดิม: รวมค่าแรง F/T วันที่ยังไม่ลงด้วย
+  // ยกเว้นคนของสองร้าน — วันที่ยังไม่ลงกะที่นี่อาจเป็นวันที่เขาไปทำอีกสาขา)
   const summary = React.useMemo(() => {
     const dates = daysOfWeek.map(d => d.dateStr);
     const dailyWage = {};
@@ -697,7 +709,9 @@ export default function ScheduleWeekly() {
           }
           dailyWage[ds] += w;
           totalWage += w;
-        } else if (emp.type === 'F/T') {
+        } else if (emp.type === 'F/T' && !worksAtOtherBranch(emp)) {
+          // เผื่อค่าแรงให้เฉพาะคนที่มีสาขาเดียว — คนของสองร้านนับเฉพาะวันที่ลงกะไว้จริงที่สาขานี้
+          // ไม่งั้นทั้งสองสาขาต่างเผื่อค่าแรงเต็มสัปดาห์ให้เขา ค่าแรงรวมของบริษัทจะกลายเป็นสองเท่า
           dailyWage[ds] += baseWage;
           totalWage += baseWage;
         }
@@ -712,7 +726,7 @@ export default function ScheduleWeekly() {
       wagePercent: weeklyTarget > 0 ? ((totalWage / weeklyTarget) * 100).toFixed(2) : '0.00'
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleData, employees, weeklyTarget, weekStartDate]);
+  }, [scheduleData, employees, weeklyTarget, weekStartDate, worksAtOtherBranch]);
 
   const handleSaveSchedule = async () => {
     if (dirtyKeys.size === 0) {
@@ -1122,6 +1136,15 @@ export default function ScheduleWeekly() {
                       <div className="text-xs text-gray-500 mt-0.5">
                         {emp.position}
                         {emp.type && <span className="ml-1 inline-block border border-gray-200 bg-gray-50 text-gray-600 rounded px-1 text-[10px]">{emp.type}</span>}
+                        {/* คนของสองร้าน — บอกไว้ให้รู้ว่าอีกสาขาก็ลงกะให้เขาได้ และค่าแรงที่นี่นับเฉพาะวันที่ลงไว้จริง */}
+                        {worksAtOtherBranch(emp) && (
+                          <span
+                            className="ml-1 inline-block border border-amber-200 bg-amber-50 text-amber-700 rounded px-1 text-[10px]"
+                            title={`สังกัด ${emp.branches.join(', ').toUpperCase()} — ลงตารางได้ทั้งสองสาขา ค่าแรงที่นี่นับเฉพาะวันที่ลงกะไว้จริง`}
+                          >
+                            {emp.branches.join('+').toUpperCase()}
+                          </span>
+                        )}
                       </div>
                     </td>
                     {daysOfWeek.map(d => (

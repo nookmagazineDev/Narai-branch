@@ -17,7 +17,9 @@
 import sql from 'mssql';
 import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-db.js';
 import { STOCK_ACTIONS } from './stock.js';
-import { sessionOf, branchFor, branchGroup, sameBranch, primaryBranch } from './hr-session.js';
+import {
+  sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
+} from './hr-session.js';
 import { hashPassword, verifyPassword } from './hr-password.js';
 
 export { isConfigured };
@@ -49,6 +51,55 @@ function branchScope(branch, col = 'branch') {
   const params = {};
   group.forEach((b, i) => { params[`brg${i}`] = { type: sql.NVarChar(50), value: b }; });
   return { clause: `${col} IN (${names.join(', ')})`, params };
+}
+
+/** อักขระที่มีความหมายพิเศษใน LIKE — ต้อง escape ก่อนเอาไปประกอบ pattern */
+const likeEscape = (v) => String(v).replace(/[\\%_[]/g, (m) => `\\${m}`);
+
+/**
+ * เงื่อนไขสาขาสำหรับ "รายชื่อพนักงาน" — นับคนที่สังกัดหลายสาขาด้วย
+ *
+ * hr_employee.branch เก็บได้รหัสเดียว (สาขาหลัก) ส่วน hr_employee.branches เก็บทั้งพวง
+ * ในรูป ',sum,ipr,' คนที่ดูแลสองร้านจึงขึ้นรายชื่อของทั้งสองสาขาพร้อมกัน
+ * ไม่ใช่โผล่เฉพาะสาขาที่เปิดหน้าล่าสุด
+ *
+ * ตารางนี้มีไม่กี่ร้อยแถว การ scan ด้วย LIKE จึงไม่ใช่ปัญหา และเงื่อนไข branch IN (...)
+ * ยังอยู่ข้างหน้าเสมอ แถวเก่าที่ยังไม่มีค่าใน branches จึงหาเจอเหมือนเดิม
+ */
+function branchScopeAny(branch, { col = 'branch', listCol = 'branches' } = {}) {
+  const group = branchGroup(branch);
+  const params = {};
+  const ins = [];
+  const likes = [];
+  group.forEach((b, i) => {
+    params[`brg${i}`] = { type: sql.NVarChar(50), value: b };
+    ins.push(`@brg${i}`);
+    params[`brl${i}`] = { type: sql.NVarChar(60), value: `%,${likeEscape(b)},%` };
+    likes.push(`${listCol} LIKE @brl${i} ESCAPE '\\'`);
+  });
+  return { clause: `(${col} IN (${ins.join(', ')}) OR ${likes.join(' OR ')})`, params };
+}
+
+/**
+ * ฐานข้อมูลเครื่องนี้มีคอลัมน์ hr_employee.branches แล้วหรือยัง
+ *
+ * โค้ดฝั่งเว็บกับเครื่องที่ออฟฟิศอัปเดตคนละจังหวะ และคอลัมน์นี้ต้องรัน docs/schema-hr.sql
+ * เพิ่มเอง ถ้าอ้างถึงทั้งที่ยังไม่มี ทุกคำสั่งที่แตะรายชื่อพนักงานจะพังพร้อมกันทั้งระบบ
+ * จึงถามฐานข้อมูลครั้งเดียวแล้วจำไว้ ยังไม่มีก็ทำงานแบบเดิม (สาขาหลักรหัสเดียว) ไปก่อน
+ * ถามไม่สำเร็จ (ฐานข้อมูลหลุด) ไม่จำคำตอบ ครั้งหน้าถามใหม่
+ */
+let branchesColumn = null;
+function hasBranchesColumn() {
+  if (branchesColumn === null) {
+    branchesColumn = queryRead(`SELECT COL_LENGTH(N'dbo.hr_employee', N'branches') AS len`)
+      .then((rows) => rows[0]?.len != null)
+      .catch((err) => {
+        branchesColumn = null;
+        console.warn('เช็คคอลัมน์ hr_employee.branches ไม่สำเร็จ:', err?.message || err);
+        return false;
+      });
+  }
+  return branchesColumn;
 }
 
 const CLEAR_NOTE = 'ล้างข้อมูล'; // ค่าที่ฝั่งเว็บส่งมาเมื่อสั่งล้างช่องนั้นทิ้ง
@@ -327,8 +378,9 @@ async function getBranches(body, session) {
 /** รหัสสาขาที่แปลว่า "ทุกสาขา" (สิทธิ์แอดมิน) ไม่ใช่ชื่อสาขาจริง */
 const isAllBranches = (b) => String(b || '').trim().toLowerCase() === 'all';
 
-const EMPLOYEE_COLUMNS = `hr_code, full_name, branch, emp_type, position, daily_wage,
-          status, resign_date, start_date, loga, new_code, photo_url`;
+/** คอลัมน์ที่หน้ารายชื่อ/หน้าลงตารางใช้ — branches มีเฉพาะฐานข้อมูลที่รัน schema-hr.sql รอบใหม่แล้ว */
+const employeeColumns = (withList) => `hr_code, full_name, branch, emp_type, position, daily_wage,
+          status, resign_date, start_date, loga, new_code, photo_url${withList ? ', branches' : ''}`;
 
 /** วันที่จาก SQL -> 'YYYY-MM-DD' (ตัดเวลาทิ้ง หน้าเว็บใช้แค่วันที่) */
 const dateOut = (v) => {
@@ -342,6 +394,8 @@ const mapEmployee = (r) => ({
   name: r.full_name,
   fullName: r.full_name,     // ชื่อฟิลด์ที่หน้ารายชื่อพนักงานใช้มาแต่เดิม (ชีทส่งมาชื่อนี้)
   branch: r.branch,
+  // ทุกสาขาที่คนนี้สังกัด (คนทั่วไปมีรหัสเดียว = สาขาหลัก) หน้าเว็บใช้ตัดสินว่าเป็นคนของสองร้านไหม
+  branches: branchCodes(r.branches || r.branch),
   type: r.emp_type || '',
   empType: r.emp_type || '', // ชื่อเดิมของฟิลด์ เผื่อหน้าที่ยังอ่านชื่อนี้อยู่
   position: r.position || '',
@@ -362,15 +416,18 @@ async function listEmployees(body, session, includeResigned) {
   const branch = branchFor(session, body.branch);
   if (!branch) return [];
 
+  const withList = await hasBranchesColumn();
   // 'all' = ผู้ใช้สิทธิ์ดูทุกสาขา (branchFor คืนค่านี้ให้เฉพาะคนที่มีสิทธิ์ ที่เหลือโดน 403 ไปแล้ว)
   // ต้องเป็น "ไม่กรองสาขา" ไม่ใช่ไปหาสาขาที่ชื่อว่า all ซึ่งไม่มีอยู่จริง
-  const scope = isAllBranches(branch) ? null : branchScope(branch);
+  const scope = isAllBranches(branch)
+    ? null
+    : withList ? branchScopeAny(branch) : branchScope(branch);
   const where = [
     scope ? scope.clause : null,
     includeResigned ? null : "status = N'ทำงาน'",
   ].filter(Boolean).join(' AND ');
   const rows = await queryRead(
-    `SELECT ${EMPLOYEE_COLUMNS}
+    `SELECT ${employeeColumns(withList)}
        FROM dbo.hr_employee
       ${where ? `WHERE ${where}` : ''}`,
     scope ? scope.params : {}
@@ -415,7 +472,8 @@ async function getEmployees(body, session) {
  */
 async function syncEmployees(body, session) {
   const branch = branchFor(session, body.branch);
-  const scope = branchScope(branch);
+  const withList = await hasBranchesColumn();
+  const scope = withList ? branchScopeAny(branch) : branchScope(branch);
   const list = Array.isArray(body.employees) ? body.employees : [];
   const fullList = body.fullList === true;
   if (!branch || list.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีข้อมูล' };
@@ -425,6 +483,10 @@ async function syncEmployees(body, session) {
     .map((e) => ({
       hrCode: str(e.hrCode),
       name: str(e.name || e.fullName),
+      // ทุกสาขาที่ชีทบอกว่าคนนี้สังกัด เก็บเป็น ',sum,ipr,' ให้ฝั่งอ่านค้นด้วย LIKE ได้
+      branches: branchListValue(e.branch),
+      // สังกัดหลายสาขา = ห้ามให้สาขาหลักสลับไปมาตามคนที่เปิดหน้าล่าสุด (ดูเหตุผลใน MERGE)
+      multi: branchCodes(e.branch).length > 1 ? 1 : 0,
       // สาขาของแต่ละคนตามที่ชีทบอก — ใช้เฉพาะตอนซิงก์จากผู้ใช้สิทธิ์ 'all'
       // ซึ่งไม่มี "สาขาเดียว" ให้ยึด ถ้าเผลอเขียน @branch ลงไปทุกคนจะกลายเป็นสาขา all ทั้งระบบ
       //
@@ -465,10 +527,16 @@ async function syncEmployees(body, session) {
     // จึงไปแย่งคอนเนคชันกับตอนผู้ใช้กดบันทึกตาราง ทำให้ทั้งสองฝั่งช้าและ timeout
     const rowsJson = { type: sql.NVarChar(sql.MAX), value: JSON.stringify(rows) };
 
+    // คอลัมน์ branches เพิ่งเพิ่มเข้ามา ฐานข้อมูลที่ยังไม่ได้รัน schema-hr.sql รอบใหม่จะยังไม่มี
+    // จึงต่อท่อนที่อ้างถึงมันเฉพาะตอนที่มีจริง ที่เหลือทำงานแบบเดิมทุกอย่าง
+    const setList = withList ? `branches = COALESCE(NULLIF(s.branches, N''), t.branches),` : '';
+    const insertListCol = withList ? ', branches' : '';
+    const insertListVal = withList ? `, NULLIF(s.branches, N'')` : '';
+
     await run(
       `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
          USING (
-           SELECT hr_code, full_name, branch, emp_type, position, daily_wage,
+           SELECT hr_code, full_name, branch, branches, multi, emp_type, position, daily_wage,
                   start_date, loga, new_code, photo_url,
                   /* รายชื่อที่รวมคนลาออกมาด้วย = เชื่อสถานะที่ชีทบอก
                      รายชื่อที่กรองมาเฉพาะคนทำงาน = ทุกคนในนั้นคือคนที่ยังทำงานอยู่ */
@@ -478,6 +546,8 @@ async function syncEmployees(body, session) {
                   hr_code NVARCHAR(30) '$.hrCode',
                   full_name NVARCHAR(150) '$.name',
                   branch NVARCHAR(50) '$.branch',
+                  branches NVARCHAR(200) '$.branches',
+                  multi BIT '$.multi',
                   emp_type NVARCHAR(20) '$.empType',
                   position NVARCHAR(100) '$.position',
                   daily_wage DECIMAL(12,2) '$.dailyWage',
@@ -491,8 +561,12 @@ async function syncEmployees(body, session) {
             ON t.hr_code = s.hr_code
        WHEN MATCHED THEN UPDATE SET
             full_name = s.full_name,
-            /* สาขาปกติยึด @branch (คนย้ายสาขาจะได้ย้ายตาม) ส่วนสิทธิ์ 'all' ต้องยึดของแต่ละคน */
-            branch = CASE WHEN @allBranches = 1 THEN s.branch ELSE @branch END,
+            /* สาขาปกติยึด @branch (คนย้ายสาขาจะได้ย้ายตาม) ส่วนสิทธิ์ 'all' ต้องยึดของแต่ละคน
+               ข้อยกเว้น: คนที่สังกัดหลายสาขายึด "รหัสแรกของตัวเอง" เสมอ ไม่งั้นสาขาหลักจะสลับ
+               ไปมาทุกครั้งที่อีกสาขาเปิดหน้ารายชื่อ (คอลัมน์ branches เก็บครบทั้งพวงอยู่แล้ว
+               รายชื่อของทั้งสองสาขาจึงยังเห็นเขาเหมือนกัน) */
+            branch = CASE WHEN @allBranches = 1 OR s.multi = 1 THEN s.branch ELSE @branch END,
+            ${setList}
             /* ฟิลด์ที่ฝั่งผู้ส่งอาจไม่รู้ = ส่งมาว่าง ให้คงของเดิมไว้ ไม่ล้างทิ้ง */
             emp_type   = COALESCE(NULLIF(s.emp_type, N''), t.emp_type),
             position   = COALESCE(NULLIF(s.position, N''), t.position),
@@ -506,11 +580,11 @@ async function syncEmployees(body, session) {
             updated_at = SYSDATETIME()
        WHEN NOT MATCHED THEN
             INSERT (hr_code, full_name, branch, emp_type, position, daily_wage,
-                    start_date, loga, new_code, photo_url, status)
+                    start_date, loga, new_code, photo_url, status${insertListCol})
             VALUES (s.hr_code, s.full_name,
-                    CASE WHEN @allBranches = 1 THEN s.branch ELSE @branch END,
+                    CASE WHEN @allBranches = 1 OR s.multi = 1 THEN s.branch ELSE @branch END,
                     s.emp_type, s.position, s.daily_wage,
-                    s.start_date, s.loga, s.new_code, s.photo_url, s.new_status);`,
+                    s.start_date, s.loga, s.new_code, s.photo_url, s.new_status${insertListVal});`,
       {
         rows: rowsJson,
         branch: { type: sql.NVarChar(50), value: branch },
@@ -520,10 +594,17 @@ async function syncEmployees(body, session) {
     );
 
     if (safeToRetire) {
+      /* คนที่สังกัดหลายสาขาห้ามตั้งเป็นลาออกจากรายชื่อของสาขาเดียว เพราะ status มีชุดเดียว
+         ทั้งระบบ — หายจากรายชื่อสาขานี้ไม่ได้แปลว่าออกจากอีกสาขาด้วย
+         (',sum,' = 2 จุลภาค = สังกัดสาขาเดียว / ',sum,ipr,' = 3 จุลภาคขึ้นไป = หลายสาขา) */
+      const keepMulti = withList
+        ? `AND (branches IS NULL OR LEN(branches) - LEN(REPLACE(branches, N',', N'')) <= 2)`
+        : '';
       const r = await run(
         `UPDATE dbo.hr_employee
             SET status = N'ลาออก', updated_at = SYSDATETIME()
           WHERE ${scope.clause} AND status = N'ทำงาน'
+            ${keepMulti}
             AND hr_code NOT IN (SELECT hr_code FROM OPENJSON(@rows) WITH (hr_code NVARCHAR(30) '$.hrCode'));`,
         { rows: rowsJson, ...scope.params }
       );

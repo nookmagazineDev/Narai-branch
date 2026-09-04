@@ -82,6 +82,16 @@ export function primaryBranch(value) {
   return branchCodes(value)[0] || '';
 }
 
+/**
+ * ค่าที่เก็บลงคอลัมน์ hr_employee.branches — ครอบและคั่นด้วยจุลภาคเสมอ (',sum,ipr,')
+ * ที่ต้องมีจุลภาคหัวท้ายเพราะฝั่งอ่านใช้ LIKE '%,sum,%' จะได้ไม่ไปตรงกับรหัสที่ซ้อนคำกัน
+ * ไม่มีรหัสเลยคืนค่าว่าง (ผู้เรียกจะได้รู้ว่า "ไม่ได้ส่งมา" ไม่ใช่ "ไม่สังกัดสาขาไหน")
+ */
+export function branchListValue(value) {
+  const codes = branchCodes(value);
+  return codes.length ? `,${codes.join(',')},` : '';
+}
+
 /** สองค่านี้ชี้ถึงร้านเดียวกันไหม (รับค่าที่มีหลายรหัสได้ทั้งสองฝั่ง) */
 export function sameBranch(a, b) {
   const xs = branchCodes(a);

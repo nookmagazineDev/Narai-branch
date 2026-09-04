@@ -265,7 +265,12 @@ export default function EmployeeList() {
 
   const uniqueStatuses = ['ทำงาน', 'ลาออก'];
   const uniqueTypes = [...new Set(employees.map(emp => emp.type || '-'))].filter(Boolean);
-  const uniqueBranches = user?.branch === 'all' ? [...new Set(employees.map(emp => emp.branch || '-'))].filter(Boolean) : [];
+  // ตัวเลือกสาขาของแอดมิน — ยึด "รหัสสาขา" รายตัว ไม่ใช่ข้อความในช่องสาขา
+  // เพราะคนที่ดูแลสองร้านมีช่องสาขาเป็นพวง ('SUM, IPR') ถ้าเอาข้อความมาทั้งก้อน
+  // จะได้ตัวเลือกแปลกๆ เพิ่มมาอีกอัน และค่าที่ได้ก็เอาไปใช้เป็นรหัสสาขาต่อไม่ได้
+  const uniqueBranches = user?.branch === 'all'
+    ? [...new Set(employees.flatMap(emp => emp.branches || []))].filter(Boolean).sort()
+    : [];
 
   const filteredEmployees = employees.filter(emp => {
     const hrCode = emp.hrCode ? String(emp.hrCode).toLowerCase() : '';
@@ -279,7 +284,10 @@ export default function EmployeeList() {
 
     const matchesStatus = statusFilter ? String(emp.status).toLowerCase() === statusFilter.toLowerCase() : true;
     const matchesType = typeFilter ? emp.type === typeFilter : true;
-    const matchesBranch = branchFilter ? emp.branch === branchFilter : true;
+    // คนของสองร้านต้องขึ้นในตัวกรองของทั้งสองสาขา
+    const matchesBranch = branchFilter
+      ? (emp.branches || []).includes(branchFilter) || emp.branch === branchFilter
+      : true;
 
     return matchesSearch && matchesStatus && matchesType && matchesBranch;
   }).sort((a, b) => {
@@ -400,7 +408,7 @@ export default function EmployeeList() {
                         onChange={(e) => setBranchFilter(e.target.value)}
                       >
                         <option value="">ทั้งหมด</option>
-                        {uniqueBranches.map(b => <option key={b} value={b}>{b}</option>)}
+                        {uniqueBranches.map(b => <option key={b} value={b}>{b.toUpperCase()}</option>)}
                       </select>
                     </div>
                   </th>
@@ -475,7 +483,10 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-purple-600">{emp.hrCode || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{emp.fullName || '-'}</td>
                     {user?.branch === 'all' && (
-                      <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-indigo-600">{emp.branch || '-'}</td>
+                      <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-indigo-600">
+                        {/* คนที่สังกัดหลายสาขาแสดงให้ครบทุกรหัส ไม่ใช่เฉพาะสาขาหลัก */}
+                        {(emp.branches || []).length > 0 ? emp.branches.join(', ').toUpperCase() : (emp.branch || '-')}
+                      </td>
                     )}
                     <td className="px-2 py-2 whitespace-nowrap text-sm">
                       {emp.status === 'ลาออก' ? (
