@@ -1,4 +1,4 @@
-import { branchGroup } from '../utils/branchAlias';
+import { branchGroup, branchCodes } from '../utils/branchAlias';
 
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
@@ -140,12 +140,18 @@ const normalizeDate = (v) => {
  */
 const normalizeEmployee = (e) => {
   const name = String(e?.name ?? e?.fullName ?? '').trim();
+  // ทุกสาขาที่คนนี้สังกัด — ชีทส่งมาเป็นข้อความช่องเดียว ('SUM, IPR') ส่วน SQL ส่งมาเป็นอาเรย์แล้ว
+  // คนทั่วไปได้รหัสเดียว หน้าเว็บจึงเช็ค "คนของสองร้าน" ด้วย branches.length > 1 ได้ที่เดียวจบ
+  const branches = branchCodes(
+    Array.isArray(e?.branches) ? e.branches.join(',') : (e?.branches ?? e?.branch)
+  );
   return {
     ...e,
     hrCode: String(e?.hrCode ?? '').trim(),
     name,
     fullName: name,
     branch: e?.branch ?? '',
+    branches,
     type: e?.type ?? e?.empType ?? '',
     empType: e?.empType ?? e?.type ?? '',
     position: e?.position ?? '',
@@ -217,6 +223,8 @@ const rosterDiffers = (sheetList, sqlList) => {
     const q = bySql.get(s.hrCode.toLowerCase());
     if (!q) return true;   // มีคนใหม่ในชีทที่ SQL ยังไม่รู้จัก
     if (COMPARED_FIELDS.some((f) => s[f] !== '' && s[f] !== q[f])) return true;
+    // สาขาที่สังกัดเปลี่ยน (เช่น ชีทเพิ่งเพิ่มให้ดูอีกร้าน) ก็ต้องรีเฟรช ไม่งั้นอีกสาขายังไม่เห็นเขา
+    if (s.branches.length > 0 && s.branches.join(',') !== q.branches.join(',')) return true;
     const wage = Number(s.dailyWage) || 0;
     if (wage > 0 && wage !== (Number(q.dailyWage) || 0)) return true;
   }

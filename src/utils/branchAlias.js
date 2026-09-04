@@ -26,10 +26,37 @@ export function branchGroup(code) {
   return hit ? [b, ...hit.filter((c) => c !== b)] : [b];
 }
 
-/** สองรหัสนี้เป็นร้านเดียวกันไหม */
+/* ------------------- คนที่สังกัดหลายสาขา (ช่องสาขามีหลายรหัส) -------------------
+   ชีท DATA กรอกช่องสาขาของบางคนเป็นหลายรหัสคั่นด้วยจุลภาค เช่น 'SUM, IPR'
+   (ผู้จัดการที่ดูแลสองร้าน) ค่านี้ติดมากับรายชื่อพนักงานที่อ่านจากชีท
+
+   ถ้าเอาไปส่งเป็น "สาขาของแถวกะ" ตรงๆ ฝั่งเซิร์ฟเวอร์จะเทียบกับสาขาที่ล็อกอินไม่ผ่าน
+   แล้วตอบ 403 "ไม่มีสิทธิ์ดูข้อมูลของสาขา SUM, IPR" ทำให้บันทึกตารางทั้งสัปดาห์ไม่ผ่าน
+   เพราะมีคนเดียวในนั้นที่สังกัดสองสาขา (เคสจริงของสาขา sum)
+
+   กติกาเดียวกับ office-server/hr-session.js: แตกเป็นรายรหัสก่อนเทียบเสมอ
+   และเวลาต้องระบุสาขาช่องเดียวให้ใช้รหัสแรกเป็นสาขาหลัก
+--------------------------------------------------------------------------- */
+
+/** แตกช่องสาขาเป็นรายรหัส — 'SUM, IPR' -> ['sum', 'ipr'] (คั่นด้วย , / | ; หรือช่องว่าง) */
+export function branchCodes(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .split(/[,\/|;+&]+|\s+/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+/** รหัสแรกของช่องสาขา — ใช้เป็น "สาขาหลัก" เวลาต้องส่งไปช่องเดียว */
+export function primaryBranch(value) {
+  return branchCodes(value)[0] || '';
+}
+
+/** สองค่านี้ชี้ถึงร้านเดียวกันไหม (รับค่าที่มีหลายรหัสได้ทั้งสองฝั่ง) */
 export function sameBranch(a, b) {
-  const x = String(a ?? '').trim().toLowerCase();
-  const y = String(b ?? '').trim().toLowerCase();
-  if (!x || !y) return false;
-  return x === y || branchGroup(x).includes(y);
+  const xs = branchCodes(a);
+  const ys = branchCodes(b);
+  if (xs.length === 0 || ys.length === 0) return false;
+  return xs.some((x) => branchGroup(x).some((code) => ys.includes(code)));
 }

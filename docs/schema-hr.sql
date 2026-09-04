@@ -86,6 +86,16 @@ CREATE TABLE dbo.hr_employee (
     new_code    NVARCHAR(50)  NULL,            -- รหัสใหม่ ใช้ตั้งชื่อไฟล์รูป (ชีทคอลัมน์ BT)
     photo_url   NVARCHAR(500) NULL,            -- ลิงก์รูปบน Drive (ชีทคอลัมน์ BU)
 
+    /* ทุกสาขาที่คนนี้สังกัด เก็บเป็น ',sum,ipr,' (มีจุลภาคหัวท้ายเสมอ เพื่อให้ค้นด้วย
+       LIKE '%,sum,%' ได้ตรงตัวโดยไม่ไปชนรหัสที่ซ้อนคำกัน)
+
+       ทำไมต้องมีทั้ง branch และ branches: ชีท DATA กรอกช่องสาขาของคนที่ดูแลสองร้าน
+       เป็น 'SUM, IPR' คอลัมน์ branch เก็บได้รหัสเดียวจึงเก็บแค่ "สาขาหลัก" (รหัสแรก)
+       ถ้ามีแค่ branch คนคนนั้นจะขึ้นรายชื่อทีละสาขา สลับไปมาตามคนที่เปิดหน้าล่าสุด
+       คอลัมน์นี้ทำให้เขาขึ้นรายชื่อของทุกสาขาที่สังกัดพร้อมกัน และลงตารางได้ทั้งสองที่
+       คนทั่วไปมีรหัสเดียว ค่าจะเป็น ',sum,' เฉยๆ (ว่างได้ ฝั่งอ่านถอยไปใช้ branch แทน) */
+    branches    NVARCHAR(200) NULL,
+
     updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_employee_updated_at DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_hr_employee PRIMARY KEY (hr_code)
 );
@@ -104,6 +114,17 @@ IF COL_LENGTH(N'dbo.hr_employee', N'new_code') IS NULL
 GO
 IF COL_LENGTH(N'dbo.hr_employee', N'photo_url') IS NULL
     ALTER TABLE dbo.hr_employee ADD photo_url NVARCHAR(500) NULL;
+GO
+IF COL_LENGTH(N'dbo.hr_employee', N'branches') IS NULL
+    ALTER TABLE dbo.hr_employee ADD branches NVARCHAR(200) NULL;
+GO
+
+/* เติมค่าเริ่มต้นให้แถวเก่า = สังกัดสาขาเดียวตามคอลัมน์ branch
+   (ไม่บังคับ — ฝั่งอ่านเช็ค branch IN (...) ควบคู่อยู่แล้ว และตัวซิงก์รายชื่อจะเขียนทับให้เอง
+   ตามที่ชีทบอก แต่เติมไว้ก่อนทำให้ค้นด้วย branches ได้ครบตั้งแต่วันแรก) */
+UPDATE dbo.hr_employee
+   SET branches = N',' + LOWER(LTRIM(RTRIM(branch))) + N','
+ WHERE branches IS NULL AND NULLIF(LTRIM(RTRIM(branch)), N'') IS NOT NULL;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_hr_employee_branch' AND object_id = OBJECT_ID(N'dbo.hr_employee'))

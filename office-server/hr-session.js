@@ -56,12 +56,48 @@ export function branchGroup(code) {
   return hit ? [...hit] : [b];
 }
 
-/** สองรหัสนี้เป็นร้านเดียวกันไหม */
+/* ------------------- คนที่สังกัดหลายสาขา (ช่องสาขามีหลายรหัส) -------------------
+   ชีท DATA กรอกช่องสาขาของบางคนเป็นหลายรหัสคั่นด้วยจุลภาค เช่น 'SUM, IPR'
+   (ผู้จัดการที่ดูแลสองร้าน) ค่านั้นเดินทางมาถึงที่นี่ตรงๆ เพราะหน้าเว็บส่ง
+   "สาขาของพนักงาน" มากับแถวกะที่บันทึก
+
+   ถ้าเทียบแบบตรงตัว 'sum, ipr' จะไม่เท่ากับ 'sum' -> ตอบ 403
+   "ไม่มีสิทธิ์ดูข้อมูลของสาขา SUM, IPR" แล้วการบันทึกตารางทั้งสัปดาห์ล้มทั้งชุด
+   เพราะคนคนเดียวในนั้นสังกัดสองสาขา (เคสจริงของสาขา sum)
+
+   จึงแตกเป็นรายรหัสก่อนเทียบเสมอ และตอนเขียนให้ยึด "รหัสเดียว" ไม่เก็บทั้งพวง
+--------------------------------------------------------------------------- */
+
+/** แตกช่องสาขาเป็นรายรหัส — 'SUM, IPR' -> ['sum', 'ipr'] (คั่นด้วย , / | ; หรือช่องว่าง) */
+export function branchCodes(value) {
+  return str(value)
+    .toLowerCase()
+    .split(/[,\/|;+&]+|\s+/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+/** รหัสแรกของช่องสาขา — ใช้เป็น "สาขาหลัก" ตอนต้องเก็บลงฐานข้อมูลช่องเดียว */
+export function primaryBranch(value) {
+  return branchCodes(value)[0] || '';
+}
+
+/**
+ * ค่าที่เก็บลงคอลัมน์ hr_employee.branches — ครอบและคั่นด้วยจุลภาคเสมอ (',sum,ipr,')
+ * ที่ต้องมีจุลภาคหัวท้ายเพราะฝั่งอ่านใช้ LIKE '%,sum,%' จะได้ไม่ไปตรงกับรหัสที่ซ้อนคำกัน
+ * ไม่มีรหัสเลยคืนค่าว่าง (ผู้เรียกจะได้รู้ว่า "ไม่ได้ส่งมา" ไม่ใช่ "ไม่สังกัดสาขาไหน")
+ */
+export function branchListValue(value) {
+  const codes = branchCodes(value);
+  return codes.length ? `,${codes.join(',')},` : '';
+}
+
+/** สองค่านี้ชี้ถึงร้านเดียวกันไหม (รับค่าที่มีหลายรหัสได้ทั้งสองฝั่ง) */
 export function sameBranch(a, b) {
-  const x = str(a).toLowerCase();
-  const y = str(b).toLowerCase();
-  if (!x || !y) return false;
-  return x === y || branchGroup(x).includes(y);
+  const xs = branchCodes(a);
+  const ys = branchCodes(b);
+  if (xs.length === 0 || ys.length === 0) return false;
+  return xs.some((x) => branchGroup(x).some((code) => ys.includes(code)));
 }
 
 /**
@@ -71,14 +107,18 @@ export function sameBranch(a, b) {
  */
 export function branchFor(session, requested) {
   const want = str(requested);
-  if (!session) return want;
-  if (session.isAll) return want;
+  // คนที่สังกัดหลายสาขาส่งมาเป็นพวง ('SUM, IPR') — เก็บลงฐานข้อมูลได้ทีละรหัสเท่านั้น
+  // จึงยึดรหัสแรกเป็นสาขาหลัก ('all' ไม่ใช่รหัสสาขาจริง ผ่านตัวนี้แล้วยังเป็น 'all' เหมือนเดิม)
+  const primary = primaryBranch(want) || want;
+  if (!session) return primary;
+  if (session.isAll) return primary;
   // sameBranch() ครอบคลุมรหัสที่เป็นร้านเดียวกัน (เช่น zjp กับ sjp) จึงข้ามกันได้
+  // และแตกพวงหลายรหัสให้แล้ว คนที่สังกัด 'SUM, IPR' จึงผ่านด่านนี้เมื่อล็อกอินด้วยสาขาใดสาขาหนึ่งในนั้น
   if (want && !sameBranch(want, session.branch)) {
     throw Object.assign(new Error(`ไม่มีสิทธิ์ดูข้อมูลของสาขา ${want}`), { forbidden: true });
   }
   // ผ่านด่านสิทธิ์แล้วยังคืน "รหัสที่ล็อกอิน" เสมอ ไม่ใช่รหัสพี่น้องที่ขอมา
   // เพื่อให้ข้อมูลที่บันทึกใหม่ลงใต้รหัสเดียวตลอด ไม่แตกเป็นสองกองเพิ่มอีก
   // (ฝั่งอ่านครอบทั้งกลุ่มอยู่แล้ว ของเก่าที่ลงด้วยอีกรหัสจึงยังเห็นครบ)
-  return session.branch;
+  return primaryBranch(session.branch) || session.branch;
 }
