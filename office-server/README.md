@@ -51,6 +51,14 @@ Restart-Service NaraiUsageAPI        # รีสตาร์ท (หลังแ
 Stop-Service NaraiUsageAPI           # หยุด
 ```
 
+**อัปเดตโค้ดบนเครื่องที่รันอยู่**: ถ้าโฟลเดอร์เป็น git repo อยู่แล้ว สั่ง `git pull origin main` แล้ว `Restart-Service NaraiUsageAPI`
+ถ้าได้โค้ดมาจากไฟล์ ZIP (โฟลเดอร์ชื่อลงท้าย `-main` ไม่มี `.git`) ให้เชื่อมเข้ากับ git ก่อนครั้งเดียว แล้วคราวหน้าจะ `git pull` ได้เลย:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\link-to-git.ps1            # หรือระบุเอง -Root D:\Narai-branch-main
+```
+สคริปสำรองโค้ดเดิมไว้ก่อน → `git init` + ผูก remote → ดึง main มาทับไฟล์โค้ด → `npm install` → รีสตาร์ท service → เช็ค `/health`
+**ไม่แตะ `.env`, `logs`, `node_modules`** (อยู่ใน `.gitignore` ทั้งหมด) และรันซ้ำได้ปลอดภัย
+
 **เวลาหน้าเว็บขึ้น "เครื่อง IT-Narai อาจปิดอยู่"** ให้เปิดเครื่องก่อน แล้วรันสคริปตรวจ+ซ่อม:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\fix-narai-api.ps1
