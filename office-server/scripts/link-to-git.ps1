@@ -1,4 +1,5 @@
 ﻿# เชื่อมโฟลเดอร์โค้ดที่ก๊อป/แตกจาก ZIP มา ให้กลายเป็น git repo จริง (โดยไม่ต้องย้ายโฟลเดอร์)
+# และดึงโค้ดล่าสุดจาก main มาให้ตรงกัน
 #
 # ใช้ตอนเครื่องที่รัน office-server ได้โค้ดมาจากการโหลด ZIP (โฟลเดอร์ชื่อลงท้าย -main)
 # ทำให้คราวหน้าอัปเดตแค่ `git pull` ไม่ต้องก๊อปไฟล์ทีละไฟล์
@@ -7,10 +8,10 @@
 #   powershell -ExecutionPolicy Bypass -File .\link-to-git.ps1
 #   powershell -ExecutionPolicy Bypass -File .\link-to-git.ps1 -Root D:\Narai-branch-main
 #
-# ทำอะไรบ้าง: สำรองโค้ดเดิมไว้ก่อน -> git init + ผูก remote -> ดึง main มาทับไฟล์โค้ด
+# ทำอะไรบ้าง: สำรองโค้ดเดิมไว้ก่อน -> ผูก remote (ถ้ายังไม่ได้ผูก) -> ดึง main มาทับไฟล์โค้ด
 #             -> npm install -> รีสตาร์ท service -> เช็ค /health
 # ไม่แตะ .env, logs, node_modules (อยู่ใน .gitignore ทั้งหมด ของเดิมอยู่ครบ)
-# รันซ้ำได้ปลอดภัย — ถ้าโฟลเดอร์เป็น git repo อยู่แล้วจะแค่ pull ให้
+# รันซ้ำได้ปลอดภัย และถ้าดึงโค้ดไม่สำเร็จจะหยุดก่อนรีสตาร์ท service (ไม่ปล่อยให้รันโค้ดเก่าต่อโดยไม่รู้ตัว)
 
 param(
   [string]$Root = '',
@@ -37,7 +38,7 @@ $serverDir = Join-Path $Root 'office-server'
 
 Say ''
 Say '=================================================='
-Say '  เชื่อมโฟลเดอร์โค้ดเข้ากับ git'
+Say '  เชื่อมโฟลเดอร์โค้ดเข้ากับ git + ดึงโค้ดล่าสุด'
 Say '=================================================='
 Say "  โฟลเดอร์ราก : $Root"
 Say "  repo        : $RepoUrl ($Branch)"
@@ -45,6 +46,20 @@ Say "  repo        : $RepoUrl ($Branch)"
 if (-not (Test-Path (Join-Path $serverDir 'server.js'))) {
   Bad "ไม่พบ $serverDir\server.js — โฟลเดอร์รากไม่ถูกต้อง"
   Fix 'ระบุเอง เช่น  .\link-to-git.ps1 -Root D:\Narai-branch-main'
+  Say ''
+  exit 1
+}
+
+# สำรองไฟล์โค้ด (ไม่เอา node_modules/logs/dist/.git ที่ใหญ่และสร้างใหม่ได้) — คืนค่าที่อยู่โฟลเดอร์สำรอง
+function Backup-Code {
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $dest = Join-Path (Split-Path -Parent $Root) ("narai-backup-$stamp")
+  & robocopy $Root $dest /E /XD node_modules logs dist .git /NFL /NDL /NJH /NJS /NP | Out-Null
+  if (Test-Path (Join-Path $dest 'office-server\server.js')) {
+    Ok "สำรองโค้ดเดิมไว้ที่ $dest"
+    return $dest
+  }
+  Bad 'สำรองโค้ดไม่สำเร็จ — หยุดไว้ก่อนเพื่อความปลอดภัย'
   Say ''
   exit 1
 }
@@ -61,70 +76,73 @@ if (-not $git) {
 }
 Ok "พบ $(& git --version)"
 
-# ---- 2) เป็น git repo อยู่แล้วหรือยัง ----
+# ---- 2) ผูกกับ repo ----
 Say ''
-Say '[2/6] สถานะโฟลเดอร์'
-$alreadyRepo = Test-Path (Join-Path $Root '.git')
-if ($alreadyRepo) {
+Say '[2/6] ผูกกับ repo'
+if (Test-Path (Join-Path $Root '.git')) {
   $remote = (& git -C $Root remote get-url origin 2>$null)
-  Ok "เป็น git repo อยู่แล้ว (origin = $remote)"
-  Fix "ดึงโค้ดล่าสุด (git pull origin $Branch)"
-  & git -C $Root pull origin $Branch 2>&1 | ForEach-Object { Say "      $_" }
+  if (-not $remote) {
+    Warn 'เป็น git repo แต่ยังไม่มี remote origin — จะผูกให้'
+    & git -C $Root remote add origin $RepoUrl 2>&1 | Out-Null
+    Ok "ผูก origin = $RepoUrl"
+  } else {
+    Ok "เป็น git repo อยู่แล้ว (origin = $remote)"
+  }
 } else {
   Warn 'ยังไม่ใช่ git repo (น่าจะได้มาจากไฟล์ ZIP) — จะเชื่อมให้'
-
-  # ---- 3) สำรองโค้ดเดิมไว้ก่อน ----
-  Say ''
-  Say '[3/6] สำรองโค้ดเดิม'
-  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-  $backup = Join-Path (Split-Path -Parent $Root) ("narai-backup-$stamp")
-  # ไม่สำรอง node_modules/logs (ใหญ่และสร้างใหม่ได้) แต่เอา .env ไปด้วยเสมอ
-  & robocopy $Root $backup /E /XD node_modules logs dist .git /NFL /NDL /NJH /NJS /NP | Out-Null
-  if (Test-Path (Join-Path $backup 'office-server\server.js')) {
-    Ok "สำรองไว้ที่ $backup"
-  } else {
-    Bad 'สำรองไม่สำเร็จ — หยุดไว้ก่อนเพื่อความปลอดภัย'
-    Say ''
-    exit 1
-  }
-
-  # ---- 4) ผูกกับ repo แล้วดึงโค้ดมาทับ ----
-  Say ''
-  Say '[4/6] ผูกกับ repo แล้วดึงโค้ดล่าสุด'
+  [void](Backup-Code)
   & git -C $Root init 2>&1 | Out-Null
-  & git -C $Root remote remove origin 2>&1 | Out-Null
   & git -C $Root remote add origin $RepoUrl 2>&1 | Out-Null
-  & git -C $Root fetch origin 2>&1 | ForEach-Object { Say "      $_" }
-  if ($LASTEXITCODE -ne 0) {
-    Bad 'ดึงจาก GitHub ไม่สำเร็จ — เครื่องนี้ออกเน็ตได้ไหม / repo เป็น private หรือเปล่า'
-    Fix "โค้ดเดิมยังอยู่ครบ และสำรองไว้ที่ $backup"
-    Say ''
-    exit 1
-  }
-
-  # ชี้ branch ปัจจุบันไปที่คอมมิตล่าสุดก่อน (ยังไม่แตะไฟล์) เพื่อดูว่าไฟล์ไหนบนเครื่องต่างจากบน GitHub
-  # (.env / logs / node_modules ไม่ขึ้นเพราะอยู่ใน .gitignore อยู่แล้ว)
-  & git -C $Root reset "origin/$Branch" 2>&1 | Out-Null
-  $changed = & git -C $Root status --porcelain --untracked-files=no
-  if ($changed) {
-    Warn 'ไฟล์เหล่านี้บนเครื่องต่างจากบน GitHub และกำลังจะถูกทับ (ของเดิมอยู่ในโฟลเดอร์สำรองแล้ว):'
-    $changed | ForEach-Object { Say "      $_" }
-  } else {
-    Ok 'ไฟล์โค้ดบนเครื่องไม่มีการแก้ไขเฉพาะที่'
-  }
-
-  & git -C $Root branch -M $Branch 2>&1 | Out-Null
-  & git -C $Root reset --hard "origin/$Branch" 2>&1 | ForEach-Object { Say "      $_" }
-  & git -C $Root branch --set-upstream-to="origin/$Branch" $Branch 2>&1 | Out-Null
-  Ok "ผูกกับ origin/$Branch แล้ว — คราวหน้าอัปเดตด้วย  git -C $Root pull origin $Branch"
+  Ok "git init + ผูก origin = $RepoUrl"
 }
 
-$head = & git -C $Root log --oneline -1
-Ok "คอมมิตล่าสุด: $head"
-
-# ---- 5) dependency + รีสตาร์ท service ----
+# ---- 3) ดึงโค้ดล่าสุด ----
 Say ''
-Say '[5/6] dependency + service'
+Say "[3/6] ดึงโค้ดล่าสุดจาก origin/$Branch"
+$fetchOut = & git -C $Root fetch origin $Branch 2>&1
+$fetchCode = $LASTEXITCODE
+$fetchOut | ForEach-Object { Say "      $_" }
+if ($fetchCode -ne 0) {
+  Bad 'ดึงจาก GitHub ไม่สำเร็จ — เครื่องนี้ออกเน็ตได้ไหม / ติด proxy / repo เป็น private หรือเปล่า'
+  Fix 'โค้ดบนเครื่องยังเป็นของเดิมทุกอย่าง ยังไม่มีอะไรถูกเปลี่ยน'
+  Say ''
+  exit 1
+}
+
+$target = (& git -C $Root rev-parse FETCH_HEAD).Trim()
+$current = (& git -C $Root rev-parse HEAD 2>$null)
+if ($current) { $current = $current.Trim() }
+
+if ($current -eq $target) {
+  Ok 'โค้ดบนเครื่องตรงกับ GitHub อยู่แล้ว'
+} else {
+  # ชี้ branch ปัจจุบันไปที่คอมมิตล่าสุดก่อน (ยังไม่แตะไฟล์) เพื่อดูว่าไฟล์ไหนบนเครื่องต่างจากบน GitHub
+  # (.env / logs / node_modules ไม่ขึ้นเพราะอยู่ใน .gitignore อยู่แล้ว)
+  & git -C $Root reset FETCH_HEAD 2>&1 | Out-Null
+  $changed = & git -C $Root status --porcelain --untracked-files=no
+  if ($changed) {
+    Warn 'ไฟล์เหล่านี้บนเครื่องต่างจากบน GitHub และกำลังจะถูกทับ:'
+    $changed | ForEach-Object { Say "      $_" }
+    [void](Backup-Code)
+  }
+  & git -C $Root branch -M $Branch 2>&1 | Out-Null
+  & git -C $Root reset --hard FETCH_HEAD 2>&1 | ForEach-Object { Say "      $_" }
+  & git -C $Root branch --set-upstream-to="origin/$Branch" $Branch 2>&1 | Out-Null
+}
+
+# ยืนยันว่าไฟล์บนเครื่องเป็นคอมมิตล่าสุดจริง ไม่งั้นหยุด — กันรีสตาร์ทแล้วยังรันโค้ดเก่าโดยไม่รู้ตัว
+$current = (& git -C $Root rev-parse HEAD).Trim()
+if ($current -ne $target) {
+  Bad "อัปเดตโค้ดไม่สำเร็จ — เครื่องยังอยู่ที่ $($current.Substring(0,7)) แต่ GitHub อยู่ที่ $($target.Substring(0,7))"
+  Fix "ลองสั่งเองทีละคำสั่ง:  git -C $Root fetch origin $Branch  แล้ว  git -C $Root reset --hard origin/$Branch"
+  Say ''
+  exit 1
+}
+Ok "คอมมิตล่าสุด: $(& git -C $Root log --oneline -1)"
+
+# ---- 4) dependency ----
+Say ''
+Say '[4/6] dependency (npm install)'
 Push-Location $serverDir
 try {
   & npm install --omit=dev --no-audit --no-fund 2>&1 | Select-Object -Last 3 | ForEach-Object { Say "      $_" }
@@ -132,8 +150,11 @@ try {
   Pop-Location
 }
 
+# ---- 5) รีสตาร์ท service ----
+Say ''
+Say "[5/6] service '$ServiceName'"
 if ($NoRestart) {
-  Warn "ข้ามการรีสตาร์ท service ตามที่สั่ง — ต้องรัน  Restart-Service $ServiceName  เองถึงจะมีผล"
+  Warn "ข้ามการรีสตาร์ทตามที่สั่ง — ต้องรัน  Restart-Service $ServiceName  เองถึงจะมีผล"
 } else {
   $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -143,7 +164,7 @@ if ($NoRestart) {
     Warn 'ไม่ได้เปิดแบบ Run as administrator จึงรีสตาร์ท service ไม่ได้'
     Fix "เปิด PowerShell แบบ administrator แล้วสั่ง  Restart-Service $ServiceName"
   } else {
-    Fix "รีสตาร์ท service '$ServiceName'"
+    Fix 'รีสตาร์ท service'
     Restart-Service -Name $ServiceName -Force
     Ok 'สั่งรีสตาร์ทแล้ว (ตอนสตาร์ทจะอุ่น cache ~3-4 นาที)'
   }
@@ -163,7 +184,11 @@ foreach ($wait in 5, 15, 30, 60) {
 }
 if ($health) {
   Ok "ตอบแล้ว — cache $($health.days_cached) วัน, สูตร $($health.recipes) เมนู"
-  if ($health.incomplete_days -and $health.incomplete_days.Count -gt 0) {
+  # ฟิลด์นี้มีเฉพาะโค้ดใหม่ ถ้าไม่มีแปลว่ายังรันไฟล์เก่าอยู่ (service ชี้คนละโฟลเดอร์?)
+  if ($null -eq $health.PSObject.Properties['incomplete_days']) {
+    Warn 'ตัวที่ตอบพอร์ตนี้ยังเป็นโค้ดเก่า — เช็คว่า service ชี้มาที่โฟลเดอร์นี้จริงไหม:'
+    Fix "  nssm get $ServiceName AppDirectory   (ควรได้ $serverDir)"
+  } elseif ($health.incomplete_days -and $health.incomplete_days.Count -gt 0) {
     Warn "วันที่ข้อมูลยังไม่ครบ: $($health.incomplete_days -join ', ') (ระบบจะดึงซ้ำเองทุก 20 นาที)"
   }
 } else {
