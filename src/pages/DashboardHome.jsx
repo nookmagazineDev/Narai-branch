@@ -3,10 +3,10 @@ import { useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   DollarSign, Layers, TrendingUp, FileText, Users, BarChart3,
-  RefreshCw, Calendar, AlertCircle, Scale, Ban,
+  RefreshCw, DatabaseBackup, Calendar, AlertCircle, Scale, Ban,
   Eye, X, ShoppingBag, Search, CheckCircle, XCircle, ReceiptText, Store,
 } from 'lucide-react';
-import { fetchDashboard, fetchBills, fetchBillDetail, presetRange, PRESETS, fmtDate } from '../services/dashboardApi';
+import { fetchDashboard, refreshDashboardCache, fetchBills, fetchBillDetail, presetRange, PRESETS, fmtDate } from '../services/dashboardApi';
 import { apiCall } from '../services/api';
 import ProfitSummary from '../components/ProfitSummary';
 
@@ -588,6 +588,7 @@ export default function DashboardHome() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [drill, setDrill] = useState(null); // เมตริกที่กดดู drill-down รายวัน
+  const [resyncing, setResyncing] = useState(false); // กำลังสั่งดึงข้อมูลจาก POS ใหม่
   const [showCovers, setShowCovers] = useState(false); // breakdown ประเภทลูกค้า
   const abortRef = useRef(null);
 
@@ -610,6 +611,23 @@ export default function DashboardHome() {
     },
     [branch, outletId]
   );
+
+  // สั่งดึงข้อมูลจาก POS ใหม่ (ล้างแคชรายวันของ office-server) แล้วโหลดหน้าใหม่
+  // ใช้ตอนยอดขายบางวันไม่ขึ้นเพราะตอนที่แคชวันนั้นไว้ POS ยัง sync ไม่เสร็จ
+  // ถ้ามีวันที่ยอดขายเป็น 0 อยู่แล้ว ดึงเฉพาะวันพวกนั้นพอ (เร็วกว่าดึงใหม่ทั้งเดือนมาก)
+  const resync = useCallback(async (sd, ed, dailyRows) => {
+    const zeroDays = (dailyRows || []).filter((r) => !(Number(r.sales) > 0)).map((r) => r.date);
+    setResyncing(true);
+    setError('');
+    try {
+      await refreshDashboardCache(zeroDays.length ? { dates: zeroDays } : { startDate: sd, endDate: ed });
+    } catch (e) {
+      if (e.name !== 'AbortError') setError(e.message || 'ดึงข้อมูลจาก POS ใหม่ไม่สำเร็จ');
+    } finally {
+      setResyncing(false);
+    }
+    await load(sd, ed);
+  }, [load]);
 
   // โหลดรายชื่อสาขา (เฉพาะผู้ใช้ระดับ all) แล้วเลือกสาขาแรกอัตโนมัติ
   useEffect(() => {
@@ -674,6 +692,14 @@ export default function DashboardHome() {
   const disp = (v) => (unit === 'pct' ? pctf(v) : baht(v));
 
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
+  // จำนวนวันในช่วงที่เลือก — ปุ่มดึงข้อมูลจาก POS ใหม่ทำได้ครั้งละไม่เกิน 31 วัน (ตามลิมิตของ office-server)
+  const rangeDays = useMemo(() => {
+    const a = new Date(startDate + 'T00:00:00Z').getTime();
+    const b = new Date(endDate + 'T00:00:00Z').getTime();
+    return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 86400000) + 1 : 0;
+  }, [startDate, endDate]);
+  // จำนวนวันในช่วงที่ยอดขายยังเป็น 0 (เป้าหมายของปุ่มดึงข้อมูลจาก POS ใหม่)
+  const zeroDayCount = useMemo(() => (d.daily || []).filter((r) => !(Number(r.sales) > 0)).length, [d.daily]);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -720,11 +746,23 @@ export default function DashboardHome() {
           )}
           <button
             onClick={() => load(startDate, endDate)}
-            disabled={loading}
+            disabled={loading || resyncing}
             className="p-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
             title="โหลดใหม่"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => resync(startDate, endDate, d.daily)}
+            disabled={loading || resyncing || (zeroDayCount === 0 && rangeDays > 31)}
+            className="p-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            title={zeroDayCount > 0
+              ? `ดึงข้อมูลจาก POS ใหม่ ${zeroDayCount} วันที่ยอดขายยังไม่ขึ้น — ใช้เวลาสักครู่`
+              : (rangeDays > 31
+                ? 'ดึงข้อมูลจาก POS ใหม่ได้ครั้งละไม่เกิน 31 วัน — เลือกช่วงให้สั้นลง'
+                : 'ดึงข้อมูลจาก POS ใหม่ทั้งช่วงที่เลือก — ใช้เวลาสักครู่')}
+          >
+            <DatabaseBackup className={`w-4 h-4 ${resyncing ? 'animate-pulse' : ''}`} />
           </button>
         </div>
       </div>
