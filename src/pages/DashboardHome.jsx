@@ -526,10 +526,17 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
   // สรุปรายวัน: เอาเฉพาะวันที่มีลูกค้า → % ของทั้งช่วง (ทั้งเดือน) + เทียบกับค่าเฉลี่ยต่อวัน
   const st = useMemo(() => {
     const base = (daily || [])
-      .map((r) => ({ date: r.date, covers: Number(r.covers) || 0 }))
+      .map((r) => ({
+        date: r.date,
+        covers: Number(r.covers) || 0,
+        b259: Number(r.buffet259) || 0,
+        b359: Number(r.buffet359) || 0,
+      }))
       .filter((r) => r.covers > 0)
       .sort((a, b) => a.date.localeCompare(b.date));
     const total = base.reduce((s, r) => s + r.covers, 0);
+    const total259 = base.reduce((s, r) => s + r.b259, 0);
+    const total359 = base.reduce((s, r) => s + r.b359, 0);
     const max = base.reduce((m, r) => Math.max(m, r.covers), 0);
     const avg = base.length ? total / base.length : 0;
     const rows = base.map((r) => ({
@@ -537,11 +544,16 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
       share: total ? (r.covers / total) * 100 : 0,      // % ของทั้งเดือน
       vsAvg: avg ? ((r.covers - avg) / avg) * 100 : 0,  // เทียบค่าเฉลี่ยต่อวัน
       bar: max ? (r.covers / max) * 100 : 0,
+      // สัดส่วน 2 ราคาภายในวันนั้น
+      p259: r.covers ? (r.b259 / r.covers) * 100 : 0,
+      p359: r.covers ? (r.b359 / r.covers) * 100 : 0,
       dow: new Date(`${r.date}T00:00:00`).getDay(),
     }));
     const best = rows.reduce((b, r) => (!b || r.covers > b.covers ? r : b), null);
     const worst = rows.reduce((b, r) => (!b || r.covers < b.covers ? r : b), null);
-    return { rows, total, avg, max, best, worst };
+    // สาขา 2 ราคา (Buffet 259 + Premium 359) เท่านั้นที่ต้องแยกคอลัมน์รายวัน
+    const twoPrice = total259 > 0 && total359 > 0;
+    return { rows, total, total259, total359, avg, max, best, worst, twoPrice };
   }, [daily]);
 
   if (!open) return null;
@@ -551,7 +563,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
           <div>
             <h3 className="text-base font-bold flex items-center gap-2"><Users className="w-4 h-4 text-sky-300" /> จำนวนลูกค้าทั้งหมด {intf(coverBase)} คน</h3>
@@ -619,7 +631,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
           ) : (
             <>
               {/* สรุปย่อ: เฉลี่ยต่อวัน / วันที่มากสุด / วันที่น้อยสุด */}
-              <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className={`grid gap-2 mb-3 ${st.twoPrice ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
                 <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
                   <p className="text-[11px] text-gray-500">เฉลี่ยต่อวัน</p>
                   <p className="text-sm font-bold text-gray-800 font-mono tabular-nums">{intf(Math.round(st.avg))} คน</p>
@@ -635,6 +647,15 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                   <p className="text-sm font-bold text-rose-700 font-mono tabular-nums">{intf(st.worst?.covers)} คน</p>
                   <p className="text-[11px] text-rose-500 font-mono">{st.worst?.date.slice(5)} • {pct1(st.worst?.share)}</p>
                 </div>
+                {st.twoPrice && (
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2">
+                    <p className="text-[11px] text-indigo-600">สัดส่วน 259 : 359</p>
+                    <p className="text-sm font-bold text-indigo-700 font-mono tabular-nums">
+                      {pct1(st.total ? (st.total259 / st.total) * 100 : 0)} : {pct1(st.total ? (st.total359 / st.total) * 100 : 0)}
+                    </p>
+                    <p className="text-[11px] text-indigo-500 font-mono">{intf(st.total259)} : {intf(st.total359)} คน</p>
+                  </div>
+                )}
               </div>
 
               <div className="overflow-auto max-h-[52vh] border border-gray-100 rounded-xl">
@@ -642,6 +663,8 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                   <thead>
                     <tr className="text-gray-600">
                       <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                      {st.twoPrice && <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-indigo-600">259</th>}
+                      {st.twoPrice && <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-violet-600">359</th>}
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ลูกค้า</th>
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-sky-600">% ของเดือน</th>
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">เทียบเฉลี่ย</th>
@@ -657,6 +680,18 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                             {r.date}
                             <span className={`ml-1.5 text-[11px] ${holiday ? 'text-amber-500' : 'text-gray-400'}`}>{WEEKDAY_TH[r.dow]}</span>
                           </td>
+                          {st.twoPrice && (
+                            <td className="px-3 py-2 text-right font-mono tabular-nums text-indigo-700 whitespace-nowrap">
+                              {intf(r.b259)}
+                              <span className="ml-1 text-[10px] text-indigo-300">{pct1(r.p259)}</span>
+                            </td>
+                          )}
+                          {st.twoPrice && (
+                            <td className="px-3 py-2 text-right font-mono tabular-nums text-violet-700 whitespace-nowrap">
+                              {intf(r.b359)}
+                              <span className="ml-1 text-[10px] text-violet-300">{pct1(r.p359)}</span>
+                            </td>
+                          )}
                           <td className="px-3 py-2 text-right font-mono tabular-nums">{intf(r.covers)}</td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-sky-700">{pct1(r.share)}</td>
                           <td className={`px-3 py-2 text-right font-mono tabular-nums ${r.vsAvg >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
@@ -674,6 +709,8 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                   <tfoot>
                     <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
                       <td className="px-3 py-2.5">รวม {intf(st.rows.length)} วัน</td>
+                      {st.twoPrice && <td className="px-3 py-2.5 text-right font-mono tabular-nums text-indigo-700">{intf(st.total259)}</td>}
+                      {st.twoPrice && <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700">{intf(st.total359)}</td>}
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums">{intf(st.total)}</td>
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums text-sky-700">100.0%</td>
                       <td colSpan={2} />
@@ -683,6 +720,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
               </div>
               <p className="mt-2 text-[11px] text-gray-400">
                 * % ของเดือน = จำนวนลูกค้าวันนั้น ÷ จำนวนลูกค้าทั้งช่วงที่เลือก • เทียบเฉลี่ย = สูง/ต่ำกว่าค่าเฉลี่ยต่อวันกี่ % (นับเฉพาะวันที่มีลูกค้า)
+                {st.twoPrice && ' • ตัวเลขจางข้าง 259/359 = สัดส่วนของราคานั้นในวันนั้น'}
               </p>
             </>
           )}
