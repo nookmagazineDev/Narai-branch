@@ -865,11 +865,18 @@ export default function DashboardHome() {
   }, [data, setTopStats]);
   // ออกจากหน้าแดชบอร์ด → คงค่าสถิติตามที่ผู้ใช้งานต้องการ (ไม่เคลียร์เป็น null)
 
-  // หน่วยแสดงผลการ์ด: บาท หรือ % ของยอดขาย (ยอดขาย = ฐาน 100%)
-  const [unit, setUnit] = useState('baht'); // 'baht' | 'pct'
+  // หน่วยแสดงผลการ์ด: บาท / % ของยอดขาย (ยอดขาย = ฐาน 100%) / ต่อหัว (หารด้วยจำนวนลูกค้า)
+  const [unit, setUnit] = useState('baht'); // 'baht' | 'pct' | 'head'
   const salesBase = Number(d.sales) || 0;
+  const coverBase = Number(d.covers) || 0;
   const pctf = (v) => (salesBase ? `${((Number(v || 0) / salesBase) * 100).toLocaleString('th-TH', { maximumFractionDigits: 2 })}%` : '—');
-  const disp = (v) => (unit === 'pct' ? pctf(v) : baht(v));
+  // ต่อหัว = ยอด ÷ จำนวนลูกค้าทั้งหมด (covers) — ไม่มีจำนวนหัวก็คิดไม่ได้
+  const headf = (v) => (coverBase ? baht(Number(v || 0) / coverBase) : '—');
+  const disp = (v) => (unit === 'pct' ? pctf(v) : unit === 'head' ? headf(v) : baht(v));
+  // โหมดบาทโชว์คำอธิบายเดิม, โหมด %/ต่อหัว โชว์ยอดเต็มเป็นบาทกำกับไว้แทน
+  // (โหมดต่อหัวตัดทศนิยมของยอดรวมทิ้ง บรรทัดล่างจะได้ไม่ยาวเกินช่องจนถูกตัดปลาย)
+  const subOf = (v, text) => (unit === 'baht' ? text : unit === 'head' ? `ต่อหัว • ฿${Math.round(Number(v) || 0).toLocaleString('th-TH')}` : baht(v));
+  const coversPerBill = Number(d.bills) > 0 ? coverBase / Number(d.bills) : 0;
 
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
   // จำนวนวันในช่วงที่เลือก — ปุ่มดึงข้อมูลจาก POS ใหม่ทำได้ครั้งละไม่เกิน 31 วัน (ตามลิมิตของ office-server)
@@ -1002,9 +1009,14 @@ export default function DashboardHome() {
       {/* สรุปกำไร/ขาดทุน (รายรับ–รายจ่าย) — ต้นทุนจากใบเบิก */}
       <ProfitSummary branch={branch} outletId={outletId} startDate={startDate} endDate={endDate} dash={d} />
 
-      {/* สลับหน่วยแสดงผลการ์ด: บาท / % ของยอดขาย */}
-      <div className="flex items-center justify-end gap-2">
-        <span className="text-xs text-gray-400">แสดงผลเป็น</span>
+      {/* สลับหน่วยแสดงผลการ์ด: บาท / % ของยอดขาย / ต่อหัวลูกค้า */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="text-xs text-gray-400">
+          แสดงผลเป็น
+          {unit === 'head' && (
+            <span className="ml-1 text-sky-600 font-medium">(ฐาน {intf(coverBase)} หัวลูกค้า)</span>
+          )}
+        </span>
         <div className="inline-flex rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
           <button
             onClick={() => setUnit('baht')}
@@ -1018,32 +1030,40 @@ export default function DashboardHome() {
           >
             % ของยอดขาย
           </button>
+          <button
+            onClick={() => setUnit('head')}
+            className={`px-4 py-1.5 text-sm font-medium transition-colors ${unit === 'head' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+            title="เฉลี่ยต่อหัวลูกค้า = ยอด ÷ จำนวนลูกค้าทั้งหมด"
+          >
+            ต่อหัว (฿/คน)
+          </button>
         </div>
       </div>
 
       {/* การ์ดสรุป */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="ยอดขายรวมทั้งหมด" value={unit === 'pct' ? '100%' : baht(d.sales)}
-          sub={unit === 'pct' ? baht(d.sales) : 'ก่อน VAT (Bill − VAT)'}
+          title="ยอดขายรวมทั้งหมด"
+          value={unit === 'pct' ? '100%' : unit === 'head' ? headf(d.sales) : baht(d.sales)}
+          sub={subOf(d.sales, 'ก่อน VAT (Bill − VAT)')}
           icon={DollarSign} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
           onClick={data ? () => setDrill(METRICS.sales) : undefined}
         />
         <StatCard
           title="ต้นทุนรวมทั้งหมด" value={disp(d.cost)}
-          sub={unit === 'pct' ? baht(d.cost) : 'ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)'}
+          sub={subOf(d.cost, 'ต้นทุนวัตถุดิบ (ไม่รวมโต๊ะเตรียม)')}
           icon={Layers} accent={{ text: 'text-rose-500', bg: 'bg-rose-50', icon: 'text-rose-500' }}
           onClick={data ? () => setDrill(METRICS.cost) : undefined}
         />
         <StatCard
           title="ต้นทุนโต๊ะเตรียม(กก)" value={disp(d.prepCost)}
-          sub={unit === 'pct' ? baht(d.prepCost) : `${intf(d.prepQty)} กก • วัตถุดิบเตรียม`}
+          sub={subOf(d.prepCost, `${intf(d.prepQty)} กก • วัตถุดิบเตรียม`)}
           icon={Scale} accent={{ text: 'text-orange-500', bg: 'bg-orange-50', icon: 'text-orange-500' }}
           onClick={data ? () => setDrill(METRICS.prep) : undefined}
         />
         <StatCard
           title="กำไร / ขาดทุนสุทธิ" value={disp(d.profit)}
-          sub={unit === 'pct' ? baht(d.profit) : 'ยอดขาย − ต้นทุนรวม'}
+          sub={subOf(d.profit, 'ยอดขาย − ต้นทุนรวม')}
           icon={TrendingUp}
           accent={profitPositive
             ? { text: 'text-indigo-600', bg: 'bg-indigo-50', icon: 'text-indigo-600' }
@@ -1051,24 +1071,32 @@ export default function DashboardHome() {
         />
         <StatCard
           title="จำนวนบิลทั้งหมด" value={intf(d.bills)}
-          sub={`${intf(d.covers)} หัวลูกค้า • มีสมาชิก ${intf(d.memberBills)} บิล`}
+          sub={unit === 'head'
+            ? `เฉลี่ย ${coversPerBill.toLocaleString('th-TH', { maximumFractionDigits: 2 })} คน/บิล`
+            : `${intf(d.covers)} หัวลูกค้า • มีสมาชิก ${intf(d.memberBills)} บิล`}
           icon={FileText} accent={{ text: 'text-amber-600', bg: 'bg-amber-50', icon: 'text-amber-600' }}
           onClick={data ? () => setDrill(METRICS.bills) : undefined}
         />
         <StatCard
-          title="ยอดเฉลี่ยต่อบิล" value={baht(d.avgPerBill)} sub="เฉลี่ยต่อบิล (รวม VAT)"
+          title={unit === 'head' ? 'ยอดเฉลี่ยต่อหัว' : 'ยอดเฉลี่ยต่อบิล'}
+          value={unit === 'head' ? headf(d.gross ?? d.sales) : baht(d.avgPerBill)}
+          sub={unit === 'head'
+            ? `ต่อบิล ฿${Math.round(Number(d.avgPerBill) || 0).toLocaleString('th-TH')}`
+            : 'เฉลี่ยต่อบิล (รวม VAT)'}
           icon={TrendingUp} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
         />
         <StatCard
           title="จำนวนลูกค้าทั้งหมด"
           // โหมด % : จำนวนลูกค้าทั้งช่วงคือฐาน 100% ของ "% เปรียบเทียบรายวัน" ในหน้ารายละเอียด
-          value={unit === 'pct' ? (Number(d.covers) > 0 ? '100%' : '—') : intf(d.covers)}
+          value={unit === 'pct' && Number(d.covers) > 0 ? '100%' : intf(d.covers)}
           sub={(() => {
             // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359 พร้อมกัน) แยกให้เห็นตรงนี้เลย ไม่ต้องคลิกเข้าไปดู
             const bd = d.coversBreakdown || [];
             const cov = Number(d.covers) || 0;
             const q259 = bd.find(g => g.key === 'buffet259')?.qty || 0;
             const q359 = bd.find(g => g.key === 'buffet359')?.qty || 0;
+            // โหมดต่อหัวใช้จำนวนลูกค้าเป็นตัวหาร จึงบอกว่าเป็นฐาน แทนการแยก 259/359 (ยาวเกินช่อง)
+            if (unit === 'head') return 'ฐานคิดต่อหัว (Covers)';
             const head = unit === 'pct' ? `${intf(cov)} คน` : 'คน (Covers)';
             if (!(q259 > 0 && q359 > 0)) return head;
             const p = (q) => (cov ? ` (${pct1((q / cov) * 100)})` : '');
@@ -1079,7 +1107,7 @@ export default function DashboardHome() {
         />
         <StatCard
           title="รายการไม่นับคำนวณ" value={disp(d.excludedCost)}
-          sub={unit === 'pct' ? baht(d.excludedCost) : `${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`}
+          sub={subOf(d.excludedCost, `${intf(d.excludedQty)} ชิ้น • ไม่นำมาคิดต้นทุน`)}
           icon={Ban} accent={{ text: 'text-gray-500', bg: 'bg-gray-100', icon: 'text-gray-500' }}
           onClick={data ? () => setDrill(METRICS.excluded) : undefined}
         />
