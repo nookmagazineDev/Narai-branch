@@ -9,8 +9,24 @@ export default async function handler(req, res) {
   if (applyCors(req, res)) return;
 
   const { branch, startDate, endDate, outletId } = req.query;
-  // โหมดสแกนเข้า-ออกใช้สาขาอย่างเดียว ไม่มี outletId
-  const needsOutlet = !req.query.attendance;
+  // โหมดสแกนเข้า-ออกใช้สาขาอย่างเดียว ไม่มี outletId | โหมดรีเฟรชแคชใช้แค่วันที่ (ล้างทั้งเครื่อง ไม่แยกสาขา)
+  const needsOutlet = !req.query.attendance && !req.query.refresh;
+  if (req.query.refresh) {
+    // dates=YYYY-MM-DD,... = เจาะเฉพาะวันที่ยอดไม่ขึ้น | ไม่ส่งมาก็ดึงใหม่ทั้งช่วง start-end
+    const dates = String(req.query.dates || '').trim();
+    if (!dates && (!startDate || !endDate)) return res.status(400).json({ status: 'error', message: 'ระบุวันที่ที่จะดึงใหม่ไม่ครบถ้วน' });
+    try {
+      const p = new URLSearchParams(dates ? { dates } : { start: startDate, end: endDate });
+      const r = await fetchUpstream(`${USAGE_API_BASE}/refresh?${p.toString()}`, HEAVY_UPSTREAM_OPTS);
+      const payload = await r.json().catch(() => null);
+      if (!r.ok || !payload || payload.status !== 'success') {
+        return res.status(502).json({ status: 'error', message: (payload && payload.message) || `Office API Error: ${r.status}` });
+      }
+      return res.status(200).json(payload);
+    } catch (error) {
+      return replyUpstreamError(res, error, 'dashboard');
+    }
+  }
   if ((needsOutlet && !branch && !outletId) || (!needsOutlet && !branch) || !startDate || !endDate) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา/รหัสสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
   }
@@ -24,6 +40,7 @@ export default async function handler(req, res) {
     // รวมหลายโหมดไว้ใน endpoint เดียวเพราะ Vercel จำกัด 12 functions และตอนนี้เต็มแล้ว
     //   ?itemsales=1  — ยอดขายรายเมนู รวม+รายวัน (หน้าค้นหารายการขาย)
     //   ?attendance=1 — ประวัติสแกนเข้า-ออกจาก ZKBio9 (หน้าสแกนเข้า-ออก)
+    //   ?refresh=1    — ล้างแคชรายวันของ office-server แล้วดึงจาก POS ใหม่ (จัดการไว้ด้านบน)
     const path = req.query.attendance ? 'attendance' : (req.query.itemsales ? 'itemsales' : 'dashboard');
     // โหมด dashboard/itemsales คำนวณข้ามหลายวันบน office-server ต้องให้เวลายาว (ดู HEAVY_UPSTREAM_OPTS)
     // ส่วน attendance เป็น query ตรงเข้าฐานข้อมูลในเครื่อง ตอบไวอยู่แล้ว ไม่ต้องรอนาน

@@ -141,6 +141,18 @@ export async function fetchDashboard({ branch, outletId, startDate, endDate, sig
   // { status, branch, outletId, data:{...} }
 }
 
+// สั่ง office-server ล้างแคชรายวันในช่วงที่เลือกแล้วดึงจาก POS ใหม่
+// ใช้ตอนยอดขายบางวันไม่เข้า (POS sync ช้าตอนที่แคชวันนั้นไว้) — ปกติระบบจะดึงซ้ำเองอยู่แล้ว
+// อันนี้ไว้เร่งให้ข้อมูลกลับมาทันที ไม่ต้องรอรอบรีเฟรช
+// ส่ง dates = เจาะเฉพาะวันที่ยอดไม่ขึ้น (เร็วกว่า) | ไม่ส่ง = ดึงใหม่ทั้งช่วง startDate-endDate
+export async function refreshDashboardCache({ dates, startDate, endDate, signal }) {
+  const params = new URLSearchParams({ refresh: '1' });
+  if (dates && dates.length) params.set('dates', dates.join(','));
+  else { params.set('startDate', startDate); params.set('endDate', endDate); }
+  return getJson(`/api/dashboard?${params.toString()}`, { signal, label: 'ดึงข้อมูลจาก POS ใหม่', ...HEAVY_OPTS });
+  // { status, data:[{date, ok, complete, bills, sales}] }
+}
+
 // ดึงยอดขายรายเมนู รวม+รายวัน (หน้า "ค้นหารายการขาย") — โหมด itemsales=1 ของ /api/dashboard
 export async function fetchItemSales({ branch, outletId, startDate, endDate, signal }) {
   const params = new URLSearchParams({ startDate, endDate, itemsales: '1' });

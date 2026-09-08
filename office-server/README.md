@@ -15,7 +15,8 @@
 | `/usagebymenu`, `/usagebytable`, `/itemsales`, `/bills`, `/billdetail`, `/dashboard` | ยอดขาย/ยอดใช้วัตถุดิบ (คำนวณจาก POS + ชีทสูตร) |
 | `/attendance` | ประวัติสแกนเข้า-ออกจาก ZKBio9 (SQL Server เครื่องเดียวกัน) |
 | `POST /schedule` | **ตารางงาน** — ลงตารางสัปดาห์ / ประวัติ / อนุมัติ OT (ฐานข้อมูล `narai_hr` เครื่องเดียวกัน ดู `schedule.js`) |
-| `/health` | เช็คว่าบริการยังอยู่ |
+| `/health` | เช็คว่าบริการยังอยู่ + วันที่ข้อมูลยังไม่ครบ (`incomplete_days`) |
+| `/refresh` | ล้าง cache รายวันแล้วดึงจาก POS ใหม่ (ใช้ตอนยอดขายบางวันไม่ขึ้น) |
 
 `/schedule` ย้ายมาอยู่ที่นี่เพราะไฟร์วอลล์เปิดพอร์ต 1433 ให้เฉพาะ IP ในไทย ฟังก์ชันบน Vercel
 วิ่งมาจากต่างประเทศจึงต่อ SQL Server ตรงไม่ได้ — กดบันทึกตารางแล้วขึ้น error มาตลอด
@@ -105,6 +106,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
 - `API_TOKEN` (ถ้าตั้ง ต้องส่ง header x-api-token ให้ตรง — ปัจจุบันเว้นว่าง)
 - `WARM_DAYS` (จำนวนวันที่อุ่น cache, ค่าเริ่มต้น 70)
 - `SALES_BASE` (URL ของ ctranbetweendate)
+- `POS_TIMEOUT_MS` / `POS_RETRIES` (timeout+จำนวนครั้งที่ลองใหม่ตอนเรียก POS API, ค่าเริ่มต้น 60000 / 2)
 - `UPNP=off` ถ้าจะปิด UPnP (กรณี forward พอร์ตเองที่ router)
 - `SHEET_LOGIN_URL=off` ปิดการถามชีท User ตอนล็อกอิน (ตั้งเมื่อผู้ใช้ย้ายเข้า `hr_user` ครบแล้ว)
 
@@ -123,6 +125,14 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
     - **กำไร** = ยอดขาย(ก่อน VAT) − ต้นทุนรวม
   - กติกา exclude/prep/cover ตั้งเป็นค่าคงที่ในไฟล์ (`DASH_EXCLUDE_*`, `DASH_PREP_KG_ITEMS`, `DASH_COVER_ITEMS`) — ตรงกับ NARAI OFFICE
   - ต้องเข้าถึง `cpaidbetweendate` ได้ (ตั้ง env `PAID_BASE` ทับได้ ค่าเริ่มต้น = `SALES_BASE` แทน `ctranbetweendate`→`cpaidbetweendate`)
+
+- `GET /refresh?date=YYYY-MM-DD` (หรือ `?dates=วัน1,วัน2` / `?start&end`) — **ดึงข้อมูลวันนั้นจาก POS ใหม่**
+  - คืน `{ status, data:[{ date, ok, complete, bills, sales }] }` — ครั้งละไม่เกิน 31 วัน
+  - ใช้ตอน "ยอดขายวันนั้นไม่เข้า": เกิดจากตอนที่ cache วันนั้นไว้ POS ยัง sync บิลที่จ่ายแล้วไม่เสร็จ
+    ยอดขายเลยเป็น 0 (ต้นทุน/จำนวนขายยังขึ้นปกติเพราะมาจาก `ctranbetweendate` คนละเส้น)
+  - ปกติไม่ต้องเรียกเองก็ได้ — วันที่ข้อมูลไม่ครบจะถูกมาร์ค `complete=false` แล้วดึงซ้ำเองทุก 20 นาที
+    (เดิมวันเก่ากว่า `RECENT_REFRESH_DAYS` ถูก cache ถาวร ยอด 0 จึงค้างจนกว่าจะรีสตาร์ทเซิร์ฟเวอร์)
+  - หน้าแดชบอร์ดมีปุ่มเรียกให้แล้ว (ไอคอนถัดจากปุ่มโหลดใหม่) — กดแล้วจะดึงเฉพาะวันที่ยอดยังเป็น 0
 
 - `GET /attendance?branch&start&end[&emp]` — **ประวัติสแกนเข้า-ออก** (จาก ZKBio9 บน SQL Server เครื่องเดียวกัน)
   - คืน `{ status, branch, count, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }`

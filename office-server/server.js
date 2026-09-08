@@ -18,6 +18,11 @@ const WARM_DAYS = Number(process.env.WARM_DAYS) || 70; // อุ่น cache ย
 const TODAY_TTL_MS = 20 * 60 * 1000; // ข้อมูลวันล่าสุดรีเฟรชทุก 20 นาที
 // รีเฟรช cache "วันนี้ + ย้อนหลังกี่วัน" ตาม TTL — กันข้อมูลค้างกรณี POS sync ช้า (วันเก่ากว่านี้ cache ถาวร)
 const RECENT_REFRESH_DAYS = Number(process.env.RECENT_REFRESH_DAYS) || 3;
+// เรียก POS API (ctranbetweendate/cpaidbetweendate) — ต้องมี timeout + ลองใหม่
+// ถ้าปล่อยพลาดเงียบๆ วันนั้นจะถูกแคชแบบยอดขาย 0 ทั้งที่ขายจริง
+const POS_TIMEOUT_MS = Number(process.env.POS_TIMEOUT_MS) || 60000;
+const POS_RETRIES = Number(process.env.POS_RETRIES) || 2;
+const POS_RETRY_DELAY_MS = 1500;
 
 const branchMap = {
   sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61, smp: 63,
@@ -134,12 +139,36 @@ async function loadSheets() {
 const salesCache = new Map();   // date -> { fetchedAt, outlets, dashItems, dashBill }
 const inflight = new Map();     // date -> Promise (กันยิงซ้ำพร้อมกัน)
 
+// ดึง JSON จาก POS API พร้อม timeout + ลองใหม่ — เดิมเรียก fetch() เปล่าๆ ถ้าพลาดชั่วคราวจะได้ข้อมูลไม่ครบ
+// แล้วถูกเก็บลง cache ทับของจริง (ดู getDay: วันเก่ากว่า RECENT_REFRESH_DAYS ถูกแคชถาวร)
+async function fetchPosRows(url, label) {
+  let lastError;
+  for (let attempt = 0; attempt <= POS_RETRIES; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, POS_RETRY_DELAY_MS * attempt));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), POS_TIMEOUT_MS);
+    try {
+      const r = await fetch(url, { signal: controller.signal });
+      if (!r.ok) { lastError = new Error(label + ' HTTP ' + r.status); continue; }
+      const json = await r.json();
+      return (json && json.data) || [];
+    } catch (e) {
+      lastError = new Error(label + ': ' + (e.name === 'AbortError' ? 'timeout' : e.message));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
+}
+
 async function fetchDay(date) {
   const q = `?start=${encodeURIComponent(date)}&end=${encodeURIComponent(date)}`;
-  const [rTran, rPaid] = await Promise.all([fetch(`${SALES_BASE}${q}`), fetch(`${PAID_BASE}${q}`)]);
-  if (!rTran.ok) throw new Error('sales API ' + rTran.status);
-  const tranRows = ((await rTran.json()) || {}).data || [];
-  const paidRows = rPaid.ok ? (((await rPaid.json()) || {}).data || []) : [];
+  // ทั้งสองเส้นต้องสำเร็จ ถ้าเส้นใดพลาดให้โยน error ไปเลย อย่าคืนวันที่ข้อมูลไม่ครบมาให้แคช
+  // (เดิม cpaidbetweendate พลาดแล้วปล่อยผ่านเป็น [] -> วันนั้นยอดขาย/จำนวนบิลกลายเป็น 0 ทั้งที่ขายจริง)
+  const [tranRows, paidRows] = await Promise.all([
+    fetchPosRows(`${SALES_BASE}${q}`, 'ctranbetweendate ' + date),
+    fetchPosRows(`${PAID_BASE}${q}`, 'cpaidbetweendate ' + date),
+  ]);
 
   const outlets = new Map();    // usage (สำหรับ usagebymenu): oid -> { itemCode -> {total, tbl} } (ตัดโต๊ะ 600 + EXCLUDE_ITEMCODES)
   const dashItems = new Map();  // แดชบอร์ด: oid -> { itemCode -> {name, qty} } (ไม่ void, ไม่ใช่โต๊ะ 600) — แยกหมวดต้นทุน/นับคนตอน query
@@ -221,7 +250,10 @@ async function fetchDay(date) {
     });
   }
 
-  return { outlets, dashItems, dashExclTbl, dashBill, billRows };
+  // มีรายการขายแต่ไม่มีบิลที่จ่ายแล้วเลย = POS ยัง sync ไม่ครบ (ยอดขายจะเป็น 0 ทั้งที่ขายจริง)
+  // ทำเครื่องหมายไว้ให้ getDay ไม่แคชถาวร จะได้ดึงใหม่จนกว่าข้อมูลจะครบ
+  const complete = paidRows.length > 0 || tranRows.length === 0;
+  return { outlets, dashItems, dashExclTbl, dashBill, billRows, complete };
 }
 
 // จำนวนวันที่ date ห่างจากวันนี้ (UTC): 0 = วันนี้, ค่าลบ = อนาคต, บวก = อดีต
@@ -231,15 +263,18 @@ function daysAgo(date) {
   return Math.round((b - a) / 86400000);
 }
 
-async function getDay(date) {
+async function getDay(date, { force = false } = {}) {
   const cached = salesCache.get(date);
   // วันนี้ + ย้อนหลังไม่เกิน RECENT_REFRESH_DAYS วัน → เช็ครีเฟรชตาม TTL (กันข้อมูลค้างตอน POS ยัง sync ไม่ครบ)
+  // วันที่ดึงมาแล้วข้อมูลไม่ครบ (complete = false) ก็ต้องเช็คใหม่ตาม TTL ด้วย ไม่ว่าจะเก่าแค่ไหน
+  // ไม่งั้นวันที่ POS sync ช้าจะค้างเป็น 0 ถาวรจนกว่าจะรีสตาร์ทเซิร์ฟเวอร์
   const isRecent = daysAgo(date) <= RECENT_REFRESH_DAYS;
-  if (cached && !(isRecent && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
+  const recheck = isRecent || !cached?.complete;
+  if (!force && cached && !(recheck && Date.now() - cached.fetchedAt > TODAY_TTL_MS)) return cached;
   if (inflight.has(date)) return inflight.get(date);
   const p = (async () => {
-    const { outlets, dashItems, dashExclTbl, dashBill, billRows } = await fetchDay(date);
-    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashExclTbl, dashBill, billRows };
+    const { outlets, dashItems, dashExclTbl, dashBill, billRows, complete } = await fetchDay(date);
+    const entry = { fetchedAt: Date.now(), outlets, dashItems, dashExclTbl, dashBill, billRows, complete };
     salesCache.set(date, entry);
     inflight.delete(date);
     return entry;
@@ -353,7 +388,52 @@ app.use((req, res, next) => {
 // เส้นทางอื่นทั้งหมดเป็น GET ไม่มี body จึงเพิ่ง express.json() เข้ามาเพื่อเส้นทางนี้เส้นเดียว
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/health', (req, res) => res.json({ ok: true, days_cached: salesCache.size, recipes: Object.keys(recipe).length }));
+app.get('/health', (req, res) => res.json({
+  ok: true,
+  days_cached: salesCache.size,
+  recipes: Object.keys(recipe).length,
+  // วันที่ข้อมูลยังไม่ครบ (มีรายการขายแต่ยังไม่มีบิลที่จ่ายแล้ว) — ยอดขายวันนั้นจะขึ้นเป็น 0 จนกว่า POS จะ sync
+  incomplete_days: [...salesCache.entries()].filter(([, v]) => !v.complete).map(([d]) => d).sort(),
+}));
+
+// ล้างแคชรายวันแล้วดึงจาก POS ใหม่ — ใช้ตอน "ยอดขายวันนั้นไม่เข้า" โดยไม่ต้องรีสตาร์ทเซิร์ฟเวอร์
+//   GET /refresh?date=2026-09-02              (วันเดียว)
+//   GET /refresh?dates=2026-09-02,2026-09-05  (เจาะเฉพาะวันที่ยอดไม่ขึ้น — เร็วกว่าดึงทั้งช่วง)
+//   GET /refresh?start=...&end=...            (ช่วงวัน)
+// จำกัด 31 วันต่อครั้ง เพราะฝั่ง Vercel รอได้ ~60 วิ (ดู lib/upstream.js)
+app.get('/refresh', async (req, res) => {
+  try {
+    const date = String(req.query.date || '');
+    const listed = String(req.query.dates || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const start = String(req.query.start || date), end = String(req.query.end || date);
+    const days = listed.length ? listed : ((start && end) ? dateRange(start, end) : []);
+    if (!days.length) return res.status(400).json({ status: 'error', message: 'missing date/dates (หรือ start/end)' });
+    if (days.length > 31) return res.status(400).json({ status: 'error', message: 'ดึงใหม่ได้ครั้งละไม่เกิน 31 วัน' });
+    if (days.some((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d))) return res.status(400).json({ status: 'error', message: 'รูปแบบวันที่ต้องเป็น YYYY-MM-DD' });
+
+    const summarize = (d, entry) => {
+      let bills = 0, sales = 0;
+      for (const b of entry.dashBill.values()) { bills += b.count; sales += b.sumBill - b.sumVat; }
+      return { date: d, ok: true, complete: entry.complete, bills, sales: r2(sales) };
+    };
+    // ดึงพร้อมกันทีละชุด (เท่ากับที่ใช้ตอนคำนวณแดชบอร์ด) — 31 วันเรียงทีละวันจะไม่ทันเพดานเวลาของ Vercel
+    const CONC = 6;
+    const data = [];
+    for (let i = 0; i < days.length; i += CONC) {
+      const slice = days.slice(i, i + CONC);
+      const out = await Promise.all(slice.map(async (d) => {
+        salesCache.delete(d);
+        try { return summarize(d, await getDay(d, { force: true })); }
+        catch (e) { return { date: d, ok: false, message: e.message }; }
+      }));
+      data.push(...out);
+    }
+    res.json({ status: 'success', data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ status: 'error', message: e.message });
+  }
+});
 
 // ฐานข้อมูล HR อยู่บนเครื่องนี้ ต่อผ่าน localhost จึงไม่ติดไฟร์วอลล์ที่บล็อกพอร์ต 1433 จากต่างประเทศ
 // (Vercel ต่อตรงไม่ได้ จึงให้ /api/schedule ส่งต่อมาที่นี่แทน)
