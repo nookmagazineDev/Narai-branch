@@ -519,7 +519,7 @@ const FREE_COVER_KEYS = ['kidFree', 'elderFree'];
 const pct1 = (v) => `${Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 const signPct1 = (v) => `${v > 0 ? '+' : ''}${pct1(v)}`;
 
-function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
+function CoversModal({ open, onClose, covers, breakdown, daily, rangeText, premiumLabel }) {
   // mount ใหม่ทุกครั้งที่เปิด (parent render เฉพาะตอนเปิด) — แท็บจึงกลับมาเริ่มที่ "แยกประเภท" เสมอ
   const [tab, setTab] = useState('type'); // 'type' = แยกประเภท | 'daily' = % รายวัน
 
@@ -649,7 +649,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                 </div>
                 {st.twoPrice && (
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2">
-                    <p className="text-[11px] text-indigo-600">สัดส่วน 259 : 359</p>
+                    <p className="text-[11px] text-indigo-600">สัดส่วน 259 : {premiumLabel}</p>
                     <p className="text-sm font-bold text-indigo-700 font-mono tabular-nums">
                       {pct1(st.total ? (st.total259 / st.total) * 100 : 0)} : {pct1(st.total ? (st.total359 / st.total) * 100 : 0)}
                     </p>
@@ -664,7 +664,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
                     <tr className="text-gray-600">
                       <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
                       {st.twoPrice && <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-indigo-600">259</th>}
-                      {st.twoPrice && <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-violet-600">359</th>}
+                      {st.twoPrice && <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-violet-600">{premiumLabel}</th>}
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ลูกค้า</th>
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-sky-600">% ของเดือน</th>
                       <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">เทียบเฉลี่ย</th>
@@ -720,7 +720,8 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
               </div>
               <p className="mt-2 text-[11px] text-gray-400">
                 * % ของเดือน = จำนวนลูกค้าวันนั้น ÷ จำนวนลูกค้าทั้งช่วงที่เลือก • เทียบเฉลี่ย = สูง/ต่ำกว่าค่าเฉลี่ยต่อวันกี่ % (นับเฉพาะวันที่มีลูกค้า)
-                {st.twoPrice && ' • ตัวเลขจางข้าง 259/359 = สัดส่วนของราคานั้นในวันนั้น'}
+                {st.twoPrice && ` • ตัวเลขจางข้าง 259/${premiumLabel} = สัดส่วนของราคานั้นในวันนั้น`}
+                {st.twoPrice && premiumLabel === 'UP 100' && ' • UP 100 = หัว 259 ที่อัพเกรดเป็น 359 (ไม่ได้บวกเพิ่มในจำนวนหัวรวม)'}
               </p>
             </>
           )}
@@ -915,6 +916,8 @@ export default function DashboardHome() {
   // (โหมดต่อหัวตัดทศนิยมของยอดรวมทิ้ง บรรทัดล่างจะได้ไม่ยาวเกินช่องจนถูกตัดปลาย)
   const subOf = (v, text) => (unit === 'baht' ? text : unit === 'head' ? `ต่อหัว • ฿${Math.round(Number(v) || 0).toLocaleString('th-TH')}` : baht(v));
   const coversPerBill = Number(d.bills) > 0 ? coverBase / Number(d.bills) : 0;
+  // สาขาที่ขาย UP 100 (อัพเกรด 259 → 359) เรียกกลุ่มราคาสูงว่า "UP 100" แทน "359"
+  const premiumLabel = (Number(d.up100) || 0) > 0 ? 'UP 100' : '359';
 
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
   // จำนวนวันในช่วงที่เลือก — ปุ่มดึงข้อมูลจาก POS ใหม่ทำได้ครั้งละไม่เกิน 31 วัน (ตามลิมิตของ office-server)
@@ -1137,8 +1140,13 @@ export default function DashboardHome() {
             if (unit === 'head') return 'ฐานคิดต่อหัว (Covers)';
             const head = unit === 'pct' ? `${intf(cov)} คน` : 'คน (Covers)';
             if (!(q259 > 0 && q359 > 0)) return head;
-            const p = (q) => (cov ? ` (${pct1((q / cov) * 100)})` : '');
-            return `259: ${intf(q259)}${p(q259)} • 359: ${intf(q359)}${p(q359)}`;
+            // ช่องบนการ์ดแคบ — ปล่อยให้ตกบรรทัดได้ (ทับ .truncate ของการ์ด) จะได้เห็นครบทั้งจำนวนคนและ %
+            const p = (q) => (cov ? ` (${Math.round((q / cov) * 100)}%)` : '');
+            return (
+              <span className="block whitespace-normal">
+                259: {intf(q259)}{p(q259)} • {premiumLabel}: {intf(q359)}{p(q359)}
+              </span>
+            );
           })()}
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
           onClick={data ? () => setShowCovers(true) : undefined}
@@ -1170,7 +1178,8 @@ export default function DashboardHome() {
       {showCovers && (
         <CoversModal
           open onClose={() => setShowCovers(false)}
-          covers={d.covers} breakdown={d.coversBreakdown} daily={d.daily} rangeText={rangeText}
+          covers={d.covers} breakdown={d.coversBreakdown} daily={d.daily}
+          rangeText={rangeText} premiumLabel={premiumLabel}
         />
       )}
 

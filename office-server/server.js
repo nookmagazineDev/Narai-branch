@@ -54,7 +54,11 @@ const DASH_EXCLUDE_TABLES = [600];                 // โต๊ะที่ต�
 const DASH_EXCLUDE_ITEMS = [206001];               // itemCode เดี่ยวที่ตัดออก (ไปการ์ด "ไม่นับคำนวณ")
 const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode ที่ตัดออก
 // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน" = Buffet259(101107,101001) + Premium359(101002) + Kid159(101004,101104) + Kid109(101108) เท่านั้น
+// UP 100 (101116) ไม่อยู่ในลิสต์นี้ — เป็นค่าอัพเกรดที่ขายคู่กับหัว 259 ไม่ใช่หัวใหม่ ถ้านับด้วยจะได้จำนวนหัวเกินจริง
 const DASH_COVER_ITEMS = [101001, 101002, 101004, 101104, 101107, 101108];
+// สาขาที่ขาย "UP 100" (อัพเกรด 259 → 359) แทนการขายหัว Premium 359 ตรงๆ
+// หัวที่ซื้ออัพเกรดถูกนับเป็นหัว 259 ไปแล้ว จึงย้ายจากกลุ่ม 259 มาอยู่กลุ่มราคาสูง (ไม่บวกเพิ่มในจำนวนหัวรวม)
+const DASH_UP100_ITEM = 101116;
 // กลุ่มไอเทมนับจำนวน (แสดงบนแถบหัวเว็บ): น้ำซุป+อื่นๆ / เพิ่มกุ้งแก้ว 29+ (แยกต่างหาก) / ขนมหวาน
 const DASH_SOUP_ITEMS = [101008, 101009];
 const DASH_SHRIMP_ITEMS = [101114]; // เพิ่มกุ้งแก้ว 29+ — แยกออกจากน้ำซุป+อื่นๆ
@@ -65,7 +69,7 @@ const dashDessertItem = (c) => DASH_DESSERT_ITEMS.indexOf(parseInt(c)) >= 0;
 // แยกประเภทลูกค้า (โลจิกเดียวกับ naraipizzeria หัวข้อยอดรายวัน) — เด็กฟรี/ผู้สูงอายุฟรี ไม่นับรวมใน covers
 const DASH_COVER_GROUPS = [
   { key: 'buffet259', label: 'จำนวน Buffet 259', codes: [101107, 101001] },
-  { key: 'buffet359', label: 'จำนวน Premium 359', codes: [101002] },
+  { key: 'buffet359', label: 'จำนวน Premium 359', codes: [101002, DASH_UP100_ITEM] }, // 101116 = UP 100 (อัพเกรดจาก 259)
   { key: 'kid159', label: 'จำนวน Kid Premium 159', codes: [101004, 101104] },
   { key: 'kid109', label: 'จำนวน Kid Buffet 109', codes: [101108] },
   { key: 'kidFree', label: 'จำนวนเด็กฟรี (101005)', codes: [101005] },
@@ -499,7 +503,7 @@ async function computeDashboard(outletNum, start, end) {
 
       // รวมรายการ (detail) ของสาขานี้ + คิดต้นทุน/นับคนแยกรายวัน (สำหรับ drill-down รายวัน)
       // แยกจำนวนหัว Buffet259/Premium359 รายวันด้วย — ใช้กับสาขาที่มี 2 ราคา (หน้าคาดการณ์หัวลูกค้า)
-      let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0, dBuffet259 = 0, dBuffet359 = 0;
+      let dCost = 0, dPrep = 0, dPrepQty = 0, dExcl = 0, dExclQty = 0, dCovers = 0, dBuffet259 = 0, dBuffet359 = 0, dUp100 = 0;
       const di = entry.dashItems.get(outletNum);
       if (di) for (const [ic, v] of Object.entries(di)) {
         const a = itemsAgg[ic] || (itemsAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
@@ -507,11 +511,14 @@ async function computeDashboard(outletNum, start, end) {
         const icn = parseInt(ic);
         if (DASH_COVER_GROUPS[0].codes.indexOf(icn) >= 0) dBuffet259 += v.qty;
         else if (DASH_COVER_GROUPS[1].codes.indexOf(icn) >= 0) dBuffet359 += v.qty;
+        if (icn === DASH_UP100_ITEM) dUp100 += v.qty;
         const tc = (menuCost[ic] ?? 0) * v.qty;
         if (dashExclItem(ic)) { dExcl += tc; dExclQty += v.qty; }
         else if (dashPrepKg(ic)) { dPrep += tc; dPrepQty += v.qty; }
         else dCost += tc;
       }
+      // หัวที่ซื้อ UP 100 ถูกนับเป็นหัว 259 ไปแล้ว — ย้ายมาฝั่งราคาสูง จำนวนหัวรวมของวันจึงเท่าเดิม
+      if (dUp100 > 0) dBuffet259 = Math.max(0, dBuffet259 - dUp100);
       const de = entry.dashExclTbl.get(outletNum);
       if (de) for (const [ic, v] of Object.entries(de)) {
         const a = exclTblAgg[ic] || (exclTblAgg[ic] = { name: v.name, qty: 0 }); a.qty += v.qty;
@@ -532,12 +539,13 @@ async function computeDashboard(outletNum, start, end) {
         covers: r2(dCovers),
         buffet259: r2(dBuffet259),
         buffet359: r2(dBuffet359),
+        up100: r2(dUp100),
       });
     }
   }
 
   // แยกหมวดต้นทุน + สร้าง breakdown รายไอเทม (สำหรับ modal "คลิกดูรายละเอียด")
-  let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0;
+  let totalCost = 0, prepCost = 0, prepQty = 0, excludedCost = 0, excludedQty = 0, covers = 0, up100 = 0;
   let soupQty = 0, shrimpQty = 0, dessertQty = 0;
   const costBreakdown = [], prepBreakdown = [], excludedBreakdown = [];
   const coverGroups = DASH_COVER_GROUPS.map((g) => ({ key: g.key, label: g.label, qty: 0 }));
@@ -549,6 +557,7 @@ async function computeDashboard(outletNum, start, end) {
     const icn = parseInt(ic);
     const gi = DASH_COVER_GROUPS.findIndex((g) => g.codes.indexOf(icn) >= 0);
     if (gi >= 0) coverGroups[gi].qty += v.qty;
+    if (icn === DASH_UP100_ITEM) up100 += v.qty;
     const unitCost = menuCost[ic] ?? 0;
     const tc = unitCost * v.qty;
     if (dashExclItem(ic)) {
@@ -568,6 +577,12 @@ async function computeDashboard(outletNum, start, end) {
     excludedCost += tc; excludedQty += v.qty;
     excludedBreakdown.push({ reason: 'โต๊ะ 600', itemCode: ic, name: v.name, unitCost, qty: r2(v.qty), totalCost: r2(tc) });
   }
+  // สาขา UP 100: ย้ายหัวที่อัพเกรดออกจากกลุ่ม 259 (นับเป็นหัว 259 ไปแล้ว) และเปลี่ยนชื่อกลุ่มราคาสูงเป็น UP 100
+  if (up100 > 0) {
+    coverGroups[0].qty = Math.max(0, coverGroups[0].qty - up100);
+    coverGroups[1].label = coverGroups[1].qty > up100 ? 'จำนวน Premium 359 + UP 100' : 'จำนวน UP 100';
+  }
+
   const byCost = (a, b) => b.totalCost - a.totalCost || b.qty - a.qty;
   const costRows = costBreakdown.filter(r => r.totalCost > 0).sort(byCost);
   prepBreakdown.sort(byCost);
@@ -589,6 +604,7 @@ async function computeDashboard(outletNum, start, end) {
     bills,
     memberBills,
     covers: r2(covers),
+    up100: r2(up100),        // จำนวนหัวที่อัพเกรด 259 → 359 (สาขาที่ขาย UP 100)
     soupQty: r2(soupQty),       // น้ำซุป+อื่นๆ (101008,101009)
     shrimpQty: r2(shrimpQty),   // เพิ่มกุ้งแก้ว 29+ (101114)
     dessertQty: r2(dessertQty), // ขนมหวาน (106001-106004,106020)
