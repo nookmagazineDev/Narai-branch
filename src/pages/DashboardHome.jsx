@@ -721,7 +721,7 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText, premi
               <p className="mt-2 text-[11px] text-gray-400">
                 * % ของเดือน = จำนวนลูกค้าวันนั้น ÷ จำนวนลูกค้าทั้งช่วงที่เลือก • เทียบเฉลี่ย = สูง/ต่ำกว่าค่าเฉลี่ยต่อวันกี่ % (นับเฉพาะวันที่มีลูกค้า)
                 {st.twoPrice && ` • ตัวเลขจางข้าง 259/${premiumLabel} = สัดส่วนของราคานั้นในวันนั้น`}
-                {st.twoPrice && premiumLabel === 'UP 100' && ' • UP 100 = หัว 259 ที่อัพเกรดเป็น 359 (ไม่ได้บวกเพิ่มในจำนวนหัวรวม)'}
+                {st.twoPrice && premiumLabel === 'UP100' && ' • UP100 = หัว 259 ที่อัพเกรดเป็น 359 (ไม่ได้บวกเพิ่มในจำนวนหัวรวม)'}
               </p>
             </>
           )}
@@ -916,8 +916,8 @@ export default function DashboardHome() {
   // (โหมดต่อหัวตัดทศนิยมของยอดรวมทิ้ง บรรทัดล่างจะได้ไม่ยาวเกินช่องจนถูกตัดปลาย)
   const subOf = (v, text) => (unit === 'baht' ? text : unit === 'head' ? `ต่อหัว • ฿${Math.round(Number(v) || 0).toLocaleString('th-TH')}` : baht(v));
   const coversPerBill = Number(d.bills) > 0 ? coverBase / Number(d.bills) : 0;
-  // สาขาที่ขาย UP 100 (อัพเกรด 259 → 359) เรียกกลุ่มราคาสูงว่า "UP 100" แทน "359"
-  const premiumLabel = (Number(d.up100) || 0) > 0 ? 'UP 100' : '359';
+  // สาขาที่ขาย UP100 (อัพเกรด 259 → 359) เรียกกลุ่มราคาสูงว่า "UP100" แทน "359" — ชื่อเดียวกับหน้านับสต๊อก
+  const premiumLabel = (Number(d.up100Qty) || 0) > 0 ? 'UP100' : '359';
 
   const rangeText = useMemo(() => `${startDate} ถึง ${endDate}`, [startDate, endDate]);
   // จำนวนวันในช่วงที่เลือก — ปุ่มดึงข้อมูลจาก POS ใหม่ทำได้ครั้งละไม่เกิน 31 วัน (ตามลิมิตของ office-server)
