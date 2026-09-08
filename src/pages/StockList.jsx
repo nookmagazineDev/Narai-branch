@@ -47,43 +47,33 @@ const thaiMonths = [
 ];
 
 // ── คาดการณ์จำนวนหัวลูกค้ารายวัน จากข้อมูลเดือนที่แล้ว ──
-// แบ่งวัน 3 ประเภท: วันธรรมดา (จ-พฤ) / วันศุกร์ (แยกเดี่ยว) / วันหยุดสุดสัปดาห์ (ส-อา)
-// แบ่งช่วงเดือน 3 ช่วง: ต้นเดือน 1-10 / กลางเดือน 11-23 / ปลายเดือน 24-สิ้นเดือน
-const dayBand = (dayOfMonth) => (dayOfMonth <= 10 ? 'early' : dayOfMonth <= 23 ? 'mid' : 'late');
-const DAY_TYPES = ['weekday', 'friday', 'weekend'];
-const dayType = (dow) => (dow >= 1 && dow <= 4 ? 'weekday' : dow === 5 ? 'friday' : 'weekend'); // 0=อา,5=ศ,6=ส
+// เฉลี่ย "ทั้งเดือน" แยกตามวันในสัปดาห์ (จันทร์ถึงอาทิตย์ ทีละวัน)
+// เดิมซอยเป็น 9 กลุ่ม (วันธรรมดา/ศุกร์/เสาร์-อาทิตย์ × ต้น/กลาง/ปลายเดือน) แต่ละกลุ่มจึงเหลือ
+// ตัวอย่างแค่ 1-2 วัน ค่าเฉลี่ยแกว่งตามวันผิดปกติวันเดียว — ตัดการแบ่งช่วงเดือนออก
+// ใช้ทั้งเดือนเป็นฐานแทน และแยกวันในสัปดาห์ละเอียดขึ้นเป็นรายวัน (จ. กับ อ. คนไม่เท่ากัน)
+const DOW_SHORT = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.']; // index = Date.getDay() (0 = อาทิตย์)
+const DOW_LONG = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+const DOW_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]; // ลำดับที่ใช้แสดงผล/เลือกวัน: จ-อา
 
-// สรุปยอดหัวลูกค้ารายวัน (coversByDate: {ymd: number}) เป็นค่าเฉลี่ย 9 กลุ่ม (3 ประเภทวัน × 3 ช่วงเดือน)
+// สรุปยอดหัวลูกค้ารายวัน (coversByDate: {ymd: number}) เป็นค่าเฉลี่ยรายวันในสัปดาห์ 7 ค่า
+// คืนเป็น array index ตาม Date.getDay() (0 = อาทิตย์)
 function buildCoverBuckets(coversByDate) {
-  const emptyBands = () => ({ early: 0, mid: 0, late: 0 });
-  const sums = { weekday: emptyBands(), friday: emptyBands(), weekend: emptyBands() };
-  const counts = { weekday: emptyBands(), friday: emptyBands(), weekend: emptyBands() };
+  const sums = Array(7).fill(0);
+  const counts = Array(7).fill(0);
   Object.entries(coversByDate).forEach(([ymd, covers]) => {
     const d = new Date(ymd + 'T00:00:00');
     if (isNaN(d)) return;
-    const type = dayType(d.getDay());
-    const band = dayBand(d.getDate());
-    sums[type][band] += Number(covers) || 0;
-    counts[type][band] += 1;
+    sums[d.getDay()] += Number(covers) || 0;
+    counts[d.getDay()] += 1;
   });
-  const avg = { weekday: {}, friday: {}, weekend: {} };
-  DAY_TYPES.forEach(type => {
-    ['early', 'mid', 'late'].forEach(band => {
-      avg[type][band] = counts[type][band] > 0 ? sums[type][band] / counts[type][band] : 0;
-    });
-  });
-  return avg;
+  return sums.map((sum, dow) => (counts[dow] > 0 ? sum / counts[dow] : 0));
 }
 
-// ค่าคาดการณ์จำนวนหัวลูกค้าของวันที่กำหนด จากกลุ่มค่าเฉลี่ยที่คำนวณไว้ (ปัดเป็นจำนวนเต็ม)
+// ค่าคาดการณ์จำนวนหัวลูกค้าของวันที่กำหนด จากค่าเฉลี่ยรายวันในสัปดาห์ (ปัดเป็นจำนวนเต็ม)
 function coverBucketFor(date, buckets) {
   if (!buckets) return 0;
-  const type = dayType(date.getDay());
-  const band = dayBand(date.getDate());
-  return Math.round(buckets[type]?.[band] || 0);
+  return Math.round(buckets[date.getDay()] || 0);
 }
-
-const bandLabel = { early: 'ต้นเดือน (1-10)', mid: 'กลางเดือน (11-23)', late: 'ปลายเดือน (24-สิ้นเดือน)' };
 // เรียงรหัสสินค้า — ตัวเลขล้วนเรียงตามค่าตัวเลข (กันปัญหา "11090003" มาก่อน "1000005" ทั้งที่ 1000005 น้อยกว่า)
 // รหัสที่ไม่ใช่ตัวเลขล้วนเรียงแบบ string เทียบกัน
 const byProductCode = (a, b) => {
@@ -147,7 +137,8 @@ function partitionOrderGroups(sortedItems) {
   });
   return groups;
 }
-const fmtBucketLine = (b) => `ต้นเดือน ${Math.round(b.early)} · กลางเดือน ${Math.round(b.mid)} · ปลายเดือน ${Math.round(b.late)} คน`;
+// แสดงค่าเฉลี่ยรายวันในสัปดาห์เรียงแบบ จ-อา (เช่น "จ. 120 · อ. 118 · ... · อา. 180 คน")
+const fmtBucketLine = (b) => DOW_MON_FIRST.map(dow => `${DOW_SHORT[dow]} ${Math.round(b?.[dow] || 0)}`).join(' · ') + ' คน';
 
 // สินค้ากลุ่มพรีเมียม — เสิร์ฟเฉพาะลูกค้าราคา 359 เท่านั้น (ลูกค้า 259 ไม่มีสิทธิ์)
 // ใช้จำนวนหัวลูกค้า 359 ล้วนๆ ในการคำนวณยอดเบิก แทนยอดรวมทุกราคา — เฉพาะสาขาที่มี 2 ราคาเท่านั้น
@@ -198,6 +189,11 @@ export default function StockList() {
   const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
   const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
   const [pctInputMap, setPctInputMap] = useState({});
+  // ตั้งค่าหัวทีเดียวหลายวัน — ระบุจำนวน แล้วเลือกว่าจะลงวันไหนบ้าง (จ-อา) ของเดือนที่เปิดอยู่
+  const [bulkCovers, setBulkCovers] = useState('');       // สาขาราคาเดียว
+  const [bulkCovers259, setBulkCovers259] = useState(''); // สาขาหัว 2 ราคา
+  const [bulkCovers359, setBulkCovers359] = useState('');
+  const [bulkDows, setBulkDows] = useState([1, 2, 3, 4, 5, 6, 0]); // เริ่มต้นเลือกครบทั้งสัปดาห์
   const [pct259InputMap, setPct259InputMap] = useState({}); // สาขาหัว 2 ราคาเท่านั้น — date -> จำนวนลูกค้าราคา 259 ที่กรอก
   const [pct359InputMap, setPct359InputMap] = useState({}); // สาขาหัว 2 ราคาเท่านั้น — date -> จำนวนลูกค้าราคา 359 ที่กรอก
   const [isSavingAllPcts, setIsSavingAllPcts] = useState(false);
@@ -391,6 +387,64 @@ export default function StockList() {
   };
   const handleTemp359Change = (ymdStr, val) => {
     setPct359InputMap(prev => ({ ...prev, [ymdStr]: val }));
+  };
+
+  const toggleBulkDow = (dow) => {
+    setBulkDows(prev => (prev.includes(dow) ? prev.filter(d => d !== dow) : [...prev, dow]));
+  };
+
+  // ใส่จำนวนหัวที่ระบุ ลงทุกวันในเดือนที่เปิดอยู่ที่ตรงกับวันในสัปดาห์ที่เลือกไว้
+  // ใส่ลงช่องกรอกเฉยๆ (ยังไม่บันทึก) ผู้ใช้ตรวจแล้วค่อยกดปุ่มบันทึกเหมือนการแก้ทีละวัน
+  const applyBulkCovers = () => {
+    if (bulkDows.length === 0) {
+      toast.error('เลือกวันที่จะตั้งค่าก่อน (จ-อา)');
+      return;
+    }
+    const days = getCalendarDays().filter(d => d.isCurrentMonth && bulkDows.includes(d.date.getDay()));
+    if (days.length === 0) {
+      toast.error('เดือนนี้ไม่มีวันที่ตรงกับที่เลือก');
+      return;
+    }
+    // '' = ไม่แตะช่องนั้น (เช่นอยากตั้งเฉพาะ 359 ก็เว้น 259 ไว้), ตัวเลข = ทับทุกวันที่เลือก
+    const parse = (raw) => {
+      const t = String(raw).trim();
+      if (t === '') return null;
+      const n = Number(t);
+      return Number.isFinite(n) && n >= 0 ? n : NaN;
+    };
+
+    if (isTwoTierBranch) {
+      const v259 = parse(bulkCovers259);
+      const v359 = parse(bulkCovers359);
+      if (Number.isNaN(v259) || Number.isNaN(v359)) { toast.error('จำนวนหัวต้องเป็นตัวเลขไม่ติดลบ'); return; }
+      if (v259 === null && v359 === null) { toast.error('กรอกจำนวนหัวราคา 259 หรือ 359 อย่างน้อยหนึ่งช่อง'); return; }
+      if (v259 !== null) {
+        setPct259InputMap(prev => {
+          const next = { ...prev };
+          days.forEach(d => { next[dateToYMD(d.date)] = String(v259); });
+          return next;
+        });
+      }
+      if (v359 !== null) {
+        setPct359InputMap(prev => {
+          const next = { ...prev };
+          days.forEach(d => { next[dateToYMD(d.date)] = String(v359); });
+          return next;
+        });
+      }
+    } else {
+      const v = parse(bulkCovers);
+      if (Number.isNaN(v)) { toast.error('จำนวนหัวต้องเป็นตัวเลขไม่ติดลบ'); return; }
+      if (v === null) { toast.error('กรอกจำนวนหัวลูกค้าก่อน'); return; }
+      setPctInputMap(prev => {
+        const next = { ...prev };
+        days.forEach(d => { next[dateToYMD(d.date)] = String(v); });
+        return next;
+      });
+    }
+
+    const dowText = DOW_MON_FIRST.filter(d => bulkDows.includes(d)).map(d => DOW_SHORT[d]).join(' ');
+    toast.success(`ใส่ค่าลง ${days.length} วัน (${dowText}) ของ ${thaiMonths[currentCalMonth]} แล้ว — กดบันทึกเพื่อยืนยัน`);
   };
 
   const handleSaveAllPcts = async () => {
@@ -1932,24 +1986,18 @@ export default function StockList() {
                       ) : coverBuckets ? (
                         <>
                           <div>
-                            <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้ารวมจากเดือนที่แล้ว ({coverBucketsLabel}):</span>{' '}
-                            วันธรรมดา(จ-พฤ) {fmtBucketLine(coverBuckets.buckets.weekday)}
-                            {' | '}วันศุกร์ {fmtBucketLine(coverBuckets.buckets.friday)}
-                            {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets.weekend)}
+                            <span className="font-semibold text-gray-600">ค่าเฉลี่ยหัวลูกค้ารวมทั้งเดือน แยกตามวัน ({coverBucketsLabel}):</span>{' '}
+                            {fmtBucketLine(coverBuckets.buckets)}
                           </div>
                           {isTwoTierBranch && (
                             <>
                               <div className="pt-1 border-t border-gray-200">
                                 <span className="font-semibold text-sky-700">แยกราคา 259:</span>{' '}
-                                วันธรรมดา {fmtBucketLine(coverBuckets.buckets259.weekday)}
-                                {' | '}ศุกร์ {fmtBucketLine(coverBuckets.buckets259.friday)}
-                                {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets259.weekend)}
+                                {fmtBucketLine(coverBuckets.buckets259)}
                               </div>
                               <div>
                                 <span className="font-semibold text-rose-700">แยกราคา 359:</span>{' '}
-                                วันธรรมดา {fmtBucketLine(coverBuckets.buckets359.weekday)}
-                                {' | '}ศุกร์ {fmtBucketLine(coverBuckets.buckets359.friday)}
-                                {' | '}เสาร์-อาทิตย์ {fmtBucketLine(coverBuckets.buckets359.weekend)}
+                                {fmtBucketLine(coverBuckets.buckets359)}
                               </div>
                             </>
                           )}
@@ -1957,6 +2005,100 @@ export default function StockList() {
                       ) : (
                         <span>ยังไม่มีข้อมูลค่าเฉลี่ยจากเดือนที่แล้ว</span>
                       )}
+                    </div>
+
+                    {/* ตั้งค่าหัวทีเดียวหลายวัน — ระบุจำนวน แล้วเลือกว่าจะลงวันไหนของเดือนที่เปิดอยู่ */}
+                    <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
+                      <div className="text-xs font-semibold text-amber-900">
+                        ตั้งค่าหัวทีเดียวหลายวัน — {thaiMonths[currentCalMonth]} {currentCalYear + 543}
+                      </div>
+                      <div className="flex flex-wrap items-end gap-3">
+                        {isTwoTierBranch ? (
+                          <>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[10px] font-semibold text-sky-700">จำนวนหัว 259</span>
+                              <input
+                                type="number" min="0" step="1" value={bulkCovers259}
+                                onChange={(e) => setBulkCovers259(e.target.value)}
+                                placeholder="เว้นว่าง = ไม่แตะ"
+                                className="w-32 px-2 py-1 border border-sky-200 rounded-md text-xs text-right font-bold text-gray-700 focus:outline-none focus:ring-1 focus:ring-sky-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                            </label>
+                            <label className="flex flex-col gap-1">
+                              <span className="text-[10px] font-semibold text-rose-700">จำนวนหัว 359</span>
+                              <input
+                                type="number" min="0" step="1" value={bulkCovers359}
+                                onChange={(e) => setBulkCovers359(e.target.value)}
+                                placeholder="เว้นว่าง = ไม่แตะ"
+                                className="w-32 px-2 py-1 border border-rose-200 rounded-md text-xs text-right font-bold text-gray-700 focus:outline-none focus:ring-1 focus:ring-rose-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                            </label>
+                          </>
+                        ) : (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold text-gray-600">จำนวนหัวลูกค้า</span>
+                            <input
+                              type="number" min="0" step="1" value={bulkCovers}
+                              onChange={(e) => setBulkCovers(e.target.value)}
+                              placeholder="เช่น 150"
+                              className="w-32 px-2 py-1 border border-gray-200 rounded-md text-xs text-right font-bold text-gray-700 focus:outline-none focus:ring-1 focus:ring-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </label>
+                        )}
+
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] font-semibold text-gray-600">ลงวัน (เลือกได้หลายวัน)</span>
+                          <div className="flex flex-wrap gap-1">
+                            {DOW_MON_FIRST.map(dow => {
+                              const on = bulkDows.includes(dow);
+                              return (
+                                <button
+                                  key={dow}
+                                  type="button"
+                                  onClick={() => toggleBulkDow(dow)}
+                                  title={DOW_LONG[dow]}
+                                  className={`w-9 py-1 rounded-md text-[11px] font-bold border transition-colors ${
+                                    on
+                                      ? 'bg-amber-500 border-amber-500 text-white'
+                                      : 'bg-white border-gray-200 text-gray-500 hover:border-amber-300'
+                                  }`}
+                                >
+                                  {DOW_SHORT[dow]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setBulkDows(DOW_MON_FIRST)}
+                            className="px-2 py-1.5 text-[11px] text-amber-800 border border-amber-300 rounded-md hover:bg-amber-100/60"
+                          >
+                            เลือกทุกวัน
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkDows([])}
+                            className="px-2 py-1.5 text-[11px] text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50"
+                          >
+                            ล้างวันที่เลือก
+                          </button>
+                          <button
+                            type="button"
+                            onClick={applyBulkCovers}
+                            disabled={isSavingAllPcts}
+                            className="px-3 py-1.5 bg-amber-600 text-white text-[11px] font-semibold rounded-md hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            ใส่ค่าลงวันที่เลือก
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-gray-500">
+                        ใส่ลงช่องกรอกให้ก่อน (ยังไม่บันทึก) ตรวจในปฏิทินแล้วกด "บันทึกจำนวนหัวลูกค้าที่ปรับ" ด้านล่างอีกที
+                        · ใส่ 0 = ลบค่าที่เคยบันทึกของวันนั้น กลับไปใช้ค่าเฉลี่ยอัตโนมัติ
+                      </div>
                     </div>
 
                     {isLoadingPct ? (

@@ -53,8 +53,8 @@ const EXCLUDE_PLATE_MENU_CODES = new Set(
 const DASH_EXCLUDE_TABLES = [600];                 // โต๊ะที่ตัดออก
 const DASH_EXCLUDE_ITEMS = [206001];               // itemCode เดี่ยวที่ตัดออก (ไปการ์ด "ไม่นับคำนวณ")
 const DASH_EXCLUDE_ITEM_RANGES = [[500002, 500026]]; // ช่วง itemCode ที่ตัดออก
-// ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน" = Buffet259(101107,101001) + Premium359(101002) + Kid159(101004,101104) + Kid109(101108) เท่านั้น
-const DASH_COVER_ITEMS = [101001, 101002, 101004, 101104, 101107, 101108];
+// ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน" = Buffet259(101107,101001) + Premium359(101002,101116) + Kid159(101004,101104) + Kid109(101108) เท่านั้น
+const DASH_COVER_ITEMS = [101001, 101002, 101004, 101104, 101107, 101108, 101116];
 // กลุ่มไอเทมนับจำนวน (แสดงบนแถบหัวเว็บ): น้ำซุป+อื่นๆ / เพิ่มกุ้งแก้ว 29+ (แยกต่างหาก) / ขนมหวาน
 const DASH_SOUP_ITEMS = [101008, 101009];
 const DASH_SHRIMP_ITEMS = [101114]; // เพิ่มกุ้งแก้ว 29+ — แยกออกจากน้ำซุป+อื่นๆ
@@ -65,7 +65,9 @@ const dashDessertItem = (c) => DASH_DESSERT_ITEMS.indexOf(parseInt(c)) >= 0;
 // แยกประเภทลูกค้า (โลจิกเดียวกับ naraipizzeria หัวข้อยอดรายวัน) — เด็กฟรี/ผู้สูงอายุฟรี ไม่นับรวมใน covers
 const DASH_COVER_GROUPS = [
   { key: 'buffet259', label: 'จำนวน Buffet 259', codes: [101107, 101001] },
-  { key: 'buffet359', label: 'จำนวน Premium 359', codes: [101002] },
+  // 101116 = หัวราคาสูงอีกรหัสที่บางสาขาใช้ — นับเป็นกลุ่มเดียวกับ Premium 359
+  // (สาขาที่ขายรหัสนี้จะถูกมองเป็นสาขาหัว 2 ราคาโดยอัตโนมัติ เหมือนสาขาที่ขาย 101002)
+  { key: 'buffet359', label: 'จำนวน Premium 359', codes: [101002, 101116] },
   { key: 'kid159', label: 'จำนวน Kid Premium 159', codes: [101004, 101104] },
   { key: 'kid109', label: 'จำนวน Kid Buffet 109', codes: [101108] },
   { key: 'kidFree', label: 'จำนวนเด็กฟรี (101005)', codes: [101005] },
