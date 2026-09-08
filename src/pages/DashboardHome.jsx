@@ -512,6 +512,186 @@ function DailyDrilldownModal({ open, onClose, metric, daily, branch, outletId })
   );
 }
 
+// ---- Modal: จำนวนลูกค้า — แยกประเภท / เปรียบเทียบเป็น % รายวันของทั้งเดือน ----
+const WEEKDAY_TH = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+// กลุ่มที่ไม่ถูกนับรวมใน covers (เด็กฟรี/ผู้สูงอายุฟรี) — คิด % ไม่ได้ เพราะไม่ได้อยู่ในฐาน
+const FREE_COVER_KEYS = ['kidFree', 'elderFree'];
+const pct1 = (v) => `${Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+const signPct1 = (v) => `${v > 0 ? '+' : ''}${pct1(v)}`;
+
+function CoversModal({ open, onClose, covers, breakdown, daily, rangeText }) {
+  // mount ใหม่ทุกครั้งที่เปิด (parent render เฉพาะตอนเปิด) — แท็บจึงกลับมาเริ่มที่ "แยกประเภท" เสมอ
+  const [tab, setTab] = useState('type'); // 'type' = แยกประเภท | 'daily' = % รายวัน
+
+  // สรุปรายวัน: เอาเฉพาะวันที่มีลูกค้า → % ของทั้งช่วง (ทั้งเดือน) + เทียบกับค่าเฉลี่ยต่อวัน
+  const st = useMemo(() => {
+    const base = (daily || [])
+      .map((r) => ({ date: r.date, covers: Number(r.covers) || 0 }))
+      .filter((r) => r.covers > 0)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const total = base.reduce((s, r) => s + r.covers, 0);
+    const max = base.reduce((m, r) => Math.max(m, r.covers), 0);
+    const avg = base.length ? total / base.length : 0;
+    const rows = base.map((r) => ({
+      ...r,
+      share: total ? (r.covers / total) * 100 : 0,      // % ของทั้งเดือน
+      vsAvg: avg ? ((r.covers - avg) / avg) * 100 : 0,  // เทียบค่าเฉลี่ยต่อวัน
+      bar: max ? (r.covers / max) * 100 : 0,
+      dow: new Date(`${r.date}T00:00:00`).getDay(),
+    }));
+    const best = rows.reduce((b, r) => (!b || r.covers > b.covers ? r : b), null);
+    const worst = rows.reduce((b, r) => (!b || r.covers < b.covers ? r : b), null);
+    return { rows, total, avg, max, best, worst };
+  }, [daily]);
+
+  if (!open) return null;
+
+  const groups = breakdown || [];
+  const coverBase = Number(covers) || 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
+          <div>
+            <h3 className="text-base font-bold flex items-center gap-2"><Users className="w-4 h-4 text-sky-300" /> จำนวนลูกค้าทั้งหมด {intf(coverBase)} คน</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{rangeText}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
+        </div>
+
+        {/* ปุ่มสลับ: แยกประเภท / % เปรียบเทียบรายวัน */}
+        <div className="px-4 pt-3 shrink-0">
+          <div className="inline-flex rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+            <button
+              onClick={() => setTab('type')}
+              className={`px-4 py-1.5 text-sm font-medium transition-colors ${tab === 'type' ? 'bg-sky-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              แยกประเภท
+            </button>
+            <button
+              onClick={() => setTab('daily')}
+              className={`px-4 py-1.5 text-sm font-medium transition-colors ${tab === 'daily' ? 'bg-sky-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+            >
+              % เปรียบเทียบรายวัน
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {tab === 'type' ? (
+            <>
+              <div className="border border-gray-100 rounded-xl overflow-hidden">
+                {groups.map((g) => {
+                  const free = FREE_COVER_KEYS.indexOf(g.key) >= 0;
+                  const share = coverBase ? (Number(g.qty || 0) / coverBase) * 100 : 0;
+                  return (
+                    <div key={g.key} className="px-4 py-2.5 border-b border-gray-100 last:border-b-0 hover:bg-sky-50/40">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-gray-700 truncate">{g.label}</span>
+                        <span className="flex items-baseline gap-2 shrink-0">
+                          <span className="font-mono font-semibold text-sky-700 tabular-nums">{intf(g.qty)}</span>
+                          <span className={`font-mono text-xs tabular-nums w-14 text-right ${free ? 'text-gray-300' : 'text-gray-500'}`}>
+                            {free ? 'ไม่นับ' : pct1(share)}
+                          </span>
+                        </span>
+                      </div>
+                      {!free && (
+                        <div className="mt-1.5 h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                          <div className="h-full rounded-full bg-sky-400" style={{ width: `${Math.min(100, share)}%` }} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 font-bold text-gray-800">
+                  <span className="text-sm">จำนวนลูกค้าทั้งหมด (Covers)</span>
+                  <span className="flex items-baseline gap-2">
+                    <span className="font-mono tabular-nums">{intf(coverBase)}</span>
+                    <span className="font-mono text-xs tabular-nums w-14 text-right text-gray-500">{coverBase ? '100.0%' : '—'}</span>
+                  </span>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">* เด็กฟรี / ผู้สูงอายุฟรี เป็นข้อมูลแสดง ไม่นับรวมในจำนวนลูกค้าทั้งหมด (จึงไม่คิด %)</p>
+            </>
+          ) : st.rows.length === 0 ? (
+            <div className="py-16 text-center text-gray-400 text-sm">ไม่มีข้อมูลลูกค้าในช่วงนี้</div>
+          ) : (
+            <>
+              {/* สรุปย่อ: เฉลี่ยต่อวัน / วันที่มากสุด / วันที่น้อยสุด */}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+                  <p className="text-[11px] text-gray-500">เฉลี่ยต่อวัน</p>
+                  <p className="text-sm font-bold text-gray-800 font-mono tabular-nums">{intf(Math.round(st.avg))} คน</p>
+                  <p className="text-[11px] text-gray-400 font-mono">{pct1(st.rows.length ? 100 / st.rows.length : 0)} ของเดือน</p>
+                </div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2">
+                  <p className="text-[11px] text-emerald-600">วันที่มากที่สุด</p>
+                  <p className="text-sm font-bold text-emerald-700 font-mono tabular-nums">{intf(st.best?.covers)} คน</p>
+                  <p className="text-[11px] text-emerald-500 font-mono">{st.best?.date.slice(5)} • {pct1(st.best?.share)}</p>
+                </div>
+                <div className="rounded-xl border border-rose-100 bg-rose-50 px-3 py-2">
+                  <p className="text-[11px] text-rose-600">วันที่น้อยที่สุด</p>
+                  <p className="text-sm font-bold text-rose-700 font-mono tabular-nums">{intf(st.worst?.covers)} คน</p>
+                  <p className="text-[11px] text-rose-500 font-mono">{st.worst?.date.slice(5)} • {pct1(st.worst?.share)}</p>
+                </div>
+              </div>
+
+              <div className="overflow-auto max-h-[52vh] border border-gray-100 rounded-xl">
+                <table className="w-full text-left text-sm border-collapse">
+                  <thead>
+                    <tr className="text-gray-600">
+                      <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200">วันที่</th>
+                      <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">ลูกค้า</th>
+                      <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200 text-sky-600">% ของเดือน</th>
+                      <th className="px-3 py-2.5 text-right sticky top-0 bg-gray-50 border-b border-gray-200">เทียบเฉลี่ย</th>
+                      <th className="px-3 py-2.5 sticky top-0 bg-gray-50 border-b border-gray-200 w-28"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-gray-700">
+                    {st.rows.map((r) => {
+                      const holiday = r.dow === 0 || r.dow === 5 || r.dow === 6; // ศ-ส-อา
+                      return (
+                        <tr key={r.date} className="hover:bg-sky-50/40">
+                          <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">
+                            {r.date}
+                            <span className={`ml-1.5 text-[11px] ${holiday ? 'text-amber-500' : 'text-gray-400'}`}>{WEEKDAY_TH[r.dow]}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums">{intf(r.covers)}</td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums font-semibold text-sky-700">{pct1(r.share)}</td>
+                          <td className={`px-3 py-2 text-right font-mono tabular-nums ${r.vsAvg >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                            {signPct1(r.vsAvg)}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                              <div className={`h-full rounded-full ${r.vsAvg >= 0 ? 'bg-sky-500' : 'bg-sky-300'}`} style={{ width: `${r.bar}%` }} />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
+                      <td className="px-3 py-2.5">รวม {intf(st.rows.length)} วัน</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums">{intf(st.total)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono tabular-nums text-sky-700">100.0%</td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">
+                * % ของเดือน = จำนวนลูกค้าวันนั้น ÷ จำนวนลูกค้าทั้งช่วงที่เลือก • เทียบเฉลี่ย = สูง/ต่ำกว่าค่าเฉลี่ยต่อวันกี่ % (นับเฉพาะวันที่มีลูกค้า)
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---- แถบ "ส่งใบเบิกสำเร็จแล้ว" — ขึ้นตอนถูกเด้งกลับมาจากหน้านับสต๊อกหลังกดยืนยันสั่งของ ----
 function OrderSuccessBanner({ info, onClose }) {
   if (!info) return null;
@@ -880,18 +1060,22 @@ export default function DashboardHome() {
           icon={TrendingUp} accent={{ text: 'text-emerald-600', bg: 'bg-emerald-50', icon: 'text-emerald-600' }}
         />
         <StatCard
-          title="จำนวนลูกค้าทั้งหมด" value={intf(d.covers)}
+          title="จำนวนลูกค้าทั้งหมด"
+          // โหมด % : จำนวนลูกค้าทั้งช่วงคือฐาน 100% ของ "% เปรียบเทียบรายวัน" ในหน้ารายละเอียด
+          value={unit === 'pct' ? (Number(d.covers) > 0 ? '100%' : '—') : intf(d.covers)}
           sub={(() => {
             // สาขาที่มีหัว 2 ราคา (Buffet 259 + Premium 359 พร้อมกัน) แยกให้เห็นตรงนี้เลย ไม่ต้องคลิกเข้าไปดู
             const bd = d.coversBreakdown || [];
+            const cov = Number(d.covers) || 0;
             const q259 = bd.find(g => g.key === 'buffet259')?.qty || 0;
             const q359 = bd.find(g => g.key === 'buffet359')?.qty || 0;
-            return (q259 > 0 && q359 > 0)
-              ? `259: ${intf(q259)} • 359: ${intf(q359)} คน`
-              : 'คน (Covers)';
+            const head = unit === 'pct' ? `${intf(cov)} คน` : 'คน (Covers)';
+            if (!(q259 > 0 && q359 > 0)) return head;
+            const p = (q) => (cov ? ` (${pct1((q / cov) * 100)})` : '');
+            return `259: ${intf(q259)}${p(q259)} • 359: ${intf(q359)}${p(q359)}`;
           })()}
           icon={Users} accent={{ text: 'text-sky-600', bg: 'bg-sky-50', icon: 'text-sky-600' }}
-          onClick={data && (d.coversBreakdown || []).length ? () => setShowCovers(true) : undefined}
+          onClick={data ? () => setShowCovers(true) : undefined}
         />
         <StatCard
           title="รายการไม่นับคำนวณ" value={disp(d.excludedCost)}
@@ -916,34 +1100,12 @@ export default function DashboardHome() {
         )}
       </div>
 
-      {/* Modal: แยกประเภทลูกค้า (Buffet/Premium/Kid/ฟรี) */}
+      {/* Modal: จำนวนลูกค้า — แยกประเภท + % เปรียบเทียบรายวันของทั้งเดือน */}
       {showCovers && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={() => setShowCovers(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
-              <div>
-                <h3 className="text-base font-bold flex items-center gap-2"><Users className="w-4 h-4 text-sky-300" /> จำนวนลูกค้าแยกประเภท</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{rangeText}</p>
-              </div>
-              <button onClick={() => setShowCovers(false)} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="border border-gray-100 rounded-xl overflow-hidden">
-                {(d.coversBreakdown || []).map((g) => (
-                  <div key={g.key} className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 last:border-b-0 hover:bg-sky-50/40">
-                    <span className="text-sm text-gray-700">{g.label}</span>
-                    <span className="font-mono font-semibold text-sky-700 tabular-nums">{intf(g.qty)}</span>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 font-bold text-gray-800">
-                  <span className="text-sm">จำนวนลูกค้าทั้งหมด (Covers)</span>
-                  <span className="font-mono tabular-nums">{intf(d.covers)}</span>
-                </div>
-              </div>
-              <p className="mt-2 text-[11px] text-gray-400">* เด็กฟรี / ผู้สูงอายุฟรี เป็นข้อมูลแสดง ไม่นับรวมในจำนวนลูกค้าทั้งหมด</p>
-            </div>
-          </div>
-        </div>
+        <CoversModal
+          open onClose={() => setShowCovers(false)}
+          covers={d.covers} breakdown={d.coversBreakdown} daily={d.daily} rangeText={rangeText}
+        />
       )}
 
       {/* Drill-down: สรุปรายวัน → คลิกวัน → รายละเอียด (บิล/breakdown ต้นทุน) */}
