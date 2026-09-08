@@ -1089,9 +1089,9 @@ export default function StockList() {
       const needCovers = avgJobs.length > 0;
 
       // 3) จำนวนหัวลูกค้ารายวันในช่วงคำนวณ เรียงลำดับความสำคัญ:
-      //    ก) วันที่ผ่านไปแล้วจริง (ก่อนวันนี้) → ใช้ยอดขายจริงจากแดชบอร์ด (แม่นกว่าค่าประมาณเสมอ)
-      //    ข) วันนี้/อนาคต ที่มีค่าบันทึกไว้เองในปฏิทิน → ใช้ค่านั้น
-      //    ค) วันนี้/อนาคต ที่ไม่มีค่าบันทึก → ใช้ค่าเฉลี่ยจากเดือนที่แล้ว (9 กลุ่ม)
+      //    ก) วันที่มีค่าบันทึกไว้เองในปฏิทิน → ใช้ค่านั้นก่อนเสมอ (ไม่ว่าวันนั้นจะผ่านไปแล้วหรือยัง)
+      //    ข) วันที่ผ่านไปแล้วและไม่ได้กรอกไว้ → ใช้ยอดขายจริงจากแดชบอร์ด
+      //    ค) ที่เหลือ → ใช้ค่าเฉลี่ยรายวันในสัปดาห์จากเดือนที่แล้ว
       const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
       const todayYmd = toYMD(todayDate);
       const targetForecast = new Date(useDate + 'T00:00:00');
@@ -1136,17 +1136,22 @@ export default function StockList() {
           realCovers359Map[d.date] = Number(d.buffet359) || 0;
         });
       }
+      // ค่าที่คนกรอกแล้วกดบันทึกไว้เอง มาก่อนเสมอ แม้วันนั้นจะผ่านไปแล้ว/ข้ามเดือนไปแล้ว
+      // และมียอดขายจริงแล้วก็ตาม — ถือว่าคนที่กรอกรู้ดีกว่า (เช่นตั้งเผื่อกรุ๊ปจอง งานเลี้ยง
+      // หรือแก้ตัวเลขที่ POS ดึงมาผิด) ถ้าไม่ได้กรอกไว้ค่อยใช้ยอดขายจริง แล้วค่อยใช้ค่าเฉลี่ย
       const coversForDate = (d) => {
         const ymdStr = toYMD(d);
+        if (savedCoversMap[ymdStr] !== undefined) return savedCoversMap[ymdStr];
         if (realCoversMap[ymdStr] !== undefined) return realCoversMap[ymdStr];
-        return savedCoversMap[ymdStr] !== undefined ? savedCoversMap[ymdStr] : coverBucketFor(d, bucketInfo.buckets);
+        return coverBucketFor(d, bucketInfo.buckets);
       };
-      // สำหรับสินค้าพรีเมียม (PREMIUM_359_ONLY_CODES) ในสาขาที่มี 2 ราคา — ใช้หัวลูกค้า 359 ล้วนๆ แทนยอดรวม
-      // ลำดับความสำคัญ: ยอดขายจริง (วันที่ผ่านไปแล้ว) > ค่าที่กรอกเองแยกราคาในปฏิทิน > ค่าเฉลี่ย 359 จากเดือนที่แล้ว
+      // สำหรับสินค้าพรีเมียม (PREMIUM_359_ONLY_CODES) ในสาขาที่มี 2 ราคา — ใช้หัวลูกค้าราคาสูงล้วนๆ แทนยอดรวม
+      // ลำดับเดียวกัน: ค่าที่บันทึกไว้เอง > ยอดขายจริง > ค่าเฉลี่ยรายวันในสัปดาห์
+      // (วันที่บันทึกไว้แต่ยังไม่ได้แยกราคา จะไม่มีค่า 359 ให้ใช้ จึงตกไปใช้ยอดขายจริง/ค่าเฉลี่ยตามลำดับ)
       const covers359ForDate = (d) => {
         const ymdStr = toYMD(d);
-        if (realCovers359Map[ymdStr] !== undefined) return realCovers359Map[ymdStr];
         if (savedCovers359Map[ymdStr] !== undefined) return savedCovers359Map[ymdStr];
+        if (realCovers359Map[ymdStr] !== undefined) return realCovers359Map[ymdStr];
         return coverBucketFor(d, bucketInfo.buckets359);
       };
 
@@ -2305,7 +2310,7 @@ export default function StockList() {
                         
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100">
                           <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-                            <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ (ใช้ในการคำนวณยอดเบิกได้เลยแม้ไม่บันทึก) พิมพ์ทับเพื่อปรับเฉพาะวัน (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกด้านขวาเพื่อบันทึกค่าที่ปรับทั้งหมด</span>
+                            <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ (ใช้ในการคำนวณยอดเบิกได้เลยแม้ไม่บันทึก) พิมพ์ทับเพื่อปรับเฉพาะวัน (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกด้านขวาเพื่อบันทึกค่าที่ปรับทั้งหมด · วันที่บันทึกค่าไว้แล้ว การคำนวณยอดเบิกจะใช้ค่าที่บันทึกเสมอ แม้วันนั้นจะผ่านไปแล้วและมียอดขายจริงแล้วก็ตาม</span>
                           </div>
                           <button
                             type="button"
