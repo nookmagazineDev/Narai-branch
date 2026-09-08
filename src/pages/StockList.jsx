@@ -187,6 +187,16 @@ const PREMIUM_359_ONLY_CODES = new Set([
   '11050101',
 ]);
 
+// ข้อยกเว้นเฉพาะ "สาขา UP100": สินค้าพวกนี้อยู่ในรายการพรีเมียมด้านบนก็จริง แต่ในสาขาที่ใช้หัว
+// UP100 เสิร์ฟให้ลูกค้าทุกราคา จึงต้องคูณ "หัวรวมทุกราคา" ไม่ใช่หัวราคาสูงล้วน
+// (สาขาที่ใช้ Premium 359 ยังคิดจากหัวราคาสูงเหมือนเดิม — ไม่ได้แตะ)
+const UP100_ALL_COVERS_CODES = new Set([
+  '11000622', // หอยชิลีNW60% (30-40ตัว/กก) กก.
+  '11000623', // กุ้งWSHOSO NW80% (91/100 1กก./แพ็ค) กก.
+  '11000629', // หมึกกล้วยลอกWCS40-60 (1กก/10ถุง/กล่อง) กก.
+  '11000442', // เนื้อออสเสือร้องไห้ตัดแรป (2-5kg.up 2-4pc/ctn) กก.
+]);
+
 // สาขาที่ขายหัว 2 ราคา (Buffet 259 + Premium 359) แบบระบุตรงๆ — การตรวจจากยอดขายเดือนที่แล้วอย่างเดียวไม่พอ
 // เพราะสาขาที่เพิ่งเริ่มใช้ 2 ราคา เดือนที่แล้วยังไม่มียอด 359 เลย ระบบจะมองว่าเป็นราคาเดียวและไม่แสดงช่องแยกราคา
 // เพิ่มรหัสสาขา (ตัวเล็ก) ในนี้ได้เลยเมื่อมีสาขาเปลี่ยนมาใช้ 2 ราคาเพิ่ม
@@ -1080,7 +1090,11 @@ export default function StockList() {
         if (avg <= 0) return;
         const lastD = parseDMY(item.lastStockDate);
         if (!lastD) return;
-        jobs.push({ idx, mode: 'avg', avg, lastD, isPremium359Only: PREMIUM_359_ONLY_CODES.has(nid) });
+        jobs.push({
+          idx, mode: 'avg', avg, lastD,
+          isPremium359Only: PREMIUM_359_ONLY_CODES.has(nid),
+          allCoversOnUp100: UP100_ALL_COVERS_CODES.has(nid),
+        });
       });
       if (!jobs.length) throw new Error('ไม่มีรายการที่พร้อมคำนวณ (ต้องมีค่าเฉลี่ยต่อหัว + ยอดคงเหลือล่าสุด หรือ ค่าเติมเต็มสตอค)');
 
@@ -1128,6 +1142,8 @@ export default function StockList() {
       // สาขาหัว 2 ราคาหรือไม่ — เกณฑ์เดียวกับปฏิทินกรอกจำนวนหัว (ระบุตรงๆ / ยอดขายเดือนก่อน / เคยบันทึกแยกราคา)
       // ใช้ข้อมูลที่เพิ่งดึงสดในรอบคำนวณนี้ ไม่พึ่ง state ของหน้าจอ กันกรณีกดคำนวณก่อนหน้าจอโหลดเสร็จ
       const isTwoTierCalc = isTwoTierBranchOf(effectiveBranch, bucketInfo, pctRes.status === 'success' ? pctRes.data : []);
+      // สาขานี้ใช้หัวราคาสูงแบบ UP100 (รหัส 101116) หรือแบบ Premium 359 (รหัส 101002)
+      const isUp100Calc = bucketInfo.premiumLabel === 'UP100';
       const realCoversMap = {};
       const realCovers359Map = {};
       if (realRes && realRes.status === 'success') {
@@ -1183,9 +1199,10 @@ export default function StockList() {
           const startForecast = new Date(j.lastD);
           startForecast.setDate(startForecast.getDate() + 1);
 
-          // ไอเทมในกลุ่มราคา 359 (PREMIUM_359_ONLY_CODES) + สาขามี 2 ราคา → ใช้หัวลูกค้า 359 ล้วนๆ
+          // ไอเทมในกลุ่มราคา 359 (PREMIUM_359_ONLY_CODES) + สาขามี 2 ราคา → ใช้หัวลูกค้าราคาสูงล้วนๆ
           // ไอเทมที่ไม่ได้ระบุกลุ่มราคา → ใช้ยอดรวมทั้ง 2 ราคา (percent = 259+359 ที่ระบบรวมให้ตอนบันทึก)
-          const usePremiumOnly = j.isPremium359Only && isTwoTierCalc;
+          // ยกเว้นสาขา UP100: ไอเทมใน UP100_ALL_COVERS_CODES เสิร์ฟทุกราคา จึงกลับไปใช้หัวรวม
+          const usePremiumOnly = j.isPremium359Only && isTwoTierCalc && !(isUp100Calc && j.allCoversOnUp100);
           const getDayCovers = usePremiumOnly ? covers359ForDate : coversForDate;
 
           totalForecastCovers = 0;
