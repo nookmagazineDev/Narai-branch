@@ -286,6 +286,9 @@ export default function StockList() {
 
   // สาขาหัว 2 ราคา — ใช้ตัวเดียวกันทั้งปฏิทินกรอกจำนวนหัวและปุ่มบันทึก (สูตรคำนวณยอดเบิกคำนวณของมันเองตอนกด
   // เพราะต้องใช้ข้อมูลที่ดึงสดในจังหวะนั้น ดู calcRequested)
+  // ชื่อเรียกช่องหัวราคาสูงของสาขานี้: UP100 (รหัส 101116) หรือ 359 (รหัส 101002)
+  const premiumLabel = coverBuckets?.premiumLabel || '359';
+
   const isTwoTierBranch = useMemo(
     () => isTwoTierBranchOf(effectiveBranch, coverBuckets, specialPcts),
     [effectiveBranch, coverBuckets, specialPcts]
@@ -325,12 +328,13 @@ export default function StockList() {
     // สรุปคำตอบจาก /api/dashboard หนึ่งช่วงเวลา เป็นชุดค่าเฉลี่ย 9 กลุ่ม + ยอดรวมไว้ตัดสินใจว่ามีข้อมูลไหม
     const summarize = (res) => {
       const coversByDate = {}, covers259ByDate = {}, covers359ByDate = {};
-      let total = 0, total259 = 0, total359 = 0;
+      let total = 0, total259 = 0, total359 = 0, totalUp100 = 0;
       if (res?.status === 'success') {
         (res.data?.daily || []).forEach(d => {
           const q = Number(d.covers) || 0;
           const q259 = Number(d.buffet259) || 0;
           const q359 = Number(d.buffet359) || 0;
+          totalUp100 += Number(d.up100) || 0; // หัวราคาสูงที่เป็นรหัส UP100 (101116)
           coversByDate[d.date] = q;
           covers259ByDate[d.date] = q259;
           covers359ByDate[d.date] = q359;
@@ -342,6 +346,7 @@ export default function StockList() {
         buckets259: buildCoverBuckets(covers259ByDate),
         buckets359: buildCoverBuckets(covers359ByDate),
         total,
+        totalUp100,
         twoTier: total259 > 0 && total359 > 0,
       };
     };
@@ -363,11 +368,14 @@ export default function StockList() {
         buckets259: tier.buckets259,
         buckets359: tier.buckets359,
         hasTwoTier: prev.twoTier || cur.twoTier,
+        // สาขาที่ขายหัวราคาสูงด้วยรหัส UP100 (101116) เรียกช่องนั้นว่า UP100 ส่วนสาขาที่ใช้ 101002 คงเป็น 359
+        // (ตัวเลข up100 มาจาก office-server — ถ้าเครื่องยังไม่ได้อัปเดตจะไม่มีค่านี้ แล้วขึ้น 359 เหมือนเดิม)
+        premiumLabel: (prev.totalUp100 > 0 || cur.totalUp100 > 0) ? 'UP100' : '359',
         label: baseLabel + tierLabel,
       };
     } catch (e) {
       const empty = buildCoverBuckets({});
-      return { buckets: empty, buckets259: empty, buckets359: empty, hasTwoTier: false, label: monthLabel(prevStart) };
+      return { buckets: empty, buckets259: empty, buckets359: empty, hasTwoTier: false, premiumLabel: '359', label: monthLabel(prevStart) };
     }
   };
 
@@ -455,7 +463,7 @@ export default function StockList() {
       const v259 = parse(bulkCovers259);
       const v359 = parse(bulkCovers359);
       if (Number.isNaN(v259) || Number.isNaN(v359)) { toast.error('จำนวนหัวต้องเป็นตัวเลขไม่ติดลบ'); return; }
-      if (v259 === null && v359 === null) { toast.error('กรอกจำนวนหัวราคา 259 หรือ 359 อย่างน้อยหนึ่งช่อง'); return; }
+      if (v259 === null && v359 === null) { toast.error(`กรอกจำนวนหัวราคา 259 หรือ ${premiumLabel} อย่างน้อยหนึ่งช่อง`); return; }
       if (v259 !== null) {
         setPct259InputMap(prev => {
           const next = { ...prev };
@@ -1103,7 +1111,7 @@ export default function StockList() {
           : Promise.resolve({ status: 'success', data: [] }),
         needCovers
           ? fetchCoverBuckets(effectiveBranch)
-          : Promise.resolve({ buckets: emptyBucket, buckets259: emptyBucket, buckets359: emptyBucket, hasTwoTier: false, label: '' }),
+          : Promise.resolve({ buckets: emptyBucket, buckets259: emptyBucket, buckets359: emptyBucket, hasTwoTier: false, premiumLabel: '359', label: '' }),
         (needCovers && realRangeStart && realRangeStart <= realRangeEnd)
           ? tryGetJson(`/api/dashboard?branch=${encodeURIComponent(effectiveBranch)}&startDate=${toYMD(realRangeStart)}&endDate=${toYMD(realRangeEnd)}`)
           : Promise.resolve(null),
@@ -2034,7 +2042,7 @@ export default function StockList() {
                                 {fmtBucketLine(coverBuckets.buckets259)}
                               </div>
                               <div>
-                                <span className="font-semibold text-rose-700">แยกราคา 359:</span>{' '}
+                                <span className="font-semibold text-rose-700">แยกราคา {premiumLabel}:</span>{' '}
                                 {fmtBucketLine(coverBuckets.buckets359)}
                               </div>
                             </>
@@ -2063,7 +2071,7 @@ export default function StockList() {
                               />
                             </label>
                             <label className="flex flex-col gap-1">
-                              <span className="text-[10px] font-semibold text-rose-700">จำนวนหัว 359</span>
+                              <span className="text-[10px] font-semibold text-rose-700">จำนวนหัว {premiumLabel}</span>
                               <input
                                 type="number" min="0" step="1" value={bulkCovers359}
                                 onChange={(e) => setBulkCovers359(e.target.value)}
@@ -2244,7 +2252,7 @@ export default function StockList() {
                                     <div className={`flex items-center bg-white border rounded px-1 py-0.5 focus-within:ring-1 ${
                                       isModified ? 'border-amber-300 focus-within:ring-amber-500' : 'border-rose-200 focus-within:ring-rose-500'
                                     }`}>
-                                      <span className="text-[8px] text-rose-600 font-bold shrink-0 mr-0.5">359</span>
+                                      <span className="text-[8px] text-rose-600 font-bold shrink-0 mr-0.5">{premiumLabel}</span>
                                       <input
                                         type="number" min="0" step="1"
                                         placeholder={String(suggested359)}
@@ -2259,8 +2267,8 @@ export default function StockList() {
                                     <div
                                       className={`text-[9px] text-center font-semibold ${legacyTotal !== null && !hasSplitInfo ? 'text-amber-600' : 'text-gray-500'}`}
                                       title={legacyTotal !== null && !hasSplitInfo
-                                        ? 'ยอดรวมที่บันทึกไว้ก่อนแยกราคา — กรอกช่อง 259/359 เพื่อแยกราคาให้วันนี้'
-                                        : 'ยอดรวมทั้ง 2 ราคา (ใช้กับสินค้าทั่วไปที่ไม่ได้จำกัดเฉพาะลูกค้า 359)'}
+                                        ? `ยอดรวมที่บันทึกไว้ก่อนแยกราคา — กรอกช่อง 259/${premiumLabel} เพื่อแยกราคาให้วันนี้`
+                                        : `ยอดรวมทั้ง 2 ราคา (ใช้กับสินค้าทั่วไปที่ไม่ได้จำกัดเฉพาะลูกค้า ${premiumLabel})`}
                                     >
                                       รวม {Number(cellTotal).toLocaleString('th-TH')} คน{legacyTotal !== null && !hasSplitInfo ? ' (ยังไม่แยก)' : ''}
                                     </div>
