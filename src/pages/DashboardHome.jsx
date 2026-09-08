@@ -709,8 +709,18 @@ function CoversModal({ open, onClose, covers, breakdown, daily, rangeText, premi
                   <tfoot>
                     <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800 sticky bottom-0">
                       <td className="px-3 py-2.5">รวม {intf(st.rows.length)} วัน</td>
-                      {st.twoPrice && <td className="px-3 py-2.5 text-right font-mono tabular-nums text-indigo-700">{intf(st.total259)}</td>}
-                      {st.twoPrice && <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700">{intf(st.total359)}</td>}
+                      {st.twoPrice && (
+                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-indigo-700 whitespace-nowrap">
+                          {intf(st.total259)}
+                          <span className="ml-1 text-[10px] font-normal text-indigo-400">{pct1(st.total ? (st.total259 / st.total) * 100 : 0)}</span>
+                        </td>
+                      )}
+                      {st.twoPrice && (
+                        <td className="px-3 py-2.5 text-right font-mono tabular-nums text-violet-700 whitespace-nowrap">
+                          {intf(st.total359)}
+                          <span className="ml-1 text-[10px] font-normal text-violet-400">{pct1(st.total ? (st.total359 / st.total) * 100 : 0)}</span>
+                        </td>
+                      )}
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums">{intf(st.total)}</td>
                       <td className="px-3 py-2.5 text-right font-mono tabular-nums text-sky-700">100.0%</td>
                       <td colSpan={2} />
