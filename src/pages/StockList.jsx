@@ -108,6 +108,25 @@ const isHiddenCategory = (item) => {
   });
 };
 
+// กลุ่มแพคเกจจิ้ง — สินค้ารหัสขึ้นต้น 113 (ถุง กล่อง แก้ว ฯลฯ) แยกออกจากตารางนับปกติ
+// ไปอยู่หน้าจอของตัวเองแบบเดียวกับหมวดอุปกรณ์ กดปุ่ม "แพคเกจจิ้ง" เพื่อดูและกรอกขอเบิก
+//
+// ตัดสินจากรหัสสินค้า ไม่ใช่ชื่อหมวดในชีท เพราะชื่อหมวดของแต่ละสาขาตั้งไม่เหมือนกัน
+// ตัดศูนย์นำหน้าก่อนเทียบ กันรหัสที่ชีทเก็บมาเป็น '0113xxxx'
+const PACKAGING_CODE_PREFIX = '113';
+const isPackagingItem = (item) =>
+  String(item?.productId ?? '').trim().replace(/^0+/, '').startsWith(PACKAGING_CODE_PREFIX);
+
+// ตารางนับมี 3 หน้าจอ: ปกติ / หมวดอุปกรณ์ / แพคเกจจิ้ง — สินค้าหนึ่งตัวอยู่ได้หน้าจอเดียว
+// รหัส 113 ชนะกฎชื่อหมวด: ของที่ตั้งหมวดว่า "อุปกรณ์" ไว้แต่รหัสขึ้นต้น 113 ให้ย้ายมาแพคเกจจิ้ง
+// ทุกหน้าจอเป็นแค่ชั้นการแสดงผล ตอนบันทึกยังรวมเป็นใบเบิกชุดเดียวกันเหมือนเดิม
+const TABLE_VIEWS = { NORMAL: 'normal', EQUIPMENT: 'equipment', PACKAGING: 'packaging' };
+const viewOf = (item) => {
+  if (isPackagingItem(item)) return TABLE_VIEWS.PACKAGING;
+  if (isHiddenCategory(item)) return TABLE_VIEWS.EQUIPMENT;
+  return TABLE_VIEWS.NORMAL;
+};
+
 // หมวดที่ต้องแยกเป็นใบเบิกต่างหากเสมอ (คนละ Ord_No จากใบหลัก) แม้วันที่รับจะเป็นวันเดียวกัน
 // เพิ่มชื่อหมวดในนี้ได้เรื่อยๆ ถ้ามีคลัง/ทีมที่ต้องแยกใบเพิ่ม
 // หมายเหตุ: ชื่อหมวดในชีท item (คอลัมน์ N) ถูกเปลี่ยนจาก "ห้องผัก" เป็น "ผัก" — ใส่ไว้ทั้งคู่กันเผื่อเปลี่ยนชื่อกลับ/มีทั้งสองแบบปนกัน
@@ -1784,26 +1803,27 @@ export default function StockList() {
     });
   };
 
-  // ตารางมี 2 โหมด: ปกติ (ซ่อนหมวดอุปกรณ์) กับ เฉพาะหมวดอุปกรณ์ — สลับด้วยปุ่มข้างช่องค้นหา
-  const [showHiddenOnly, setShowHiddenOnly] = useState(false);
+  // ตารางมี 3 โหมด: ปกติ / เฉพาะหมวดอุปกรณ์ / เฉพาะแพคเกจจิ้ง — สลับด้วยปุ่มข้างช่องค้นหา
+  const [tableView, setTableView] = useState(TABLE_VIEWS.NORMAL);
 
   const uniqueCategories = useMemo(() => {
     const cats = new Set();
     items.forEach(item => {
       // ดรอปดาวน์มีเฉพาะหมวดของโหมดที่ดูอยู่ เลือกหมวดของอีกชุดไปก็ได้ตารางว่างโดยไม่รู้สาเหตุ
-      if (isHiddenCategory(item) !== showHiddenOnly) return;
+      if (viewOf(item) !== tableView) return;
       if (item.storageCat) cats.add(String(item.storageCat));
     });
     return Array.from(cats).sort((a, b) => a.localeCompare(b, 'th'));
-  }, [items, showHiddenOnly]);
+  }, [items, tableView]);
 
-  // จำนวนรายการหมวดอุปกรณ์ — ใช้บอกผู้ใช้ว่าของไปอยู่ไหน ไม่ใช่ข้อมูลหาย
-  const hiddenCount = useMemo(() => items.filter(isHiddenCategory).length, [items]);
+  // จำนวนรายการของแต่ละหน้าจอที่แยกออกไป — ใช้บอกผู้ใช้ว่าของไปอยู่ไหน ไม่ใช่ข้อมูลหาย
+  const hiddenCount = useMemo(() => items.filter(it => viewOf(it) === TABLE_VIEWS.EQUIPMENT).length, [items]);
+  const packagingCount = useMemo(() => items.filter(isPackagingItem).length, [items]);
 
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
-      // โหมดปกติซ่อนหมวดอุปกรณ์ / โหมดอุปกรณ์แสดงเฉพาะหมวดนั้น
-      if (isHiddenCategory(item) !== showHiddenOnly) return false;
+      // แต่ละโหมดแสดงเฉพาะสินค้าของหน้าจอตัวเอง (ปกติ / อุปกรณ์ / แพคเกจจิ้ง)
+      if (viewOf(item) !== tableView) return false;
 
       const itemNameStr = String(item.name || '').toLowerCase();
       const itemCatStr = String(item.storageCat || '');
@@ -1833,7 +1853,7 @@ export default function StockList() {
     });
 
     return result;
-  }, [items, searchTerm, filterCategory, sortBy, showHiddenOnly]);
+  }, [items, searchTerm, filterCategory, sortBy, tableView]);
 
   // ---- Render ----
   const branchLabel = effectiveBranch || (isAll ? 'ยังไม่ได้เลือกสาขา' : user?.branch);
@@ -2373,29 +2393,35 @@ export default function StockList() {
                 <option value="name">เรียงตามชื่อสินค้า</option>
               </select>
 
-              {/* สลับไปดูหมวดอุปกรณ์ — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของสินค้าคนละชุด */}
-              {hiddenCount > 0 && (
+              {/* สลับหน้าจอกลุ่มที่แยกออกไป — ล้างคำค้น/หมวดที่เลือกไว้ด้วย เพราะเป็นค่าของสินค้าคนละชุด */}
+              {[
+                { key: TABLE_VIEWS.EQUIPMENT, label: 'หมวดอุปกรณ์', count: hiddenCount, title: 'ของหมวดอุปกรณ์มีเป็นพันรายการ จึงแยกไว้คนละหน้าจอกับของที่นับทุกวัน' },
+                { key: TABLE_VIEWS.PACKAGING, label: 'แพคเกจจิ้ง', count: packagingCount, title: 'สินค้ารหัสขึ้นต้น 113 (ถุง กล่อง แก้ว ฯลฯ) แยกไว้คนละหน้าจอกับของที่นับทุกวัน' },
+              ].filter(g => g.count > 0).map(g => (
                 <button
+                  key={g.key}
                   type="button"
-                  onClick={() => { setShowHiddenOnly(v => !v); setFilterCategory(''); setSearchTerm(''); }}
+                  onClick={() => { setTableView(v => (v === g.key ? TABLE_VIEWS.NORMAL : g.key)); setFilterCategory(''); setSearchTerm(''); }}
                   className={`px-4 py-3 rounded-xl text-sm font-medium border transition-colors whitespace-nowrap ${
-                    showHiddenOnly
+                    tableView === g.key
                       ? 'bg-purple-600 border-purple-600 text-white hover:bg-purple-700'
                       : 'bg-white border-gray-200 text-gray-700 hover:border-purple-300 hover:text-purple-700'
                   }`}
-                  title="ของหมวดอุปกรณ์มีเป็นพันรายการ จึงแยกไว้คนละหน้าจอกับของที่นับทุกวัน"
+                  title={g.title}
                 >
-                  {showHiddenOnly ? '← กลับไปตารางนับปกติ' : `หมวดอุปกรณ์ (${hiddenCount})`}
+                  {tableView === g.key ? '← กลับไปตารางนับปกติ' : `${g.label} (${g.count})`}
                 </button>
-              )}
+              ))}
             </div>
 
-            {/* บอกให้รู้ว่าของหมวดอุปกรณ์ถูกซ่อนไว้เฉยๆ ไม่ได้หายไป และยังสั่งได้จากปุ่มสั่งเพิ่มเติม */}
-            {hiddenCount > 0 && (
+            {/* บอกให้รู้ว่าของกลุ่มที่แยกออกไปถูกซ่อนไว้เฉยๆ ไม่ได้หายไป และยังสั่งได้ตามปกติ */}
+            {(hiddenCount > 0 || packagingCount > 0) && (
               <div className="px-4 pb-3 -mt-1 text-xs text-gray-400">
-                {showHiddenOnly
+                {tableView === TABLE_VIEWS.EQUIPMENT
                   ? `กำลังดูเฉพาะหมวดอุปกรณ์ ${hiddenCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
-                  : `ซ่อนสินค้าหมวดอุปกรณ์ ${hiddenCount} รายการจากตารางนับ เพื่อให้หน้าโหลดไวขึ้น — กดปุ่ม "หมวดอุปกรณ์" เพื่อดูและกรอกขอเบิก`}
+                  : tableView === TABLE_VIEWS.PACKAGING
+                    ? `กำลังดูเฉพาะแพคเกจจิ้ง (รหัสขึ้นต้น 113) ${packagingCount} รายการ — กรอกขอเบิกได้ตามปกติ จะรวมอยู่ในใบเบิกใบเดียวกับหมวดอื่นที่กรอกไว้`
+                    : `แยกไว้คนละหน้าจอเพื่อให้ตารางนับโหลดไวขึ้น: หมวดอุปกรณ์ ${hiddenCount} รายการ · แพคเกจจิ้ง ${packagingCount} รายการ — กดปุ่มด้านบนเพื่อดูและกรอกขอเบิก`}
               </div>
             )}
 
