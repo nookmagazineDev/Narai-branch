@@ -5,7 +5,7 @@
 // มี 2 หมวดให้สลับด้วยปุ่มด้านบนตาราง
 //   • ซัพพลายเออร์ — รายการคงที่ตาม SUP_ITEMS ด้านล่าง
 //   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากชีท 8.2 ตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
-//                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน
+//                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน โชว์ราคาชีท 8.2 ใต้ช่องให้เทียบ
 // ทั้งสองหมวดใช้ช่องกรอก/ปุ่มบันทึกชุดเดียวกัน กดบันทึกครั้งเดียวได้ทั้งสองหมวด
 // (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
 import { useEffect, useMemo, useState } from 'react';
@@ -304,7 +304,7 @@ export default function ExpenseEntry() {
 
         {tab === 'veg' && !loadingPrices && vegRows.length > 0 && (
           <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-emerald-50/40">
-            ราคา/หน่วยของผักแก้ได้ทุกแถว — ค่าตั้งต้นดึงจากชีท 8.2 พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในชีท
+            ราคา/หน่วยของผักแก้ได้ทุกแถว — ราคาจากชีท 8.2 แสดงไว้ใต้ช่องกรอกเสมอ พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในชีท
           </p>
         )}
 
@@ -347,14 +347,22 @@ export default function ExpenseEntry() {
                           className="w-full min-w-[96px] px-2 py-2 border border-emerald-200 bg-emerald-50/40 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-right font-mono text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           placeholder="ราคา/หน่วย"
                         />
-                        {r.sheetPrice > 0 && r.price !== r.sheetPrice && (
-                          <button
-                            type="button"
-                            onClick={() => setManualPrice((p) => { const n = { ...p }; delete n[r.code]; return n; })}
-                            className="mt-1 w-full text-right text-[11px] text-amber-600 hover:text-amber-700 hover:underline"
-                          >
-                            ชีท {baht(r.sheetPrice)} — กดคืนค่า
-                          </button>
+                        {/* ราคาจากชีท 8.2 โชว์ใต้ช่องเสมอ ให้เทียบได้ว่าราคาวันนี้ต่างจากราคากลางแค่ไหน
+                            ถ้าพิมพ์ทับไปแล้วบรรทัดนี้กดคืนค่าได้ */}
+                        {r.sheetPrice !== undefined && (
+                          r.sheetPrice <= 0 ? (
+                            <div className="mt-1 text-right text-[11px] text-gray-400">ยังไม่มีราคาในชีท 8.2</div>
+                          ) : r.price === r.sheetPrice ? (
+                            <div className="mt-1 text-right text-[11px] text-gray-400">ชีท 8.2 {baht(r.sheetPrice)}</div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setManualPrice((p) => { const n = { ...p }; delete n[r.code]; return n; })}
+                              className="mt-1 w-full text-right text-[11px] text-amber-600 hover:text-amber-700 hover:underline"
+                            >
+                              ชีท 8.2 {baht(r.sheetPrice)} — กดคืนค่า
+                            </button>
+                          )
                         )}
                       </td>
                     ) : (
