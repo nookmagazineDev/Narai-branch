@@ -5,6 +5,7 @@
 // มี 2 หมวดให้สลับด้วยปุ่มด้านบนตาราง
 //   • ซัพพลายเออร์ — รายการคงที่ตาม SUP_ITEMS ด้านล่าง
 //   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากชีท 8.2 ตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
+//                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน
 // ทั้งสองหมวดใช้ช่องกรอก/ปุ่มบันทึกชุดเดียวกัน กดบันทึกครั้งเดียวได้ทั้งสองหมวด
 // (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
 import { useEffect, useMemo, useState } from 'react';
@@ -153,8 +154,10 @@ export default function ExpenseEntry() {
   }), [prices, qty, manualPrice]);
 
   // หมวดผัก: ทุกรหัสในชีท 8.2 ที่อยู่ในช่วงรหัสผัก เรียงตามรหัส
-  // ตัวที่ยังไม่มีราคาในชีท (ราคา 0) ให้กรอกราคา/หน่วยเองเหมือนน้ำแข็ง และส่ง manualPrice
-  // ไปด้วย ไม่งั้นฝั่งชีทจะเอาราคา 0 จาก 8.2 มาทับราคาที่พิมพ์
+  //
+  // ราคา/หน่วยของผักกรอกเองได้ทุกแถว (ราคาผักขึ้นลงรายวัน ราคาในชีท 8.2 เป็นแค่ค่าตั้งต้น)
+  //   ไม่ได้แตะช่อง = ใช้ราคาจากชีท / พิมพ์ทับ = ใช้ราคาที่พิมพ์ / ลบจนว่าง = ถือว่ายังไม่กรอกราคา
+  // ทุกแถวส่ง manualPrice: true เสมอ ไม่งั้นฝั่งชีทจะเอาราคาจาก 8.2 มาทับราคาที่พิมพ์
   const vegRows = useMemo(() => {
     if (!prices) return [];
     return Object.keys(prices)
@@ -163,14 +166,15 @@ export default function ExpenseEntry() {
       .map((code) => {
         const p = prices[code] || {};
         const sheetPrice = Number(p.price) || 0;
-        const useManual = !(sheetPrice > 0);
-        const price = useManual ? (parseFloat(manualPrice[code]) || 0) : sheetPrice;
+        const typed = manualPrice[code];
+        const price = typed === undefined ? sheetPrice : (parseFloat(typed) || 0);
         const q = parseFloat(qty[code]) || 0;
         return {
           code,
           name: String(p.name || '').trim() || '(ไม่มีชื่อในชีท 8.2)',
           unit: String(p.unit || '').trim(),
-          manualPrice: useManual,
+          manualPrice: true,
+          sheetPrice,
           price,
           hasPrice: price > 0,
           qty: q,
@@ -235,7 +239,7 @@ export default function ExpenseEntry() {
                 <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">แก้ไขข้อมูลเดิม ({existingCount} รายการ)</span>
               )}
             </h1>
-            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • ราคา/หน่วยจากชีท 8.2 • บันทึกลงชีท "ต้นทุนจากsup"</p>
+            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • ราคา/หน่วยจากชีท 8.2 (หมวดผักแก้ราคาเองได้) • บันทึกลงชีท "ต้นทุนจากsup"</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -298,6 +302,12 @@ export default function ExpenseEntry() {
           )}
         </div>
 
+        {tab === 'veg' && !loadingPrices && vegRows.length > 0 && (
+          <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-emerald-50/40">
+            ราคา/หน่วยของผักแก้ได้ทุกแถว — ค่าตั้งต้นดึงจากชีท 8.2 พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในชีท
+          </p>
+        )}
+
         {loadingPrices ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm">
             <RefreshCw className="w-6 h-6 animate-spin mb-3" /> กำลังดึงราคาจากชีท 8.2…
@@ -332,11 +342,20 @@ export default function ExpenseEntry() {
                       <td className="px-2 py-2">
                         <input
                           type="number" min="0" step="any" inputMode="decimal"
-                          value={manualPrice[r.code] ?? ''}
+                          value={manualPrice[r.code] ?? (r.sheetPrice > 0 ? String(r.sheetPrice) : '')}
                           onChange={(e) => setManualPrice((p) => ({ ...p, [r.code]: e.target.value }))}
                           className="w-full min-w-[96px] px-2 py-2 border border-emerald-200 bg-emerald-50/40 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-right font-mono text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           placeholder="ราคา/หน่วย"
                         />
+                        {r.sheetPrice > 0 && r.price !== r.sheetPrice && (
+                          <button
+                            type="button"
+                            onClick={() => setManualPrice((p) => { const n = { ...p }; delete n[r.code]; return n; })}
+                            className="mt-1 w-full text-right text-[11px] text-amber-600 hover:text-amber-700 hover:underline"
+                          >
+                            ชีท {baht(r.sheetPrice)} — กดคืนค่า
+                          </button>
+                        )}
                       </td>
                     ) : (
                       <td className="px-3 py-2.5 text-right font-mono text-gray-500">{r.hasPrice ? baht(r.price) : '-'}</td>
