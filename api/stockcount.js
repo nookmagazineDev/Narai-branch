@@ -10,7 +10,7 @@ import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 //     กันหน้า dashboard โชว์ 0 เปล่าๆ ระหว่างรอทีมงานกดปิดยอด (ปกติบันทึกกันภายในต้นเดือนถัดไป ไม่เกินวันที่ 5)
 
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
-const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา
+const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา [3]หน่วย (ถ้ามี)
 // ชีทรายจ่ายจาก Supplier (คนละสเปรดชีต) — [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
 const SUP_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
 const SUP_SHEET = 'ต้นทุนจากsup';
@@ -140,7 +140,10 @@ export default async function handler(req, res) {
         if (!code) continue;
         const price = Number(c[2] && c[2].v);
         const name = c[1] && c[1].v != null ? String(c[1].v).trim() : '';
-        if (!Number.isNaN(price)) data[code] = { name, price };
+        // หน่วย (คอลัมน์ D) มีเฉพาะบางแถว/บางช่วงเวลาของชีท — ไม่มีก็ส่งค่าว่าง
+        // หน้ากรอกรายจ่ายใช้กับหมวดผักที่ไม่ได้ฮาร์ดโค้ดหน่วยไว้เหมือนรายการซัพพลายเออร์
+        const unit = c[3] && c[3].v != null ? String(c[3].v).trim() : '';
+        if (!Number.isNaN(price)) data[code] = { name, price, unit };
       }
       return res.status(200).json({ status: 'success', data });
     } catch (error) {

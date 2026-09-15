@@ -1,9 +1,15 @@
 // กรอกรายจ่าย (ต้นทุนจาก Supplier) — รายการคงที่ กรอกแค่ "จำนวน"
 //   ราคา/หน่วย ดึงสดจากชีท 8.2 (/api/supprices) -> มูลค่า = จำนวน x ราคา
 //   บันทึกลงชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA...) ผ่าน Apps Script action saveSupCost
+//
+// มี 2 หมวดให้สลับด้วยปุ่มด้านบนตาราง
+//   • ซัพพลายเออร์ — รายการคงที่ตาม SUP_ITEMS ด้านล่าง
+//   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากชีท 8.2 ตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
+// ทั้งสองหมวดใช้ช่องกรอก/ปุ่มบันทึกชุดเดียวกัน กดบันทึกครั้งเดียวได้ทั้งสองหมวด
+// (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Wallet, RefreshCw, Save, Store } from 'lucide-react';
+import { Wallet, RefreshCw, Save, Store, Truck, Carrot, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 
@@ -29,6 +35,20 @@ const SUP_ITEMS = [
   { code: '11130003', unit: 'ถัง' },
 ];
 
+// หมวด "ผัก,ผลไม้" — ช่วงรหัสเดียวกับที่ตารางสรุปกำไรใช้แยกหมวด (ProfitSummary.jsx)
+// รายการจริงมาจากชีท 8.2 ทั้งหมด: มีผักตัวใหม่ในชีทก็ขึ้นเองโดยไม่ต้องแก้โค้ด
+const VEG_CODE_MIN = 11090003;
+const VEG_CODE_MAX = 11090117;
+const isVegCode = (code) => {
+  const n = parseInt(String(code).replace(/\D/g, ''), 10) || 0;
+  return n >= VEG_CODE_MIN && n <= VEG_CODE_MAX;
+};
+
+const TABS = [
+  { key: 'sup', label: 'ซัพพลายเออร์', icon: Truck },
+  { key: 'veg', label: 'ผัก, ผลไม้', icon: Carrot },
+];
+
 const todayStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -44,6 +64,8 @@ export default function ExpenseEntry() {
   const [manualPrice, setManualPrice] = useState({}); // code -> ราคา/หน่วย (string) สำหรับรายการที่กรอกราคาเอง
   const [date, setDate] = useState(todayStr());
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState('sup');     // หมวดที่กำลังแสดง: sup | veg
+  const [vegSearch, setVegSearch] = useState(''); // ค้นหาในหมวดผัก (รายการเยอะกว่าหมวดซัพพลายเออร์)
 
   // สาขา: ผู้ใช้ all เลือกได้, ผู้ใช้สาขาใช้ของตัวเอง
   const [branchList, setBranchList] = useState([]);
@@ -83,6 +105,14 @@ export default function ExpenseEntry() {
             if (it.manualPrice) mp[it.code] = String(saved[key].price ?? '');
           }
         });
+        // รายการที่ไม่ได้อยู่ในลิสต์คงที่ (เช่น ผักจากชีท 8.2) — คีย์ที่ใช้คือรหัสที่ตัดศูนย์นำหน้าแล้ว
+        // ซึ่งตรงกับคีย์ของแถวหมวดผัก จึงเติมได้เลยไม่ต้องรอราคาโหลดเสร็จ
+        const supKeys = new Set(SUP_ITEMS.map((it) => String(it.code).replace(/^0+/, '')));
+        Object.keys(saved).forEach((key) => {
+          if (supKeys.has(key)) return;
+          q[key] = String(saved[key].qty ?? '');
+          mp[key] = String(saved[key].price ?? ''); // ใช้เฉพาะแถวที่ไม่มีราคาในชีท 8.2
+        });
         setQty(q);
         setManualPrice(mp);
         const n = Object.keys(q).length;
@@ -110,7 +140,7 @@ export default function ExpenseEntry() {
   }, [isAdmin]);
 
   const norm = (c) => String(c).replace(/^0+/, '');
-  const rows = useMemo(() => SUP_ITEMS.map((it) => {
+  const supRows = useMemo(() => SUP_ITEMS.map((it) => {
     const q = parseFloat(qty[it.code]) || 0;
     if (it.manualPrice) {
       // รายการกรอกราคาเอง (ไม่ดึงจากชีท 8.2) — ราคา/หน่วยพิมพ์เอง
@@ -122,11 +152,52 @@ export default function ExpenseEntry() {
     return { ...it, name: p ? p.name : '(ไม่พบใน 8.2)', price, hasPrice: !!p, qty: q, amount: q * price };
   }), [prices, qty, manualPrice]);
 
-  const total = rows.reduce((s, r) => s + r.amount, 0);
-  const filledCount = rows.filter((r) => r.qty > 0).length;
+  // หมวดผัก: ทุกรหัสในชีท 8.2 ที่อยู่ในช่วงรหัสผัก เรียงตามรหัส
+  // ตัวที่ยังไม่มีราคาในชีท (ราคา 0) ให้กรอกราคา/หน่วยเองเหมือนน้ำแข็ง และส่ง manualPrice
+  // ไปด้วย ไม่งั้นฝั่งชีทจะเอาราคา 0 จาก 8.2 มาทับราคาที่พิมพ์
+  const vegRows = useMemo(() => {
+    if (!prices) return [];
+    return Object.keys(prices)
+      .filter(isVegCode)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((code) => {
+        const p = prices[code] || {};
+        const sheetPrice = Number(p.price) || 0;
+        const useManual = !(sheetPrice > 0);
+        const price = useManual ? (parseFloat(manualPrice[code]) || 0) : sheetPrice;
+        const q = parseFloat(qty[code]) || 0;
+        return {
+          code,
+          name: String(p.name || '').trim() || '(ไม่มีชื่อในชีท 8.2)',
+          unit: String(p.unit || '').trim(),
+          manualPrice: useManual,
+          price,
+          hasPrice: price > 0,
+          qty: q,
+          amount: q * price,
+        };
+      });
+  }, [prices, qty, manualPrice]);
+
+  const vegShown = useMemo(() => {
+    const kw = vegSearch.trim().toLowerCase();
+    if (!kw) return vegRows;
+    return vegRows.filter((r) => r.name.toLowerCase().includes(kw) || r.code.includes(kw));
+  }, [vegRows, vegSearch]);
+
+  const allRows = useMemo(() => [...supRows, ...vegRows], [supRows, vegRows]);
+  const filledRows = allRows.filter((r) => r.qty > 0);
+  const total = filledRows.reduce((s, r) => s + r.amount, 0);
+  const filledCount = filledRows.length;
+  const countOf = (rows) => rows.filter((r) => r.qty > 0).length;
+  const tabCount = { sup: countOf(supRows), veg: countOf(vegRows) };
+
+  const viewRows = tab === 'veg' ? vegShown : supRows;
+  const viewTotal = viewRows.reduce((s, r) => s + r.amount, 0);
+  const viewFilled = countOf(viewRows);
 
   const save = async () => {
-    const items = rows.filter((r) => r.qty > 0);
+    const items = filledRows;
     if (!items.length) { toast.error('กรุณากรอกจำนวนอย่างน้อย 1 รายการ'); return; }
     const missingPrice = items.find((r) => r.manualPrice && !(r.price > 0));
     if (missingPrice) { toast.error(`กรุณากรอกราคา/หน่วยของ "${missingPrice.name}"`); return; }
@@ -164,7 +235,7 @@ export default function ExpenseEntry() {
                 <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">แก้ไขข้อมูลเดิม ({existingCount} รายการ)</span>
               )}
             </h1>
-            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier • ราคา/หน่วยจากชีท 8.2 • บันทึกลงชีท "ต้นทุนจากsup"</p>
+            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • ราคา/หน่วยจากชีท 8.2 • บันทึกลงชีท "ต้นทุนจากsup"</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -193,9 +264,50 @@ export default function ExpenseEntry() {
 
       {/* ตารางรายการ */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        {/* ปุ่มสลับหมวด */}
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50/60">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                tab === key
+                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+              {tabCount[key] > 0 && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full ${tab === key ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {tabCount[key]}
+                </span>
+              )}
+            </button>
+          ))}
+          {tab === 'veg' && (
+            <div className="relative ml-auto">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={vegSearch}
+                onChange={(e) => setVegSearch(e.target.value)}
+                placeholder="ค้นหาผัก / รหัส"
+                className="w-48 sm:w-60 pl-9 pr-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+          )}
+        </div>
+
         {loadingPrices ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm">
             <RefreshCw className="w-6 h-6 animate-spin mb-3" /> กำลังดึงราคาจากชีท 8.2…
+          </div>
+        ) : viewRows.length === 0 ? (
+          <div className="py-16 flex flex-col items-center text-gray-400 text-sm gap-2">
+            <Carrot className="w-6 h-6" />
+            {vegSearch.trim()
+              ? `ไม่พบรายการที่ตรงกับ "${vegSearch.trim()}"`
+              : `ไม่พบรายการผักในชีท 8.2 (ช่วงรหัส ${VEG_CODE_MIN}–${VEG_CODE_MAX})`}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -211,11 +323,11 @@ export default function ExpenseEntry() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {rows.map((r) => (
+                {viewRows.map((r) => (
                   <tr key={r.code} className={`hover:bg-gray-50/50 ${r.qty > 0 ? 'bg-emerald-50/30' : ''}`}>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{r.code}</td>
                     <td className={`px-4 py-2.5 font-medium ${r.hasPrice ? 'text-gray-800' : 'text-amber-600'}`}>{r.name}</td>
-                    <td className="px-3 py-2.5 text-center text-gray-500">{r.unit}</td>
+                    <td className="px-3 py-2.5 text-center text-gray-500">{r.unit || '-'}</td>
                     {r.manualPrice ? (
                       <td className="px-2 py-2">
                         <input
@@ -244,9 +356,14 @@ export default function ExpenseEntry() {
               </tbody>
               <tfoot>
                 <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-800">
-                  <td className="px-4 py-3" colSpan={4}>รวม {filledCount} รายการ</td>
+                  <td className="px-4 py-3" colSpan={4}>
+                    รวมหมวดนี้ {viewFilled} รายการ
+                    {filledCount > viewFilled && (
+                      <span className="ml-2 font-normal text-xs text-gray-500">(อีกหมวดกรอกไว้ {filledCount - viewFilled} รายการ)</span>
+                    )}
+                  </td>
                   <td />
-                  <td className="px-4 py-3 text-right font-mono text-emerald-700">{baht(total)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-emerald-700">{baht(viewTotal)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -254,7 +371,7 @@ export default function ExpenseEntry() {
         )}
       </div>
 
-      {/* ปุ่มบันทึก */}
+      {/* ปุ่มบันทึก — บันทึกทั้งสองหมวดพร้อมกัน */}
       <div className="flex justify-end">
         <button
           onClick={save}
