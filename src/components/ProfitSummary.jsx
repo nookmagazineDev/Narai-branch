@@ -17,7 +17,7 @@ const pct = (v, base) => (base ? `${((Number(v || 0) / base) * 100).toFixed(2)}%
 const CATS = [
   { key: 'central', label: 'ครัวกลาง', test: (c) => c >= 1000001 && c <= 5000102 },
   { key: 'food', label: 'สินค้าประเภทอาหาร', test: (c) => c >= 11000001 && c <= 11050061 },
-  { key: 'veg', label: 'ผัก,ผลไม้', test: (c) => c >= 11090003 && c <= 11090117 },
+  { key: 'veg', label: 'ผัก,ผลไม้', test: (c) => c >= 11090003 && c <= 11090999 },
   { key: 'drink', label: 'เครื่องดื่ม', test: (c) => c >= 11100001 && c <= 11130025 },
   { key: 'supply', label: 'วัสดุใช้ไป', test: (c) => c >= 11300001 && c <= 11600020 },
   { key: 'consume', label: 'วัสดุสิ้นเปลือง', test: (c) => (c >= 11800001 && c <= 11800217) || c >= 41000001 },
