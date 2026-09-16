@@ -284,7 +284,6 @@ export default function StockList() {
   const [isLoadingPendingItems, setIsLoadingPendingItems] = useState(false);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
-  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [pulledOrderKeys, setPulledOrderKeys] = useState(new Set());       // "สาขา-เลขที่ใบเบิก" ที่ทีมอื่นดึงข้อมูลไปแล้ว
   const [cancelledOrderKeys, setCancelledOrderKeys] = useState(new Set()); // "สาขา-เลขที่ใบเบิก" ที่กดยกเลิกไปแล้ว
   const [preparingOrderKeys, setPreparingOrderKeys] = useState(new Set()); // ชีท จัดของ — โกดังกำลังจัดของ/จัดส่งแล้ว
@@ -1254,31 +1253,6 @@ export default function StockList() {
     }
   };
 
-  // --- Generate order number: YY + MM + running (0001) ---
-  const generateOrderNo = async (outletId) => {
-    const now = new Date();
-    const yy = String(now.getFullYear()).slice(-2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const prefix = `${yy}${mm}`;
-    try {
-      const data = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      let maxRun = 0;
-      if (data.status === 'success' && Array.isArray(data.all)) {
-        data.all.forEach(order => {
-          const no = String(order.no || order.No || order.Ord_No || '');
-          if (no.startsWith(prefix)) {
-            const run = parseInt(no.slice(prefix.length), 10);
-            if (!isNaN(run) && run > maxRun) maxRun = run;
-          }
-        });
-      }
-      const nextRun = String(maxRun + 1).padStart(4, '0');
-      return `${prefix}${nextRun}`;
-    } catch {
-      return `${prefix}0001`;
-    }
-  };
-
   // --- Fetch pending orders ---
   // ── ปุ่ม "สั่งของ" — ส่งรายการที่ขอเบิกเข้า myfbdata.orderd โดยตรง ──
   //    เลขที่ใบสั่ง (Ord_No) ฝั่งเซิร์ฟเวอร์เป็นคนจองจาก config ของสาขา
@@ -1613,31 +1587,13 @@ export default function StockList() {
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
 
-        // --- ส่งใบเบิกไปยัง External API ถ้ามีรายการขอเบิก ---
-        if (hasRequests) {
-          setIsSubmittingOrder(true);
-          try {
-            const outletId = isAll
-              ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
-              : (user?.outletId || '');
-            if (outletId) {
-              const orderNo = await generateOrderNo(outletId);
-              const orderRes = await fetch(
-                `/api/insert_order?outletId=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(requestDate)}&no=${encodeURIComponent(orderNo)}`
-              );
-              const orderData = await orderRes.json();
-              if (orderData.status === 'success') {
-                toast.success(`📋 ส่งใบเบิกสำเร็จ! เลขที่ใบเบิก: ${orderNo}`, { duration: 6000 });
-              } else {
-                toast.error(`ส่งใบเบิกไม่สำเร็จ: ${orderData.message || 'เกิดข้อผิดพลาด'}`);
-              }
-            }
-          } catch (err) {
-            toast.error('ส่งใบเบิกไปยังระบบไม่สำเร็จ: ' + err.message);
-          } finally {
-            setIsSubmittingOrder(false);
-          }
-        }
+        // ที่นี่ไม่ส่งใบเบิกเข้า POS — การกดบันทึกแค่เก็บยอดนับกับรายการขอเบิกลง SQL (saveStock)
+        // เท่านั้น ใบเบิกจริงส่งผ่านโมดัล "สั่งของ" ซึ่ง POST ไป /api/insert_order แล้วได้เลขใบ
+        // จาก POS (Cfg_LstOrdID) กลับมา
+        //
+        // เดิมตรงนี้มีโค้ดที่ตั้งใจส่งใบเบิกให้อัตโนมัติ แต่มันยิงเป็น GET พร้อม ?no=<เลขที่คิดเอง>
+        // ขณะที่ api/insert_order.js รับ GET แค่ ?units=1 กับ ?peek= นอกนั้นตอบ 405 เสมอ
+        // จึงไม่เคยสร้างใบเบิกได้จริงสักครั้ง มีแต่ทำให้ขึ้น toast แดงหลอกทุกครั้งที่กดบันทึก
 
         setItems(items.map(item => ({ ...item, remaining: '', requested: '' })));
         setRequestDate('');
@@ -1899,11 +1855,11 @@ export default function StockList() {
           {!isAll && (
             <button
               onClick={handleSave}
-              disabled={isSaving || isSubmittingOrder || !effectiveBranch}
+              disabled={isSaving || !effectiveBranch}
               className="flex items-center justify-center gap-2 px-6 py-2.5 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-purple-200"
             >
-              {(isSaving || isSubmittingOrder) ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-              <span>{isSubmittingOrder ? 'กำลังส่งใบเบิก...' : isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
+              {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+              <span>{isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
             </button>
           )}
         </div>

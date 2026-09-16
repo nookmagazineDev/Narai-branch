@@ -32,7 +32,7 @@ const readAndCompressImage = (file) => new Promise((resolve, reject) => {
 
 // รับสินค้า — ดึงรายการที่โกดัง "จัดของ" ส่งมาแล้ว (ชีท จัดของ) จัดกลุ่มตามเลขที่ใบเบิก
 // กดเข้าไปดูรายการสินค้าในใบนั้น เทียบ "จำนวนส่ง" กับที่รับจริง — ไม่แก้ไขถือว่า "ยืนยัน" ตรงกัน
-// แก้ไขจำนวนถือว่า "แก้ไข" (มีส่วนต่าง) บันทึกทีเดียวทั้งใบลงชีท รับของ
+// แก้ไขจำนวนถือว่า "แก้ไข" (มีส่วนต่าง) บันทึกทีเดียวทั้งใบลง dbo.store_receiving (SQL Server)
 export default function ReceiveGoods() {
   const { user } = useAuth();
   const branch = user?.branch;
@@ -108,12 +108,13 @@ export default function ReceiveGoods() {
   };
 
   // สาขากด "ยืนยันแก้ไข" ทีละรายการ — ยอมรับจำนวนที่โกดังส่งมาจริง (qtySent) โดยไม่ต้องกรอกจำนวนรับเอง
-  // บันทึกลงชีท รับของ ทันที (1 แถว) ด้วยสถานะ "ยืนยัน" แทนที่จะปล่อยค้างเป็น "แก้ไข"
+  // บันทึกลง dbo.store_receiving ทันที (1 แถว) ด้วยสถานะ "ยืนยัน" แทนที่จะปล่อยค้างเป็น "แก้ไข"
   const handleConfirmEdit = async (idx, item) => {
     setConfirmingIdx(idx);
     try {
       await apiCall('confirmReceivedItem', {
-        branch, orderNo: selectedOrder.orderNo, code: item.code, name: item.name,
+        branch, orderNo: selectedOrder.orderNo,
+        code: item.code, itemKey: item.itemKey, name: item.name,
         qtyRequested: item.qtyRequested, qtySent: item.qtySent,
         recorder: user?.username || 'Unknown',
       });
@@ -151,31 +152,49 @@ export default function ReceiveGoods() {
       return;
     }
 
-    const payloadItems = selectedOrder.items
-      .map((it, idx) => {
-        if (isHandled(idx)) return null;
-        const val = qtyMap[idx];
-        const qtyReceived = val === '' || val === undefined ? 0 : Number(val);
-        const status = rowStatus(it, idx);
-        const photo = photoMap[idx];
-        return {
-          code: it.code, name: it.name,
-          qtyRequested: it.qtyRequested, qtySent: it.qtySent,
-          qtyReceived, status,
-          note: status === 'แก้ไข' ? (noteMap[idx] || '') : '',
-          photoBase64: status === 'แก้ไข' && photo ? photo.base64 : '',
-          photoMimeType: status === 'แก้ไข' && photo ? photo.mimeType : '',
-        };
-      })
+    const rowsToSave = selectedOrder.items
+      .map((it, idx) => (isHandled(idx) ? null : { it, idx }))
       .filter(Boolean);
 
-    if (payloadItems.length === 0) {
+    if (rowsToSave.length === 0) {
       toast.error('ทุกรายการยืนยันรับไปแล้ว ไม่มีอะไรต้องบันทึกเพิ่ม');
       return;
     }
 
     setIsSaving(true);
     try {
+      // รูปขึ้น Google Drive ก่อน แล้วค่อยส่ง URL ไปกับแถว — ตัวแถวอยู่บน SQL Server แล้ว
+      // (dbo.store_receiving) ซึ่งเขียน Drive ไม่ได้ ส่วนการอัปโหลดยังเป็น Apps Script เหมือนเดิม
+      // อัปโหลดล้มเหลว = ไม่บันทึกอะไรเลย ดีกว่าบันทึกแถว "แก้ไข" ที่ไม่มีหลักฐานแนบ
+      const toUpload = rowsToSave
+        .filter(({ it, idx }) => rowStatus(it, idx) === 'แก้ไข' && photoMap[idx])
+        .map(({ it, idx }) => ({
+          key: String(idx),
+          code: it.code,
+          orderNo: selectedOrder.orderNo,
+          photoBase64: photoMap[idx].base64,
+          photoMimeType: photoMap[idx].mimeType,
+        }));
+
+      let photoUrls = {};
+      if (toUpload.length > 0) {
+        const up = await apiCall('uploadReceivePhotos', { items: toUpload });
+        photoUrls = up?.data?.urls || {};
+      }
+
+      const payloadItems = rowsToSave.map(({ it, idx }) => {
+        const val = qtyMap[idx];
+        const qtyReceived = val === '' || val === undefined ? 0 : Number(val);
+        const status = rowStatus(it, idx);
+        return {
+          code: it.code, itemKey: it.itemKey, name: it.name,
+          qtyRequested: it.qtyRequested, qtySent: it.qtySent,
+          qtyReceived, status,
+          note: status === 'แก้ไข' ? (noteMap[idx] || '') : '',
+          photoUrl: status === 'แก้ไข' ? (photoUrls[String(idx)] || '') : '',
+        };
+      });
+
       const res = await apiCall('saveGoodsReceived', {
         branch, orderNo: selectedOrder.orderNo, recorder: user?.username || 'Unknown', items: payloadItems,
       });
