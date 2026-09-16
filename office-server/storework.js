@@ -14,6 +14,7 @@
 
 // ฐานข้อมูลคือ InventoryNarai ตัวเดียวกับตารางสต๊อก จึงใช้ stockDb ไม่ใช่ hrDb
 import { sql, stockDb } from './hr-db.js';
+import { branchFor, branchGroup } from './hr-session.js';
 
 const { queryRead, withTransaction } = stockDb;
 // คำสั่งเขียนที่ไม่ต้องอ่านผลลัพธ์ — ใช้ตัวเดียวกับการอ่าน (กติกาเดียวกับ stock.js)
@@ -31,6 +32,16 @@ const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : null);
 const ymdhms = (v) => (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(str(v)) ? str(v).replace('T', ' ') : null);
 
 const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
+
+/** normalize รหัสสินค้าให้ตรงกับ item_key — กติกาเดียวกับ stock.js และฝั่ง storefct */
+const normCode = (code) => String(code === null || code === undefined ? '' : code)
+  .replace(/^'/, '').trim().replace(/\.0+$/, '').replace(/^0+/, '').trim();
+
+/** วันที่/เวลาไทยตอนนี้ — เครื่องนี้ตั้งโซนเวลาไทยอยู่แล้ว แต่ระบุให้ชัดกันเครื่องถูกย้าย */
+function bangkokNow() {
+  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }); // 'YYYY-MM-DD HH:mm:ss'
+  return { date: s.slice(0, 10), time: s.slice(11, 19) };
+}
 
 // ---------------------------------------------------------------------------
 // เขียน
@@ -313,6 +324,189 @@ async function getStorePendingEditApprovals() {
 }
 
 // ---------------------------------------------------------------------------
+// หน้า "รับสินค้า" ของแอปนี้
+//
+// ย้ายมาจาก Apps Script (action ชื่อเดียวกัน) ซึ่งเคยอ่านชีท 'จัดของ' และเขียนชีท 'รับของ'
+// รูปแบบคำตอบเหมือนเดิมทุกฟิลด์ หน้าเว็บจึงแทบไม่ต้องแก้ — ต่างกันแค่รูปภาพ ดูหมายเหตุที่
+// saveGoodsReceived
+// ---------------------------------------------------------------------------
+
+/**
+ * ใบเบิกที่โกดังจัดของแล้วและรอสาขารับ — อ่านจาก store_fulfillment ที่ storefct เขียนไว้
+ *
+ * เทียบสาขาด้วย LOWER() ทั้งสองฝั่ง เพราะ storefct บันทึกชื่อสาขาตามที่ POS เก็บ (ตัวใหญ่ เช่น
+ * 'CRM') ส่วน session ของหน้าเว็บเป็นตัวเล็ก — กติกาเดียวกับที่ Apps Script เดิมใช้
+ */
+async function getGoodsToReceive(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+
+  // ครอบทั้งกลุ่มรหัสพี่น้อง (เช่น zjp กับ sjp เป็นร้านเดียวกัน) — branchFor คืนรหัสที่ล็อกอิน
+  // เสมอ ไม่ใช่รหัสที่ขอมา ส่วน storefct บันทึกชื่อสาขาตามที่ POS เก็บ ซึ่งอาจเป็นอีกรหัสในกลุ่ม
+  // ถ้าเทียบตรงตัวรหัสเดียว สาขานั้นจะไม่เห็นใบของตัวเองเลยโดยไม่มีอะไรฟ้อง
+  const codes = branch ? branchGroup(branch).map((c) => String(c).toLowerCase()) : [];
+
+  // สร้างพารามิเตอร์ทีละตัว — รายการรหัสเอาไปใส่ IN (?) แบบ MySQL ไม่ได้ ต้องกางเป็น @b0, @b1
+  const branchParams = {};
+  codes.forEach((code, i) => { branchParams[`b${i}`] = { type: sql.NVarChar(50), value: code }; });
+  const branchFilter = codes.length
+    ? `LOWER(f.branch) IN (${codes.map((_, i) => `@b${i}`).join(', ')})`
+    : '1 = 1';
+
+  const rows = await queryRead(
+    `SELECT f.doc_no, f.branch,
+            CONVERT(NVARCHAR(10), f.del_date, 23) AS del_date,
+            f.item_key, f.item_code, f.item_name, f.req_qty, f.del_qty, f.status,
+            CASE WHEN r.receiving_id IS NULL THEN 0 ELSE 1 END AS already_received
+       FROM dbo.store_fulfillment f
+       LEFT JOIN dbo.store_receiving r
+              ON r.doc_no = f.doc_no AND r.item_key = f.item_key
+      WHERE ${branchFilter}
+      ORDER BY f.del_date DESC, f.doc_no DESC`,
+    branchParams
+  );
+
+  const groups = new Map();
+  for (const r of rows) {
+    const orderNo = str(r.doc_no);
+    if (!orderNo) continue;
+    if (!groups.has(orderNo)) {
+      groups.set(orderNo, { orderNo, branch: str(r.branch), date: r.del_date || '', received: false, items: [] });
+    }
+    const g = groups.get(orderNo);
+    const alreadyReceived = Boolean(r.already_received);
+    // "ใบนี้รับแล้ว" = มีรายการไหนสักรายการที่รับไปแล้ว — กติกาเดียวกับที่ Apps Script เดิมใช้
+    if (alreadyReceived) g.received = true;
+    g.items.push({
+      code: str(r.item_code) || str(r.item_key),
+      itemKey: str(r.item_key),
+      name: str(r.item_name),
+      qtyRequested: num(r.req_qty),
+      qtySent: num(r.del_qty),
+      storeStatus: str(r.status),
+      alreadyReceived,
+    });
+  }
+
+  return [...groups.values()];
+}
+
+/** เขียนแถวรับของหนึ่งรายการ (ใช้ร่วมกันระหว่างบันทึกทั้งใบกับยืนยันทีละรายการ) */
+function upsertReceivingRow(run, common, it) {
+  return run(
+    `MERGE dbo.store_receiving AS t
+     USING (SELECT @doc_no AS doc_no, @item_key AS item_key) AS s
+       ON t.doc_no = s.doc_no AND t.item_key = s.item_key
+     WHEN MATCHED THEN UPDATE SET
+       branch = @branch,
+       receive_date = CONVERT(DATE, @receive_date, 23),
+       item_code = @item_code, item_name = @item_name,
+       req_qty = @req_qty, del_qty = @del_qty, qty_received = @qty_received,
+       status = @status, note = @note,
+       photo_url = COALESCE(NULLIF(@photo_url, N''), t.photo_url),
+       recorder = @recorder,
+       recorded_at = CONVERT(DATETIME2(0), @recorded_at, 120),
+       source = N'app', updated_at = SYSDATETIME()
+     WHEN NOT MATCHED THEN INSERT
+       (doc_no, branch, receive_date, item_key, item_code, item_name,
+        req_qty, del_qty, qty_received, status, note, photo_url, recorder, recorded_at, source)
+       VALUES
+       (@doc_no, @branch, CONVERT(DATE, @receive_date, 23), @item_key, @item_code, @item_name,
+        @req_qty, @del_qty, @qty_received, @status, @note, @photo_url, @recorder,
+        CONVERT(DATETIME2(0), @recorded_at, 120), N'app');`,
+    {
+      ...common,
+      item_key: { type: sql.NVarChar(50), value: str(it.itemKey) || normCode(it.code) },
+      item_code: { type: sql.NVarChar(50), value: str(it.code) },
+      item_name: { type: sql.NVarChar(255), value: orNull(it.name) },
+      req_qty: { type: sql.Decimal(18, 3), value: num(it.qtyRequested) },
+      del_qty: { type: sql.Decimal(18, 3), value: num(it.qtySent) },
+      qty_received: { type: sql.Decimal(18, 3), value: num(it.qtyReceived) },
+      status: { type: sql.NVarChar(50), value: str(it.status) || 'ยืนยัน' },
+      note: { type: sql.NVarChar(500), value: orNull(it.note) },
+      photo_url: { type: sql.NVarChar(500), value: str(it.photoUrl) },
+    }
+  );
+}
+
+/**
+ * บันทึกผลรับของทั้งใบ
+ *
+ * ต่างจาก Apps Script เดิมตรงเดียว: รับ `photoUrl` ที่อัปโหลดเสร็จแล้ว ไม่ใช่ `photoBase64`
+ * เครื่องนี้ไม่มีสิทธิ์เขียน Google Drive รูปจึงยังขึ้น Drive เหมือนเดิมผ่าน Apps Script
+ * (action uploadReceivePhotos) แล้วหน้าเว็บค่อยส่ง URL มาที่นี่
+ *
+ * เช็คซ้ำฝั่งเซิร์ฟเวอร์ว่ารายการ "แก้ไข" มีหมายเหตุและรูปครบ — กัน validation ฝั่งเว็บถูกข้าม
+ */
+async function saveGoodsReceived(body, session) {
+  const branch = str(branchFor(session, body.branch));
+  const docNo = str(body.orderNo);
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!branch) throw badRequest('ไม่ระบุสาขา');
+  if (!docNo) throw badRequest('ไม่ระบุเลขที่ใบเบิก');
+  if (items.length === 0) throw badRequest('ไม่มีรายการที่รับของ');
+
+  for (const it of items) {
+    if (str(it.status) !== 'แก้ไข') continue;
+    const label = str(it.name) || str(it.code);
+    if (!str(it.note)) throw badRequest(`รายการ "${label}" แก้ไขจำนวนแล้วต้องใส่หมายเหตุด้วย`);
+    if (!str(it.photoUrl)) throw badRequest(`รายการ "${label}" แก้ไขจำนวนแล้วต้องแนบรูปภาพด้วย`);
+  }
+
+  const now = bangkokNow();
+  const common = {
+    doc_no: { type: sql.NVarChar(50), value: docNo },
+    branch: { type: sql.NVarChar(50), value: branch },
+    receive_date: { type: sql.NVarChar(10), value: now.date },
+    recorder: { type: sql.NVarChar(255), value: str(body.recorder) || str(session?.username) || 'Unknown' },
+    recorded_at: { type: sql.NVarChar(19), value: `${now.date} ${now.time}` },
+  };
+
+  await withTransaction(async (run) => {
+    for (const it of items) {
+      if (!str(it.itemKey) && !str(it.code)) continue;
+      await upsertReceivingRow(run, common, it);
+    }
+  });
+
+  return { count: items.length, message: `บันทึกรับของใบเบิกเลขที่ ${docNo} เรียบร้อยแล้ว (${items.length} รายการ)` };
+}
+
+/**
+ * สาขากด "ยืนยันแก้ไข" ทีละรายการ — ยอมรับจำนวนที่โกดังส่งมาจริงโดยไม่ต้องกรอกเอง
+ * จึงบันทึกเป็นสถานะ "ยืนยัน" ไม่ใช่ "แก้ไข" และไม่ต้องมีหมายเหตุ/รูป
+ */
+async function confirmReceivedItem(body, session) {
+  const branch = str(branchFor(session, body.branch));
+  const docNo = str(body.orderNo);
+  if (!branch) throw badRequest('ไม่ระบุสาขา');
+  if (!docNo) throw badRequest('ไม่ระบุเลขที่ใบเบิก');
+  if (!str(body.code) && !str(body.itemKey)) throw badRequest('ไม่ระบุรหัสสินค้า');
+
+  const now = bangkokNow();
+  const common = {
+    doc_no: { type: sql.NVarChar(50), value: docNo },
+    branch: { type: sql.NVarChar(50), value: branch },
+    receive_date: { type: sql.NVarChar(10), value: now.date },
+    recorder: { type: sql.NVarChar(255), value: str(body.recorder) || str(session?.username) || 'Unknown' },
+    recorded_at: { type: sql.NVarChar(19), value: `${now.date} ${now.time}` },
+  };
+
+  await withTransaction((run) => upsertReceivingRow(run, common, {
+    itemKey: body.itemKey,
+    code: body.code,
+    name: body.name,
+    qtyRequested: body.qtyRequested,
+    qtySent: body.qtySent,
+    qtyReceived: body.qtySent, // ยืนยัน = รับตามที่ส่งมา
+    status: 'ยืนยัน',
+    note: '',
+    photoUrl: '',
+  }));
+
+  return { docNo, code: str(body.code), message: 'ยืนยันรับของเรียบร้อยแล้ว' };
+}
+
+// ---------------------------------------------------------------------------
 // ย้ายข้อมูลเก่า
 // ---------------------------------------------------------------------------
 
@@ -416,6 +610,9 @@ async function importStoreRows(body) {
 }
 
 export const STORE_WORK_ACTIONS = {
+  getGoodsToReceive,
+  saveGoodsReceived,
+  confirmReceivedItem,
   saveFulfillment,
   markFetched,
   approveReceivedEdit,
@@ -430,6 +627,7 @@ export const STORE_WORK_ACTIONS = {
 
 /** action ที่อ่านอย่างเดียว — ปลอดภัยที่จะลองใหม่เมื่อเน็ตสะดุด (ดู READ_ONLY ใน api/schedule.js) */
 export const STORE_WORK_READ_ONLY = [
+  'getGoodsToReceive',
   'getStoreReceivingStatus',
   'getStoreFetchedLog',
   'getStoreCancelledDocs',

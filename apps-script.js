@@ -1544,6 +1544,42 @@ function doPost(e) {
       response.status = 'success';
       response.data = orders;
 
+    } else if (action === 'uploadReceivePhotos') {
+      // อัปโหลดรูปหลักฐานการแก้ไขของหน้า "รับสินค้า" ขึ้น Drive แล้วคืน URL กลับไปเฉยๆ
+      // ไม่เขียนชีทใดๆ — ตัวแถวรับของย้ายไปอยู่ SQL Server (dbo.store_receiving) แล้ว
+      // แต่ SQL Server เขียน Google Drive ไม่ได้ รูปจึงยังต้องขึ้นทางนี้เหมือนเดิม
+      //
+      // รับ: { items: [{ key, code, orderNo, photoBase64, photoMimeType }] }
+      // คืน: { urls: { key: url } } — key คืออะไรก็ได้ที่ฝั่งเว็บใช้จับคู่กลับ (เช่น index ของแถว)
+      var upItems = data.items || [];
+      if (!upItems.length) throw new Error('ไม่มีรูปที่จะอัปโหลด');
+
+      var upParents = DriveApp.getFileById('1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI').getParents();
+      var upParentFolder = (upParents && upParents.hasNext()) ? upParents.next() : DriveApp.getRootFolder();
+      var upFolders = upParentFolder.getFoldersByName('รูปแก้ไขรับของ');
+      var upFolder = upFolders.hasNext() ? upFolders.next() : upParentFolder.createFolder('รูปแก้ไขรับของ');
+
+      var upUrls = {};
+      for (var upi = 0; upi < upItems.length; upi++) {
+        var upIt = upItems[upi];
+        if (!upIt.photoBase64) continue;
+        // อัปโหลดพลาดหนึ่งรูปไม่ควรทำให้ทั้งใบบันทึกไม่ได้ — เก็บข้อความไว้ในช่อง URL เหมือนของเดิม
+        try {
+          var upData = upIt.photoBase64.split(',')[1] || upIt.photoBase64;
+          var upExt = (upIt.photoMimeType && upIt.photoMimeType.indexOf('png') !== -1) ? 'png' : 'jpg';
+          var upName = String(upIt.orderNo || 'order') + '_' + String(upIt.code || 'item') + '_' + new Date().getTime() + '.' + upExt;
+          var upBlob = Utilities.newBlob(Utilities.base64Decode(upData), upIt.photoMimeType || 'image/jpeg', upName);
+          var upFile = upFolder.createFile(upBlob);
+          upFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          upUrls[String(upIt.key)] = upFile.getUrl();
+        } catch (upErr) {
+          upUrls[String(upIt.key)] = 'อัปโหลดรูปไม่สำเร็จ: ' + upErr.message;
+        }
+      }
+
+      response.status = 'success';
+      response.data = { urls: upUrls };
+
     } else if (action === 'saveGoodsReceived') {
       // บันทึกผลรับของจากหน้า "รับสินค้า" ลงชีท รับของ (gid=1358423316) แบบ 1 แถวต่อ 1 รายการสินค้า
       // เก็บทั้งจำนวนที่ส่งมา (อ้างอิง) และจำนวนที่รับจริง + สถานะ (ยืนยัน/แก้ไข) ต่อรายการ

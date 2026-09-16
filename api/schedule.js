@@ -37,6 +37,7 @@ const READ_ONLY = new Set([
   'getMonthEndRows',
   'getStockCountRows',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
+  'getGoodsToReceive',
   'getStoreReceivingStatus',
   'getStoreFetchedLog',
   'getStoreCancelledDocs',
