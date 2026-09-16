@@ -57,6 +57,19 @@ const SQL_ACTIONS = new Set([
   'saveMonthEndClosing',        // MonthEndClosing
   'saveWaste',                  // Waste
 
+  // กลุ่มที่ 3.1 — หน้ารับสินค้า
+  //
+  // ต้องสลับพร้อมกับที่แอป storefct สลับ STORE_SOURCE=sql เพราะทั้งสองฝั่งอ้างข้อมูลก้อนเดียวกัน:
+  // getGoodsToReceive อ่านสิ่งที่โกดังจัดไว้ (dbo.store_fulfillment ที่ storefct เขียน) ส่วนอีกสอง
+  // ตัวเขียน dbo.store_receiving ที่ storefct อ่านไปแสดงและกดอนุมัติ
+  // ถ้าสลับข้างเดียว สาขาจะไม่เห็นใบที่โกดังเพิ่งจัด หรือโกดังจะไม่เห็นว่าสาขารับแล้ว
+  //
+  // uploadReceivePhotos ไม่ได้อยู่ในลิสต์นี้โดยตั้งใจ — รูปยังขึ้น Google Drive ผ่าน Apps Script
+  // เพราะ SQL Server เขียน Drive ไม่ได้
+  'getGoodsToReceive',          // ReceiveGoods
+  'saveGoodsReceived',          // ReceiveGoods
+  'confirmReceivedItem',        // ReceiveGoods
+
   // กลุ่มที่ 4 — หน้าล็อกอิน (ผู้ใช้ย้ายจากชีท User ไปตาราง hr_user)
   // ห้ามเรียกด้วย apiCall() ตรงๆ ให้ใช้ loginUser() แทน เพราะมันมีทางถอยเมื่อ office-server ล่ม
   'login',                      // Login
