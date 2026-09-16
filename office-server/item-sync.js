@@ -38,7 +38,8 @@ const normCode = (v) => str(v).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCa
 /** ราคาเทียบกันด้วยข้อความทศนิยม 4 ตำแหน่ง ให้ตรงกับ DECIMAL(18,4) ที่เก็บจริง (ค่าว่าง = '') */
 const priceKey = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toFixed(4));
 
-async function fetchSheetRows() {
+/** แถวดิบของชีททะเบียนสินค้า (ตัดหัวตารางแล้ว) — ส่งออกให้ scripts/check-item.mjs ใช้ตรวจสอบด้วย */
+export async function fetchSheetRows() {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&headers=0&gid=${encodeURIComponent(SHEET_GID)}`;
   const res = await fetch(url, { redirect: 'follow' });
   const text = await res.text();
@@ -62,8 +63,12 @@ async function fetchSheetRows() {
   return looksLikeHeader ? rows.slice(1) : rows;
 }
 
-/** แถวชีท -> รูปแบบที่จะเขียนลงตาราง (คอลัมน์ตำแหน่งเดียวกับ migrate-stock.mjs) */
-function parseItems(rows) {
+/**
+ * แถวชีท -> รูปแบบที่จะเขียนลงตาราง (คอลัมน์ตำแหน่งเดียวกับ migrate-stock.mjs)
+ * ส่งออกไว้ให้ scripts/check-item.mjs อ่านชีทด้วยตรรกะตัวเดียวกันเป๊ะ — ถ้าตรวจด้วยโค้ดคนละชุด
+ * ผลที่ได้จะเชื่อไม่ได้ว่าตรงกับสิ่งที่ตัวซิงก์เห็นจริง
+ */
+export function parseItems(rows) {
   const byKey = new Map();
   let skipped = 0;
   let duplicates = 0;

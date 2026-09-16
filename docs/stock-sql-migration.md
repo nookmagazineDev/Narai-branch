@@ -73,6 +73,20 @@ office-server จึงต่อสอง pool จากค่าตั้งช
 อ่านคอลัมน์ตำแหน่งเดียวกับ `scripts/migrate-stock.mjs` เป๊ะ — แก้ที่ไหนต้องแก้ให้ตรงกันทั้งสองที่
 ไม่งั้นรันสคริปต์ย้ายทับแล้วข้อมูลจะกระโดด
 
+### "สาขานี้ไม่เห็นสินค้าตัวนี้" — ตรวจยังไง
+
+สินค้าจะขึ้นให้สาขาหนึ่งในหน้านับสต๊อกได้ ต้องครบสี่ข้อ: มีในชีท `item` -> คอลัมน์ J ของแถวนั้นมี
+รหัสสาขา -> ซิงก์เข้า SQL แล้ว -> สถานะไม่ใช่ `ปิดการใช้งาน` สคริปต์นี้บอกว่าตกข้อไหนพร้อมวิธีแก้
+
+```bash
+cd office-server
+node scripts/check-item.mjs --item=11090061 --branch=scs
+node scripts/check-item.mjs --item=ขิงซอย                          # ค้นด้วยชื่อก็ได้
+node scripts/check-item.mjs --item=11090061 --branch=scs --sync    # ซิงก์ให้เลยแล้วตรวจซ้ำ
+```
+
+ไม่ใส่ `--sync` จะอ่านอย่างเดียว ไม่เขียนอะไรทั้งนั้น
+
 ## ไฟล์ที่เกี่ยวข้อง
 
 | ไฟล์ | หน้าที่ |
@@ -81,6 +95,7 @@ office-server จึงต่อสอง pool จากค่าตั้งช
 | `scripts/migrate-stock.mjs` | ย้ายข้อมูลเก่าจากชีทเข้า SQL (มีโหมด `--inspect` / `--dry-run`) |
 | `office-server/stock.js` | ตรรกะอ่านของ `getStockItems` / `getStockTotal` |
 | `office-server/item-sync.js` | ซิงก์ชีท `item` -> `dbo.stock_item` + `stock_item_branch` (รอบละ 1 ชม.) |
+| `office-server/scripts/check-item.mjs` | ตรวจว่า "ทำไมสาขานี้ไม่เห็นสินค้าตัวนี้" ไล่ตั้งแต่ชีทจนถึงตารางที่หน้าเว็บอ่าน |
 | `office-server/hr-db.js` | ตัวเชื่อมฐานข้อมูล (แยกออกจาก `schedule.js` เพื่อให้สองไฟล์ใช้ร่วมกัน) |
 | `office-server/hr-session.js` | user ที่ล็อกอิน + การจำกัดสาขา (ใช้ร่วมกันเช่นกัน) |
 | `office-server/scripts/test-stock.mjs` | เทียบผลจาก SQL กับผลจาก Apps Script ทีละรายการ |
