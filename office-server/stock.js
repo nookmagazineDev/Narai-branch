@@ -666,6 +666,11 @@ async function getAvgPerHead(body, session) {
 /* =================== เปอร์เซ็นต์การเบิกของแต่ละสาขา ===================
    หนึ่งแถวต่อวันต่อสาขา ค่าที่ส่งมาเป็น 0 หรือติดลบ = สั่งลบวันนั้นทิ้ง (กติกาเดิม) */
 async function saveBranchPercentagesBulk(body, session) {
+  // แก้จำนวนหัวลูกค้าได้เฉพาะ user สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของสาขา
+  // กติกาเดียวกับค่าตั้งเบิก (saveAvgPerHead) หน้าเว็บซ่อนช่องกรอกให้แล้ว ตรงนี้กันซ้ำอีกชั้น
+  // เผื่อเรียก API ตรงๆ เหมือนที่ branchFor กันเรื่องสาขา
+  if (!session?.isAll) throw forbidden('แก้ไขจำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all');
+
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   const updates = Array.isArray(body.updates) ? body.updates : [];

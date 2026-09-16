@@ -214,6 +214,10 @@ export default function StockList() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isAll = user?.branch?.toLowerCase() === 'all';
+  // แก้จำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all — ค่านี้เป็นตัวตั้งของสูตร "คำนวณยอดเบิก" ของสาขา
+  // กติกาเดียวกับค่าตั้งเบิก (ดู saveAvgPerHead) สาขายังเห็นตัวเลขได้ แต่แก้ไม่ได้
+  // ฝั่ง office-server กันซ้ำอีกชั้นเผื่อมีคนเรียก API ตรงๆ (saveBranchPercentagesBulk)
+  const canEditCovers = isAll;
 
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState([]);
@@ -504,6 +508,7 @@ export default function StockList() {
 
   const handleSaveAllPcts = async () => {
     if (!effectiveBranch) return;
+    if (!canEditCovers) { toast.error('แก้ไขจำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all'); return; }
     const isTwoTier = isTwoTierBranch;
 
     const updates = [];
@@ -2031,7 +2036,9 @@ export default function StockList() {
                       )}
                     </div>
 
-                    {/* ตั้งค่าหัวทีเดียวหลายวัน — ระบุจำนวน แล้วเลือกว่าจะลงวันไหนของเดือนที่เปิดอยู่ */}
+                    {/* ตั้งค่าหัวทีเดียวหลายวัน — ระบุจำนวน แล้วเลือกว่าจะลงวันไหนของเดือนที่เปิดอยู่
+                        เป็นเครื่องมือแก้ค่า จึงซ่อนทั้งก้อนจากผู้ใช้ที่แก้ไม่ได้ (ปฏิทินด้านล่างยังดูได้ปกติ) */}
+                    {canEditCovers && (
                     <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
                       <div className="text-xs font-semibold text-amber-900">
                         ตั้งค่าหัวทีเดียวหลายวัน — {thaiMonths[currentCalMonth]} {currentCalYear + 543}
@@ -2112,7 +2119,7 @@ export default function StockList() {
                           <button
                             type="button"
                             onClick={applyBulkCovers}
-                            disabled={isSavingAllPcts}
+                            disabled={isSavingAllPcts || !canEditCovers}
                             className="px-3 py-1.5 bg-amber-600 text-white text-[11px] font-semibold rounded-md hover:bg-amber-700 disabled:opacity-50"
                           >
                             ใส่ค่าลงวันที่เลือก
@@ -2124,6 +2131,7 @@ export default function StockList() {
                         · ใส่ 0 = ลบค่าที่เคยบันทึกของวันนั้น กลับไปใช้ค่าเฉลี่ยอัตโนมัติ
                       </div>
                     </div>
+                    )}
 
                     {isLoadingPct ? (
                       <div className="flex justify-center py-8">
@@ -2222,7 +2230,7 @@ export default function StockList() {
                                         value={val259}
                                         onChange={(e) => handleTemp259Change(ymdStr, e.target.value)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                        disabled={isSavingAllPcts}
+                                        disabled={isSavingAllPcts || !canEditCovers}
                                         title={val259 === '' ? 'ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)' : undefined}
                                         className="w-full text-right text-[11px] bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       />
@@ -2237,7 +2245,7 @@ export default function StockList() {
                                         value={val359}
                                         onChange={(e) => handleTemp359Change(ymdStr, e.target.value)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                        disabled={isSavingAllPcts}
+                                        disabled={isSavingAllPcts || !canEditCovers}
                                         title={val359 === '' ? 'ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)' : undefined}
                                         className="w-full text-right text-[11px] bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       />
@@ -2269,7 +2277,7 @@ export default function StockList() {
                                           e.target.blur();
                                         }
                                       }}
-                                      disabled={isSavingAllPcts}
+                                      disabled={isSavingAllPcts || !canEditCovers}
                                       title={val === '' ? `ค่าเฉลี่ยจากเดือนที่แล้ว (แก้ไขได้)` : undefined}
                                       className="w-full text-right text-xs bg-transparent border-none outline-none font-bold text-gray-700 p-0 placeholder:text-gray-400 placeholder:font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
@@ -2283,8 +2291,17 @@ export default function StockList() {
                         
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 pt-3 border-t border-gray-100">
                           <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
-                            <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ (ใช้ในการคำนวณยอดเบิกได้เลยแม้ไม่บันทึก) พิมพ์ทับเพื่อปรับเฉพาะวัน (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกด้านขวาเพื่อบันทึกค่าที่ปรับทั้งหมด · วันที่บันทึกค่าไว้แล้ว การคำนวณยอดเบิกจะใช้ค่าที่บันทึกเสมอ แม้วันนั้นจะผ่านไปแล้วและมียอดขายจริงแล้วก็ตาม</span>
+                            {canEditCovers ? (
+                              <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ (ใช้ในการคำนวณยอดเบิกได้เลยแม้ไม่บันทึก) พิมพ์ทับเพื่อปรับเฉพาะวัน (ช่องที่แก้ไขจะมีจุดสีส้ม <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />) แล้วกดปุ่มบันทึกด้านขวาเพื่อบันทึกค่าที่ปรับทั้งหมด · วันที่บันทึกค่าไว้แล้ว การคำนวณยอดเบิกจะใช้ค่าที่บันทึกเสมอ แม้วันนั้นจะผ่านไปแล้วและมียอดขายจริงแล้วก็ตาม</span>
+                            ) : (
+                              <span>💡 ตัวเลขสีเทาคือค่าคาดการณ์ที่คำนวณจากเดือนที่แล้วให้อัตโนมัติ ตัวเลขสีเข้มคือค่าที่ส่วนกลางบันทึกไว้ให้วันนั้น · ใช้คำนวณยอดเบิกได้ตามปกติทั้งสองแบบ ถ้าต้องการปรับจำนวนหัวของวันไหน แจ้งส่วนกลางให้แก้ให้</span>
+                            )}
                           </div>
+                          {!canEditCovers ? (
+                          <div className="w-full sm:w-auto px-4 py-2 bg-gray-100 text-gray-500 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1.5 shrink-0">
+                            🔒 แก้ไขจำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all
+                          </div>
+                          ) : (
                           <button
                             type="button"
                             onClick={handleSaveAllPcts}
@@ -2294,6 +2311,7 @@ export default function StockList() {
                             {isSavingAllPcts ? <Loader2 className="w-3 h-3 animate-spin" /> : '💾'}
                             <span>{isSavingAllPcts ? 'กำลังบันทึก...' : 'บันทึกจำนวนหัวลูกค้าที่ปรับ'}</span>
                           </button>
+                          )}
                         </div>
                       </div>
                     )}
