@@ -1953,10 +1953,11 @@ export default function StockList() {
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-purple-100 overflow-hidden">
-            {/* Counter name row — hidden for 'all' */}
-            {!isAll && (
+            {/* แถบเครื่องมือเหนือตาราง — ช่องคำนวณยอดเบิกเป็นของสาขา
+                ส่วนปุ่มตั้งค่าจำนวนหัวลูกค้าต้องขึ้นให้ทุกคน เพราะคนที่แก้ได้คือผู้ใช้สิทธิ์ all */}
               <div className="p-4 border-b border-amber-100 bg-amber-50/40 flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-3">
+                  {!isAll && (<>
                   <label className="text-amber-900 font-medium whitespace-nowrap text-sm">🧮 คำนวณยอดเบิกอัตโนมัติ  ใช้ยอดเบิกถึงวันที่:</label>
                   <input type="date" value={useDate} onChange={(e) => setUseDate(e.target.value)}
                     className="px-2 py-1.5 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-500" />
@@ -1967,6 +1968,7 @@ export default function StockList() {
                     className="px-4 py-1.5 bg-amber-600 text-white text-sm rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap">
                     {isCalcReq ? <Loader2 className="w-4 h-4 animate-spin" /> : 'คำนวณยอดเบิก'}
                   </button>
+                  </>)}
 
                   <button
                     type="button"
@@ -1976,6 +1978,7 @@ export default function StockList() {
                   </button>
                 </div>
 
+                {!isAll && (<>
                 <div className="text-[11px] text-gray-500 leading-relaxed space-y-0.5">
                   <div>
                     สูตรปกติ: (<span className="text-fuchsia-600 font-semibold">ค่าเฉลี่ยยอดใช้ต่อหัว</span> × ผลรวมจำนวนหัวลูกค้าคาดการณ์แต่ละวัน ตั้งแต่วันนับล่าสุดถึงวันใช้ของ) - สต๊อกคงเหลือล่าสุด
@@ -1991,6 +1994,7 @@ export default function StockList() {
                   <span>⚠️</span>
                   <span>ถ้านับสต๊อกตอนเช้า ให้เลือก "วันที่ใช้ของ" เพิ่มอีก 1 วัน จากวันที่ต้องการใช้ของจริง</span>
                 </div>
+                </>)}
 
                 {showPctPanel && (
                   <div className="bg-white border border-amber-200 rounded-xl p-4 mt-2 max-w-2xl space-y-4 shadow-sm">
@@ -2318,7 +2322,6 @@ export default function StockList() {
                   </div>
                 )}
               </div>
-            )}
 
             {/* ช่องค้นหา/กรองหมวด/เรียงลำดับ — อยู่ติดกับตารางด้านล่างนี้ */}
             <div className="p-4 border-b border-gray-100 flex flex-col md:flex-row gap-2">
