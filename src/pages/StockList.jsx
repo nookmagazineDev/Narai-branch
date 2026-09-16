@@ -236,6 +236,12 @@ export default function StockList() {
   const [counterName, setCounterName] = useState('');
   
   const [specialPcts, setSpecialPcts] = useState([]);
+  // ผลล่าสุดของแผงจำนวนหัว — ค้างบนจอจนกว่าจะทำอย่างอื่น ไม่ใช่ toast ที่หายใน 4 วิ
+  // เดิมทั้งตอนโหลดและตอนบันทึกใช้ toast อย่างเดียว พอสาขาแจ้งว่า "กดแล้วไม่บันทึก"
+  // จึงไม่มีใครรู้ว่าเซิร์ฟเวอร์ตอบอะไรกลับมา — ที่แย่กว่าคือตอนโหลดค่าเดิมล้มเหลว
+  // โค้ดข้ามไปเงียบๆ (tryGetJson ไม่ throw แต่คืน {status:'error'}) ปฏิทินเลยโชว์ค่าเก่า
+  // ทั้งที่อ่านไม่สำเร็จ { kind: 'error' | 'info' | 'ok', text }
+  const [pctMsg, setPctMsg] = useState(null);
   const [showPctPanel, setShowPctPanel] = useState(false);
   const [isLoadingPct, setIsLoadingPct] = useState(false);
   const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
@@ -317,9 +323,12 @@ export default function StockList() {
       const res = await tryGetJson(`/api/stockcount?getpercentages=1&branch=${encodeURIComponent(branch)}`);
       if (res.status === 'success') {
         setSpecialPcts(res.data || []);
+      } else {
+        // อ่านไม่สำเร็จ = ตัวเลขในปฏิทินเชื่อไม่ได้ ต้องบอก ไม่ใช่ปล่อยให้เห็นค่าเก่าเฉยๆ
+        setPctMsg({ kind: 'error', text: `โหลดจำนวนหัวลูกค้าที่บันทึกไว้ไม่สำเร็จ: ${res.message || 'ไม่ทราบสาเหตุ'}` });
       }
     } catch (err) {
-      console.error('Failed to load daily percentages:', err);
+      setPctMsg({ kind: 'error', text: `โหลดจำนวนหัวลูกค้าที่บันทึกไว้ไม่สำเร็จ: ${errMessage(err)}` });
     } finally {
       setIsLoadingPct(false);
     }
@@ -552,20 +561,26 @@ export default function StockList() {
     }
 
     if (updates.length === 0) {
-      toast('ไม่มีข้อมูลเปอร์เซ็นต์พิเศษที่เปลี่ยนแปลง', { icon: 'ℹ️' });
+      // ไม่ใช่ข้อผิดพลาด แต่คนกดมักตีความว่า "บันทึกไม่ติด" — บอกให้ชัดว่าไม่มีอะไรต่างจากที่บันทึกไว้
+      setPctMsg({ kind: 'info', text: 'ไม่มีอะไรเปลี่ยน — ตัวเลขที่กรอกตรงกับที่บันทึกไว้อยู่แล้ว (เลขสีเทาคือค่าคาดการณ์ ยังไม่นับว่าแก้ ต้องพิมพ์ทับก่อน)' });
       return;
     }
 
     setIsSavingAllPcts(true);
+    setPctMsg(null);
     try {
       await apiCall('saveBranchPercentagesBulk', {
         branch: effectiveBranch,
         updates
       });
-      toast.success('บันทึกเปอร์เซ็นต์พิเศษทั้งหมดเรียบร้อยแล้ว');
-      loadSpecialPcts(effectiveBranch);
+      toast.success('บันทึกจำนวนหัวลูกค้าเรียบร้อยแล้ว');
+      setPctMsg({ kind: 'ok', text: `บันทึกแล้ว ${updates.length} วัน (สาขา ${effectiveBranch})` });
+      await loadSpecialPcts(effectiveBranch);
     } catch (err) {
-      toast.error(err.message || 'บันทึกไม่สำเร็จ');
+      // โชว์ข้อความจริงจากเซิร์ฟเวอร์ และค้างไว้ให้อ่าน/ถ่ายรูปได้ ไม่ใช่ toast ที่หายใน 4 วิ
+      const text = errMessage(err, 'บันทึกไม่สำเร็จ');
+      toast.error(text);
+      setPctMsg({ kind: 'error', text: `บันทึกไม่สำเร็จ: ${text}` });
     } finally {
       setIsSavingAllPcts(false);
     }
@@ -2012,6 +2027,27 @@ export default function StockList() {
                         </button>
                       </div>
                     </div>
+
+                    {/* ผลล่าสุดของแผงนี้ — ค้างไว้จนกว่าจะกดปิดหรือกดบันทึกรอบใหม่
+                        ข้อความจากเซิร์ฟเวอร์ต้องอ่านทันและถ่ายรูปส่งต่อได้ toast 4 วินาทีไม่พอ */}
+                    {pctMsg && (
+                      <div className={`flex items-start gap-2 text-[11px] rounded-lg px-3 py-2 border ${
+                        pctMsg.kind === 'error' ? 'bg-rose-50 border-rose-200 text-rose-800'
+                          : pctMsg.kind === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                            : 'bg-sky-50 border-sky-200 text-sky-800'
+                      }`}>
+                        <span className="shrink-0">{pctMsg.kind === 'error' ? '⚠️' : pctMsg.kind === 'ok' ? '✅' : 'ℹ️'}</span>
+                        <span className="flex-1 leading-relaxed break-words">{pctMsg.text}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPctMsg(null)}
+                          className="shrink-0 opacity-60 hover:opacity-100 font-bold px-1"
+                          title="ปิดข้อความนี้"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
 
                     <div className="text-[10px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 leading-relaxed space-y-1">
                       {isLoadingBuckets ? (
