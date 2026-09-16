@@ -13,6 +13,7 @@
 // ฐานข้อมูลของสต๊อกคือ InventoryNarai คนละตัวกับ narai_hr ของตารางงาน จึงใช้ stockDb
 import { sql, stockDb } from './hr-db.js';
 import { branchFor } from './hr-session.js';
+import { syncItemsFromSheet } from './item-sync.js';
 
 const { queryRead, withTransaction } = stockDb;
 // คำสั่งเขียนที่ไม่ต้องอ่านผลลัพธ์ — ใช้ตัวเดียวกับการอ่าน (mssql ไม่ได้แยก API อ่าน/เขียน)
@@ -224,6 +225,36 @@ async function getItemPrices(body, session) {
     };
   }
   return data;
+}
+
+/* ==================== ทะเบียนสินค้าทั้งชุด (ไม่แยกสาขา) ====================
+   คืนทุกแถวของ dbo.stock_item ให้ฝั่ง Vercel เอาไปทำแมพเอง — ใช้แทนการอ่านชีท 'item' ตรง ๆ ที่
+     - /api/insert_order  เคยอ่านคอลัมน์ K (itemid ที่ใช้เป็น Ord_ItmID) และ L (หน่วยเบิก)
+     - /api/stockcount    เคยอ่านชีทราคากลาง '8.2' มาคูณยอดนับเป็นมูลค่าสต๊อก
+
+   ทำไมไม่ใช้ getItemPrices ที่มีอยู่แล้ว: ตัวนั้นกรองตามสาขาและตัด 'ปิดการใช้งาน' ทิ้ง ซึ่งถูกต้อง
+   สำหรับหน้ากรอกรายจ่าย (ให้เลือกเฉพาะของที่สาขานั้นใช้จริง) แต่สองงานข้างบนต้องการทั้งทะเบียน:
+     - ใบเบิกส่งมาจากสาขาไหนก็ได้ และรหัสที่เพิ่งถูกปิดการใช้งานก็ยังต้องหา itemid เจอ
+       ไม่งั้นใบที่กรอกค้างไว้จะยิงเข้า POS ไม่ได้ทั้งใบ
+     - มูลค่าสต๊อกคูณจาก "ยอดที่นับไปแล้ว" ซึ่งรวมของที่เพิ่งเลิกใช้ ถ้าไม่มีราคาจะกลายเป็น 0 บาท
+   ชีทที่แทนที่ก็เป็นทะเบียนรวมทุกสาขาเหมือนกัน ความหมายจึงตรงกับของเดิมทุกประการ */
+async function getItemRegistry() {
+  const rows = await queryRead(
+    `SELECT item_key, item_code, item_name, unit, request_unit, price, pos_item_id, status
+       FROM dbo.stock_item
+      ORDER BY sort_order, item_code`
+  );
+
+  return rows.map((r) => ({
+    key: normCode(r.item_key || r.item_code),   // รหัสที่ normalize แล้ว (ตัด 0 นำหน้า)
+    code: str(r.item_code),                     // รหัสตามที่พิมพ์ในชีท — ตรงกับ productId ที่หน้าเว็บถืออยู่
+    name: str(r.item_name),
+    unit: str(r.unit),
+    requestUnit: num(r.request_unit),           // หน่วยเบิก (คอลัมน์ L) ใช้ปัดยอดเบิกเป็นจำนวนเต็มหน่วย
+    price: r.price === null || r.price === undefined ? 0 : Number(r.price),
+    itemId: Number(r.pos_item_id) || 0,         // Ord_ItmID ฝั่ง POS
+    status: str(r.status),
+  }));
 }
 
 /* ========================= หน้ารวมสต๊อกทุกสาขา =========================
@@ -939,9 +970,18 @@ async function saveWaste(body, session) {
   return { message: `บันทึกของเสียแล้ว ${rows.length} รายการ`, count: rows.length };
 }
 
+/* สั่งซิงก์ทะเบียนสินค้าจากชีทเดี๋ยวนี้ โดยไม่ต้องรอรอบอัตโนมัติ (ดู item-sync.js)
+   ใช้ตอนจัดซื้อเพิ่งเพิ่มของแล้วสาขาต้องการใช้ทันที — จำกัดสิทธิ์ all เพราะเขียนทับทะเบียนทั้งชุด */
+async function syncItemRegistry(body, session) {
+  if (!session?.isAll) throw forbidden('ซิงก์ทะเบียนสินค้าได้เฉพาะผู้ใช้สิทธิ์ all');
+  return syncItemsFromSheet();
+}
+
 export const STOCK_ACTIONS = {
   getStockItems,
   getItemPrices,
+  getItemRegistry,
+  syncItemRegistry,
   getStockTotal,
   stockStatus,
   saveStock,

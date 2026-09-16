@@ -1,5 +1,5 @@
 import { getPool, queryRead, replyDbError } from '../lib/mysql.js';
-import { fetchSheet } from '../lib/upstream.js';
+import { USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 
 // สั่งของ/ขอเบิกจากสาขา — เขียนตรงลง MySQL: inventory.dyndns.tv
 //   หัวใจคือตาราง myfbdata.orderd (ใบสั่งของกลาง, Ord_ReqType='TRF')
@@ -23,38 +23,63 @@ const SUP_ID = 490;      // คลังกลางที่จ่ายขอ�
 const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา (ใช้ทั้ง Ord_ReqType และ Inv_Type)
 const BATCH_ID = 1;      // Inv_BatchID
 
-// ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID, L=หน่วยเบิก
-// อ่านตรงจากชีทเลย จะได้ไม่ต้องรอ Apps Script ส่ง itemId มาให้
-const ITEM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
-const ITEM_SHEET_GID = '302875824';
-let sheetCache = { at: 0, map: null, units: null };
+// ทะเบียนสินค้า — itemid ที่ใช้เป็น Ord_ItmID (pos_item_id) และหน่วยเบิก (request_unit)
+//
+// เดิมอ่านชีท 'item' ของไฟล์ BOM ตรง ๆ ผ่าน gviz ทั้งที่หน้านับสต๊อกย้ายมาอ่านทะเบียนตัวจริงใน SQL
+// (InventoryNarai.dbo.stock_item) ตั้งแต่ย้ายระบบแล้ว — สองแหล่งนี้ไม่ตรงกันเมื่อไหร่ สาขาจะเห็น
+// สินค้าในตารางนับแต่กดส่งใบเบิกไม่ได้เพราะหา itemid ไม่เจอ (หรือได้ itemid ของคนละตัว)
+// ตอนนี้จึงอ่านที่เดียวกับที่หน้าเว็บอ่าน โดย office-server ซิงก์ชีทเข้า SQL ให้ทุกชั่วโมง (item-sync.js)
+//
+// Vercel ต่อ SQL Server ที่ออฟฟิศตรงไม่ได้ (ไฟร์วอลล์เปิดให้เฉพาะ IP ในไทย) จึงเดินผ่าน
+// office-server เหมือน /api/schedule และ /api/stockcount
+const REGISTRY_TTL_MS = 10 * 60 * 1000;
+let registryCache = { at: 0, map: null, units: null };
 
-async function loadSheetMaps() {
-  // แคช 10 นาที กันยิงชีทซ้ำทุกครั้งที่สั่งของ
-  if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache;
-  const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
-  const txt = await fetchSheet(url).then(r => r.text());
-  const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
-  if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
-  const json = JSON.parse(txt.slice(s, e + 1));
-  const map = new Map();   // รหัสสินค้า → itemid (K)
-  const units = {};        // รหัสสินค้า → หน่วยเบิก (L)
-  for (const row of json.table.rows || []) {
-    const cell = i => (row.c && row.c[i] ? row.c[i].v : null);
-    const code = String(cell(0) ?? '').trim();
+/** รหัสที่ normalize แล้ว — ให้ตรงกับ item_key ใน SQL (ตัด .0 ท้าย + 0 นำหน้า) */
+const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
+
+async function loadItemRegistry() {
+  // แคช 10 นาที กันยิงข้ามประเทศซ้ำทุกครั้งที่สั่งของ (ทะเบียนเปลี่ยนวันละไม่กี่ครั้ง)
+  if (registryCache.map && Date.now() - registryCache.at < REGISTRY_TTL_MS) return registryCache;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (process.env.USAGE_API_TOKEN) headers['x-api-token'] = process.env.USAGE_API_TOKEN;
+  // _user เป็นตัวแทนของ endpoint นี้เอง (ทะเบียนสินค้าไม่แยกตามสาขาอยู่แล้ว) เหมือนที่ /api/stockcount ทำ
+  const r = await fetchUpstream(`${USAGE_API_BASE}/schedule`, {
+    method: 'POST',
+    headers,
+    timeoutMs: 12000,
+    retries: 1,
+    deadlineMs: 26000,
+    body: JSON.stringify({ action: 'getItemRegistry', _user: { username: 'insert-order-api', branch: 'all' } }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!body) throw new Error(`เซิร์ฟเวอร์ที่ออฟฟิศตอบกลับมาไม่ใช่ JSON (HTTP ${r.status})`);
+  if (body.status !== 'success') throw new Error(body.message || `อ่านทะเบียนสินค้าไม่ได้ (HTTP ${r.status})`);
+
+  const map = new Map();   // รหัสสินค้า → itemid
+  const units = {};        // รหัสสินค้า → หน่วยเบิก
+  for (const it of (Array.isArray(body.data) ? body.data : [])) {
+    const code = String(it.code ?? '').trim();
     if (!code) continue;
-    const id = Number(cell(10));
-    if (id) map.set(code, id);
-    const u = Number(cell(11));
+    const id = Number(it.itemId) || 0;
+    if (id) {
+      map.set(code, id);
+      // เผื่อรหัสที่ส่งมามี 0 นำหน้าไม่ตรงกับที่เก็บไว้ — เส้นทางนี้เป็นตัวสำรองอยู่แล้ว ใส่ไว้ทั้งสองแบบ
+      map.set(normCode(code), id);
+    }
+    const u = Number(it.requestUnit) || 0;
+    // หน่วยเบิกคีย์ด้วยรหัสดิบอย่างเดียว — หน้าเว็บค้นด้วย productId ซึ่งมาจากคอลัมน์เดียวกันเป๊ะ
     if (u > 0) units[code] = u;
   }
-  if (map.size === 0) throw new Error('ชีทรายการสินค้าไม่มีข้อมูล itemid (คอลัมน์ K)');
-  sheetCache = { at: Date.now(), map, units };
-  return sheetCache;
+  if (map.size === 0) throw new Error('ทะเบียนสินค้าไม่มี itemid สักรายการ (คอลัมน์ K ของชีท item)');
+
+  registryCache = { at: Date.now(), map, units };
+  return registryCache;
 }
 
-async function sheetItemIdMap() {
-  return (await loadSheetMaps()).map;
+async function itemIdMap() {
+  return (await loadItemRegistry()).map;
 }
 
 // เวลาไทย (Vercel รันเป็น UTC)
@@ -86,10 +111,10 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ---- โหมดหน่วยเบิก: คืนแมพ รหัสสินค้า → หน่วยเบิก (คอลัมน์ L ของชีท item) ----
+  // ---- โหมดหน่วยเบิก: คืนแมพ รหัสสินค้า → หน่วยเบิก (stock_item.request_unit) ----
   if (req.method === 'GET' && req.query.units) {
     try {
-      const { units } = await loadSheetMaps();
+      const { units } = await loadItemRegistry();
       return res.status(200).json({ status: 'success', count: Object.keys(units).length, units });
     } catch (e) {
       return res.status(500).json({ status: 'error', message: e.message });
@@ -144,15 +169,15 @@ export default async function handler(req, res) {
 
   const conn = await getPool().getConnection();
   try {
-    // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา — ลำดับ: ชีทคอลัมน์ K → รหัสสินค้าใน POS
+    // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา — ลำดับ: ทะเบียนสินค้า (SQL) → รหัสสินค้าใน POS
     if (clean.some(it => !it.itemId)) {
       try {
-        const fromSheet = await sheetItemIdMap();
+        const fromRegistry = await itemIdMap();
         for (const it of clean) {
-          if (!it.itemId) it.itemId = fromSheet.get(it.itemCode) || 0;
+          if (!it.itemId) it.itemId = fromRegistry.get(it.itemCode) || fromRegistry.get(normCode(it.itemCode)) || 0;
         }
       } catch (e) {
-        console.error('อ่าน itemid จากชีทไม่สำเร็จ:', e.message);
+        console.error('อ่าน itemid จากทะเบียนสินค้าไม่สำเร็จ:', e.message);
       }
     }
 
@@ -173,7 +198,7 @@ export default async function handler(req, res) {
     if (noItemId.length) {
       return res.status(400).json({
         status: 'error',
-        message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item`,
+        message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item แล้วรอรอบซิงก์ (หรือสั่งซิงก์เอง)`,
         missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
       });
     }

@@ -29,6 +29,8 @@ const READ_ONLY = new Set([
   // หน้านับสต๊อก (ยังไม่เปิดใช้จากหน้าเว็บ — ดู docs/stock-sql-migration.md)
   'getStockItems',
   'getStockTotal',
+  'getItemPrices',
+  'getItemRegistry',
   'stockStatus',
   'getAvgPerHead',
   'getBranchPercent',

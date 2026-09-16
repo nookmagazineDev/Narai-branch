@@ -9,6 +9,7 @@ import natUpnp from 'nat-upnp';
 import sql from 'mssql';
 import { scheduleHandler } from './schedule.js';
 import { branchGroup } from './hr-session.js';
+import { syncItemsQuietly } from './item-sync.js';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
@@ -912,5 +913,14 @@ app.listen(PORT, async () => {
   if (process.env.UPNP !== 'off') { openPortViaUpnp(PORT); setInterval(() => openPortViaUpnp(PORT), 30 * 60 * 1000); }
   try { await loadSheets(); } catch (e) { console.log('โหลดสูตรล้มเหลว: ' + e.message); }
   setInterval(() => loadSheets().catch(() => {}), 6 * 60 * 60 * 1000); // รีเฟรชสูตรทุก 6 ชม.
+
+  // ทะเบียนสินค้า (ชีท item -> dbo.stock_item) — ทุกหน้าที่แสดงชื่อ/ราคา/itemid อ่านจากตารางนั้น
+  // ทุกชั่วโมงเพราะจัดซื้อเพิ่มของระหว่างวันแล้วสาขาต้องเบิกได้ในวันเดียวกัน ถ้าช้ากว่านี้จะมีคนโทรตาม
+  // รอบที่ชีทไม่มีอะไรเปลี่ยนจะไม่เขียนฐานข้อมูลเลย (ดู item-sync.js) จึงตั้งถี่ได้โดยไม่เปลืองอะไร
+  if (process.env.ITEM_SYNC !== 'off') {
+    syncItemsQuietly();
+    setInterval(() => syncItemsQuietly(), 60 * 60 * 1000);
+  }
+
   warmCache(); // อุ่น cache เบื้องหลัง
 });

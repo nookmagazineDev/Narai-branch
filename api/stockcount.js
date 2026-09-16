@@ -1,7 +1,7 @@
 import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 // มูลค่าสต๊อกคงเหลือรายเดือน
-//   - ยอดนับ + ยอดปิดรอบสิ้นเดือน: อ่านจาก SQL Server (InventoryNarai) ผ่าน office-server
-//   - ราคากลาง (ชีท "8.2") และรายจ่าย Supplier (ชีท "ต้นทุนจากsup"): ยังเป็นชีทที่คนกรอกเอง
+//   - ยอดนับ + ยอดปิดรอบสิ้นเดือน + ราคาต่อหน่วย: อ่านจาก SQL Server (InventoryNarai) ผ่าน office-server
+//   - รายจ่าย Supplier (ชีท "ต้นทุนจากsup"): ยังเป็นชีทที่คนกรอกเอง
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
 //   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data}, supCost }
 //   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
@@ -9,8 +9,6 @@ import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 //     ถ้าเดือนนั้นยังไม่มีใครกดปิดยอดเลย fallback ไปใช้ยอดนับสต๊อกล่าสุดในเดือนนั้นแทน
 //     กันหน้า dashboard โชว์ 0 เปล่าๆ ระหว่างรอทีมงานกดปิดยอด (ปกติบันทึกกันภายในต้นเดือนถัดไป ไม่เกินวันที่ 5)
 
-const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
-const PRICE_SHEET = '8.2';     // ชีทราคากลาง [0]รหัส [1]ชื่อ [2]ราคา [3]หน่วย (ถ้ามี)
 // ชีทรายจ่ายจาก Supplier (คนละสเปรดชีต) — [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
 const SUP_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
 const SUP_SHEET = 'ต้นทุนจากsup';
@@ -107,6 +105,33 @@ function closingMonthValue(rows, targetMonth) {
   const data = Object.values(map).sort((a, b) => b.value - a.value);
   const total = data.reduce((sum, it) => sum + it.value, 0);
   return { countDate: latestDate, total, data };
+}
+
+/**
+ * ราคาต่อหน่วยของสินค้าทุกตัว: รหัส (normalize แล้ว) -> ราคา
+ *
+ * มาจากทะเบียนสินค้า dbo.stock_item คอลัมน์ price (= ราคาช่อง C ของชีท item) แทนชีทราคากลาง '8.2'
+ * ที่เคยอ่าน — ชีทนั้นเป็นสำเนาที่คนคัดลอกราคามาอีกที ของใหม่ที่ยังไม่มีใครเติมลงชีทจะถูกคิดเป็น
+ * 0 บาท (ขึ้น priced:false ในตาราง) ทั้งที่ทะเบียนมีราคาอยู่แล้ว — เหตุผลเดียวกับที่หน้ากรอกรายจ่าย
+ * ย้ายมาอ่านทะเบียนตัวจริงไปก่อนหน้านี้
+ *
+ * ใช้ทั้งทะเบียน ไม่กรองสาขาและไม่ตัด 'ปิดการใช้งาน' เพราะต้องตีราคา "ของที่นับไปแล้ว" ซึ่งรวมของที่
+ * เพิ่งเลิกใช้ระหว่างเดือนด้วย (ชีท 8.2 ที่แทนที่ก็เป็นราคารวมทุกสาขาเหมือนกัน)
+ *
+ * แคชไว้ในอินสแตนซ์ 10 นาที เพราะหน้า Dashboard เรียก endpoint นี้ทีละหลายสาขาพร้อมกัน แต่ทะเบียน
+ * เป็นก้อนเดียวกันทุกสาขาและเปลี่ยนวันละไม่กี่ครั้ง (office-server ซิงก์จากชีทชั่วโมงละครั้ง)
+ */
+let priceCache = { at: 0, map: null };
+async function itemPriceMap() {
+  if (priceCache.map && Date.now() - priceCache.at < 10 * 60 * 1000) return priceCache.map;
+  const rows = await callOffice('getItemRegistry', {});
+  const map = {};
+  for (const it of (rows || [])) {
+    const code = normCode(it.key || it.code);
+    if (code) map[code] = Number(it.price) || 0;
+  }
+  priceCache = { at: Date.now(), map };
+  return map;
 }
 
 async function fetchGviz(url) {
@@ -239,35 +264,24 @@ export default async function handler(req, res) {
 
   const curMonth = endStr.slice(0, 7);
   const preMonth = prevMonth(curMonth);
-  const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json`;
   const supBase = `https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    // ยอดนับกับยอดปิดรอบมาจาก SQL (ผ่าน office-server) ส่วนราคากลางกับรายจ่าย Supplier
-    // ยังเป็นชีทที่คนกรอกเอง จึงยังอ่านจากชีทเหมือนเดิม
-    const [stockRows, priceJ, supJ, closingRows] = await Promise.all([
+    // ยอดนับ ยอดปิดรอบ และราคาต่อหน่วย มาจาก SQL (ผ่าน office-server)
+    // เหลือรายจ่าย Supplier ที่ยังเป็นชีทที่คนกรอกเอง จึงยังอ่านจากชีทเหมือนเดิม
+    const [stockRows, priceMap, supJ, closingRows] = await Promise.all([
       // ดึงเฉพาะช่วงที่ใช้จริง: ตั้งแต่ต้นเดือนก่อนหน้า ถึงวันที่เลือก
       callOffice('getStockCountRows', {
         branch: branchKey,
         from: `${preMonth}-01`,
         to: /^\d{4}-\d{2}-\d{2}$/.test(endStr) ? endStr : null,
       }),
-      fetchGviz(`${base}&sheet=${encodeURIComponent(PRICE_SHEET)}`),
+      itemPriceMap(),
       // ชีทรายจ่ายจาก Supplier "ต้นทุนจากsup" (คนละไฟล์) — ไม่มี/อ่านไม่ได้ก็คิดเป็น 0
       fetchGviz(`${supBase}&sheet=${encodeURIComponent(SUP_SHEET)}`).catch(() => null),
       // ยอดปิดรอบสิ้นเดือน — ใช้เป็นแหล่งหลักของ "เดือนที่แล้ว" ไม่มีข้อมูลก็ถอยไปใช้ยอดนับแทน
       callOffice('getMonthEndRows', { branch: branchKey }).catch(() => []),
     ]);
-
-    // ราคากลางจากชีท 8.2: รหัส -> ราคา/หน่วย
-    const priceMap = {};
-    for (const rw of (priceJ.table.rows || [])) {
-      const c = rw.c || [];
-      const code = normCode(c[0] && c[0].v);
-      if (!code) continue;
-      const price = Number(c[2] && c[2].v);
-      if (!Number.isNaN(price)) priceMap[code] = price;
-    }
 
     // แถวการนับของสาขานี้ — office-server กรองสาขาและเรียงตามเวลาที่นับมาให้แล้ว
     const brRows = (stockRows || []).filter((r) => r.date);
