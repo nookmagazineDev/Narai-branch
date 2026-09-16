@@ -133,9 +133,17 @@ async function getStockItems(body, session) {
            ON last_one.request_id = r.request_id`,
       branchParam
     ),
+    // หมวดจัดเก็บ: อ่านครอบรหัสพี่น้อง (zjp/sjp) เหมือนค่าตั้งเบิก ของเก่าที่บันทึกไว้ใต้อีกรหัส
+    // จึงยังเห็น — เรียงให้แถวของ "รหัสที่ขอมา" มาท้ายสุด เพื่อให้ชนะตอนยัดลง Map ถ้ามีทั้งสองรหัส
     queryRead(
-      `SELECT item_key, category FROM dbo.stock_storage_category WHERE branch = @branch`,
-      branchParam
+      `SELECT item_key, category FROM dbo.stock_storage_category
+        WHERE branch IN (@b0, @b1)
+        ORDER BY CASE WHEN branch = @branch THEN 1 ELSE 0 END`,
+      {
+        ...branchParam,
+        b0: { type: sql.NVarChar(50), value: branchAliases(branch)[0] },
+        b1: { type: sql.NVarChar(50), value: branchAliases(branch)[1] || branch },
+      }
     ),
   ]);
 
@@ -551,8 +559,13 @@ async function updateStorageCategory(body, session) {
   const key = normCode(code);
   if (!branch || !key) throw badRequest('ไม่ระบุสาขาหรือรหัสสินค้า');
 
+  // แถวเก่าของสาขานี้อาจถูกบันทึกไว้ใต้ชื่อ sjp หรือ zjp — เก็บให้เหลือชุดเดียวตามที่ส่งมา
+  // (เหตุผลเดียวกับ saveAvgPerHead: ฝั่งอ่านครอบทั้งกลุ่ม ถ้ามีสองแถวค่าเก่าจะกลบค่าใหม่ได้)
   await runSql(
-    `MERGE dbo.stock_storage_category AS t
+    `DELETE FROM dbo.stock_storage_category
+      WHERE item_key = @item_key AND branch IN (@b0, @b1) AND branch <> @branch;
+
+     MERGE dbo.stock_storage_category AS t
      USING (SELECT @branch AS branch, @item_key AS item_key) AS s
        ON t.branch = s.branch AND t.item_key = s.item_key
      WHEN MATCHED THEN UPDATE SET
@@ -561,6 +574,8 @@ async function updateStorageCategory(body, session) {
        VALUES (@branch, @item_key, @item_code, @item_name, @category);`,
     {
       branch: { type: sql.NVarChar(50), value: branch },
+      b0: { type: sql.NVarChar(50), value: branchAliases(branch)[0] },
+      b1: { type: sql.NVarChar(50), value: branchAliases(branch)[1] || branch },
       item_key: { type: sql.NVarChar(50), value: key },
       item_code: { type: sql.NVarChar(50), value: code },
       item_name: { type: sql.NVarChar(255), value: str(body.name) || null },
@@ -689,19 +704,33 @@ async function saveBranchPercentagesBulk(body, session) {
       const p359 = split ? (Number(u.percent359) || 0) : null;
       const percent = split ? p259 + p359 : (Number(u.percent) || 0);
 
+      // สาขาที่มีสองรหัส (zjp/sjp) ต้องเหลือแถวเดียวต่อวัน เพราะฝั่งอ่าน (getBranchPercent)
+      // ดึงครอบทั้งกลุ่มแล้วให้แถวหลังทับแถวหน้า ถ้าปล่อยให้มีทั้งสองรหัส ค่าเก่าใต้รหัสอีกตัว
+      // จะกลบค่าที่เพิ่งบันทึกได้ (ลำดับที่ SQL คืนมาไม่การันตี) กลายเป็น "แอดมินแก้แล้วสาขาไม่เปลี่ยนตาม"
+      // กติกาเดียวกับค่าตั้งเบิก (ดู saveAvgPerHead) — สาขารหัสเดียว @b0 = @b1 = @branch จึงไม่มีอะไรถูกลบเพิ่ม
+      const alias = branchAliases(branch);
       const params = {
         percent_date: { type: sql.NVarChar(10), value: date },
         branch: { type: sql.NVarChar(50), value: branch },
+        b0: { type: sql.NVarChar(50), value: alias[0] },
+        b1: { type: sql.NVarChar(50), value: alias[1] || alias[0] },
       };
       if (percent <= 0) {
+        // สั่งลบวันนั้น = ต้องลบให้หมดทุกรหัสในกลุ่ม ไม่งั้นค่าเก่าใต้รหัสพี่น้องจะโผล่กลับมา
         await run(
           `DELETE FROM dbo.stock_branch_percent
-            WHERE percent_date = CONVERT(DATE, @percent_date, 120) AND branch = @branch`,
+            WHERE percent_date = CONVERT(DATE, @percent_date, 120) AND branch IN (@b0, @b1)`,
           params
         );
         deleted++;
         continue;
       }
+      await run(
+        `DELETE FROM dbo.stock_branch_percent
+          WHERE percent_date = CONVERT(DATE, @percent_date, 120)
+            AND branch IN (@b0, @b1) AND branch <> @branch`,
+        params
+      );
       await run(
         `MERGE dbo.stock_branch_percent AS t
          USING (SELECT CONVERT(DATE, @percent_date, 120) AS percent_date, @branch AS branch) AS s

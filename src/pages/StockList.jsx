@@ -417,6 +417,45 @@ export default function StockList() {
     }
   }, [effectiveBranch]);
 
+  /**
+   * ค่าที่ "แอดมินสิทธิ์ all แก้ให้" (จำนวนหัวลูกค้า + ค่าตั้งเบิก) — ดึงใหม่ให้เองเมื่อกลับมาที่แท็บ
+   *
+   * เครื่องสาขามักเปิดหน้านับสต๊อกค้างไว้ทั้งวัน ส่วน loadData/loadSpecialPcts ยิงแค่ตอนเปิดหน้า
+   * (useEffect ผูกกับสาขา) ผลคือแอดมินแก้ค่าให้แล้วหน้าสาขายังโชว์ตัวเลขเก่าจนกดรีเฟรช
+   * — อาการ "หน้าแอดมินแก้แล้วหน้าสาขาไม่แก้ตาม"
+   *
+   * ทำเฉพาะผู้ใช้ที่แก้ค่าเหล่านี้ไม่ได้ (สาขา) เพราะถ้าทำกับแอดมินด้วย ค่าที่กำลังพิมพ์ค้างไว้
+   * ในปฏิทินจะถูกของจากเซิร์ฟเวอร์ทับตอนสลับแท็บ
+   *
+   * อัปเดตเฉพาะฟิลด์ค่าตั้งเบิกของแต่ละสินค้า ไม่แตะ remaining/requested ที่สาขากรอกค้างไว้
+   * (จึงไม่เรียก loadData ซึ่งเซ็ต items ใหม่ทั้งชุดและล้างสิ่งที่กรอกไปแล้ว)
+   */
+  useEffect(() => {
+    if (canEditCovers) return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || !effectiveBranch) return;
+      loadSpecialPcts(effectiveBranch);
+      tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`)
+        .then((res) => {
+          if (res?.status !== 'success') return;
+          const avgMap = res.data || {}, modeMap = res.modes || {}, parMap = res.par || {};
+          setItems(prev => prev.map(item => {
+            const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
+            return {
+              ...item,
+              avgPerHead: avgMap[nid] !== undefined ? Number(avgMap[nid]) : undefined,
+              calcMode: modeMap[nid] === 'par' ? 'par' : 'avg',
+              parQty: parMap[nid] !== undefined ? Number(parMap[nid]) : undefined,
+            };
+          }));
+        })
+        .catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveBranch, canEditCovers]);
+
   useEffect(() => {
     const newMap = {}, new259 = {}, new359 = {};
     specialPcts.forEach(item => {
