@@ -36,6 +36,13 @@ const READ_ONLY = new Set([
   'getMonthEndClosing',
   'getMonthEndRows',
   'getStockCountRows',
+  // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
+  'getStoreReceivingStatus',
+  'getStoreFetchedLog',
+  'getStoreCancelledDocs',
+  'getStoreFulfillmentDetail',
+  'getStoreReceivingDetail',
+  'getStorePendingEditApprovals',
 ]);
 
 export default async function handler(req, res) {
