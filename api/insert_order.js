@@ -23,6 +23,10 @@ const SUP_ID = 490;      // คลังกลางที่จ่ายขอ�
 const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา (ใช้ทั้ง Ord_ReqType และ Inv_Type)
 const BATCH_ID = 1;      // Inv_BatchID
 
+// รหัสสินค้าให้เทียบกันได้ข้ามแหล่ง — ชุดเดียวกับ api/stockcount.js และ scripts/migrate-stock.mjs
+// ('0011100100' / '11100265.0' / '11100265 ' ล้วนเป็นสินค้าตัวเดียวกับรหัสฐาน)
+const normCode = (c) => String(c == null ? '' : c).trim().replace(/\.0+$/, '').replace(/^0+/, '');
+
 // ชีท item (ไฟล์ BOM) — A=รหัสสินค้า, K=itemid ที่ใช้เป็น Ord_ItmID, L=หน่วยเบิก
 // อ่านตรงจากชีทเลย จะได้ไม่ต้องรอ Apps Script ส่ง itemId มาให้
 const ITEM_SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
@@ -32,7 +36,9 @@ let sheetCache = { at: 0, map: null, units: null };
 async function loadSheetMaps() {
   // แคช 10 นาที กันยิงชีทซ้ำทุกครั้งที่สั่งของ
   if (sheetCache.map && Date.now() - sheetCache.at < 10 * 60 * 1000) return sheetCache;
-  const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
+  // headers=0 ให้ตรงกับ scripts/migrate-stock.mjs — ไม่ใส่แล้ว gviz จะเดาชนิดคอลัมน์เป็นตัวเลข
+  // แล้วคืน v:null ให้รหัสที่พิมพ์เป็นข้อความ ทำให้สินค้าพวกนั้นหายไปจากแมพทั้งที่มีในชีท
+  const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&headers=0&gid=${ITEM_SHEET_GID}`;
   const txt = await fetchSheet(url).then(r => r.text());
   const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
   if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
@@ -43,10 +49,20 @@ async function loadSheetMaps() {
     const cell = i => (row.c && row.c[i] ? row.c[i].v : null);
     const code = String(cell(0) ?? '').trim();
     if (!code) continue;
-    const id = Number(cell(10));
-    if (id) map.set(code, id);
-    const u = Number(cell(11));
-    if (u > 0) units[code] = u;
+    const key = normCode(code);
+    // headers=0 ทำให้ gviz มองคอลัมน์เป็นข้อความ ตัวเลขจึงอาจมาพร้อมคอมมา/ช่องว่าง — ตัดทิ้งก่อนแปลง
+    const toNum = (v) => Number(String(v ?? '').replace(/[,\s]/g, ''));
+    const id = toNum(cell(10));
+    // ใส่ทั้งรหัสดิบและรหัส normalize — ฝั่งที่มาเรียกเขียนรหัสคนละรูปกันได้ (ศูนย์นำหน้า / '.0' ท้าย)
+    if (id) {
+      map.set(code, id);
+      if (key) map.set(key, id);
+    }
+    const u = toNum(cell(11));
+    if (u > 0) {
+      units[code] = u;
+      if (key) units[key] = u;
+    }
   }
   if (map.size === 0) throw new Error('ชีทรายการสินค้าไม่มีข้อมูล itemid (คอลัมน์ K)');
   sheetCache = { at: Date.now(), map, units };
@@ -145,36 +161,56 @@ export default async function handler(req, res) {
   const conn = await getPool().getConnection();
   try {
     // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา — ลำดับ: ชีทคอลัมน์ K → รหัสสินค้าใน POS
+    let sheetError = '';
     if (clean.some(it => !it.itemId)) {
       try {
         const fromSheet = await sheetItemIdMap();
         for (const it of clean) {
-          if (!it.itemId) it.itemId = fromSheet.get(it.itemCode) || 0;
+          if (!it.itemId) it.itemId = fromSheet.get(it.itemCode) || fromSheet.get(normCode(it.itemCode)) || 0;
         }
       } catch (e) {
+        // อ่านชีทไม่ได้ ≠ คอลัมน์ K ว่าง — เก็บสาเหตุไว้บอกให้ตรงจุด ไม่งั้นจะไล่ให้ไปแก้ผิดที่
+        sheetError = e.message;
         console.error('อ่าน itemid จากชีทไม่สำเร็จ:', e.message);
       }
     }
 
     // สำรองชั้นสุดท้าย: หาจากรหัสสินค้าใน POS (ใช้เฉพาะรหัสที่ชี้ไปสินค้าตัวเดียว)
+    // ส่งเข้าไปทั้งรหัสดิบและรหัสที่ตัดศูนย์นำหน้า แล้วจับคู่ผลลัพธ์ด้วยรหัส normalize
+    // เพราะ POS กับชีทเขียนศูนย์นำหน้าไม่ตรงกันอยู่บ่อยๆ
     const needLookup = clean.filter(it => !it.itemId && it.itemCode);
     if (needLookup.length) {
+      const candidates = [...new Set(needLookup.flatMap(it => [it.itemCode, normCode(it.itemCode)]).filter(Boolean))];
       const [found] = await conn.query(
         'SELECT Itm_Code code, MIN(Itm_ID) id, COUNT(*) n FROM item WHERE Itm_Code IN (?) GROUP BY Itm_Code HAVING n = 1',
-        [needLookup.map(it => it.itemCode)]
+        [candidates]
       );
-      const map = new Map(found.map(r => [String(r.code).trim(), Number(r.id)]));
+      const map = new Map(found.map(r => [normCode(r.code), Number(r.id)]));
       for (const it of clean) {
-        if (!it.itemId) it.itemId = map.get(it.itemCode) || 0;
+        if (!it.itemId) it.itemId = map.get(normCode(it.itemCode)) || 0;
       }
     }
 
-    const noItemId = clean.filter(it => !it.itemId);
-    if (noItemId.length) {
+    // ── ส่งเท่าที่ส่งได้ ──
+    // เดิมมีรายการเดียวที่หา itemId ไม่เจอก็ตีกลับทั้งใบ ของที่เหลือเลยไม่ได้สั่งไปด้วย
+    // ตอนนี้ส่งรายการที่พร้อมเข้า POS ก่อน ส่วนที่เหลือคืนกลับไปให้หน้าเว็บบันทึกค้างไว้ที่ SQL Server
+    const sendable = clean.filter(it => it.itemId);
+    const skipped = clean.filter(it => !it.itemId);
+    const skippedPayload = skipped.map(it => ({
+      itemCode: it.itemCode, itemName: it.itemName, qty: it.qty, unit: it.unit, price: it.price,
+    }));
+    const skipReason = sheetError
+      ? `อ่านชีทรายการสินค้าไม่ได้ (${sheetError})`
+      : 'ไม่มี itemId — ต้องเติมคอลัมน์ K ในชีท item';
+
+    if (sendable.length === 0) {
+      // ไม่มีอะไรส่งได้เลย — ไม่จองเลขใบเบิกทิ้งไว้ ให้หน้าเว็บเก็บลง SQL Server อย่างเดียว
       return res.status(400).json({
         status: 'error',
-        message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item`,
-        missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
+        code: 'NO_ITEM_ID',
+        message: `ส่งเข้า POS ไม่ได้สักรายการ (${skipReason})`,
+        missing: skipped.map(it => `${it.itemCode} ${it.itemName}`),
+        missingItems: skippedPayload,
       });
     }
 
@@ -187,7 +223,7 @@ export default async function handler(req, res) {
     const shift = now.hour < 15 ? 1 : 3;
     const oid = Number(outletId);
 
-    const buildRows = (ordNo) => clean.map((it, idx) => [
+    const buildRows = (ordNo) => sendable.map((it, idx) => [
       ordNo, oid, idx + 1, deldate, SUP_ID, now.date,
       it.itemId, it.qty, it.unit, it.price, 0, it.qty, 1,
       now.date, now.time, shift,
@@ -201,8 +237,10 @@ export default async function handler(req, res) {
       return res.status(200).json({
         status: 'success', dryRun: true, db, orderNo: next,
         message: `ทดสอบเท่านั้น — ไม่ได้บันทึกจริง (ใบถัดไปจะเป็นเลข ${next})`,
-        deldate, ordDate: now.date, count: clean.length,
-        preview: clean.slice(0, 5),
+        deldate, ordDate: now.date, count: sendable.length,
+        missing: skipped.map(it => `${it.itemCode} ${it.itemName}`),
+        missingItems: skippedPayload,
+        preview: sendable.slice(0, 5),
       });
     }
 
@@ -268,9 +306,15 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       status: 'success', orderNo, db, deldate, ordDate: now.date,
-      count: clean.length,
-      totalQty: Number(clean.reduce((s, i) => s + i.qty, 0).toFixed(3)),
-      message: `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${clean.length} รายการ เรียบร้อย`,
+      count: sendable.length,
+      totalQty: Number(sendable.reduce((s, i) => s + i.qty, 0).toFixed(3)),
+      // รายการที่ส่งเข้า POS ไม่ได้ — หน้าเว็บเอาไปบันทึกค้างไว้ที่ SQL Server ต่อ
+      missing: skipped.map(it => `${it.itemCode} ${it.itemName}`),
+      missingItems: skippedPayload,
+      skipReason: skipped.length ? skipReason : '',
+      message: skipped.length
+        ? `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${sendable.length} รายการ (อีก ${skipped.length} รายการส่งเข้า POS ไม่ได้)`
+        : `ส่งใบสั่งของเลขที่ ${orderNo} จำนวน ${sendable.length} รายการ เรียบร้อย`,
     });
   } catch (error) {
     return replyDbError(res, error, 'insert_order');

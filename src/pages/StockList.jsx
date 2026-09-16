@@ -701,6 +701,8 @@ export default function StockList() {
   //    จัดกลุ่มรายการตามหมวดสโตร์ (คอลัมน์ N ชีท item) ก่อน export เสมอ — ช่วยให้ตรวจของตามโซนคลังง่ายขึ้น
   //    doc.items ที่ส่งเข้ามาไม่มี storeCat ติดมา (มาจาก withdrawals/pending_orders API) ต้อง lookup จาก items state เอง
   const normCode = (v) => String(v ?? '').trim().replace(/^0+/, '').toLowerCase();
+  // รหัสรูปแบบเดียวกับ normCode ใน api/insert_order.js — ใช้ตอนเทียบกับข้อมูลที่มาจากชีท item
+  const posCode = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '');
 
   const groupDocItemsByStoreCat = (docItems) => {
     const catMap = {};
@@ -1099,7 +1101,8 @@ export default function StockList() {
         // ปัดเศษเป็นจำนวนเต็มตามหน่วยเบิก (คอลัมน์ L): เศษเกิน 30% ของหน่วย → ปัดขึ้น, ไม่เกิน → ปัดลง
         // เช่น หน่วยเบิก 5: คำนวณได้ 12 → 12/5=2.4 → ปัดขึ้น 3 → เบิก 15 | ได้ 10.5 → 2.1 → ปัดลง 2 → เบิก 10
         // ใช้กฎเดียวกันทั้งสองโหมด สาขาจะได้ไม่ต้องจำว่าของตัวไหนปัดคนละแบบ
-        const unitSize = Number(unitMap[String(currentItem.productId).trim()]) || 1;
+        const rawCode = String(currentItem.productId).trim();
+        const unitSize = Number(unitMap[rawCode] ?? unitMap[posCode(rawCode)]) || 1;
         const ratio = rawNeed / unitSize;
         const whole = Math.floor(ratio);
         const frac = ratio - whole;
@@ -1164,6 +1167,33 @@ export default function StockList() {
   const [orderDelDate, setOrderDelDate] = useState('');
   const [isOrdering, setIsOrdering] = useState(false);
   const [orderResult, setOrderResult] = useState(null); // [{ ok, label, no, count, deldate, message }] — 1 รายการต่อใบเบิกที่ส่ง
+  // รายการที่ POS ไม่รับแล้วถูกเก็บค้างไว้ที่ SQL Server — { count, docNo, reason, error, items }
+  const [parkedInfo, setParkedInfo] = useState(null);
+
+  // รายการที่ส่งเข้า POS ไม่ได้ (ไม่มี itemId / อ่านชีท item ไม่ได้) ต้องไม่หายไปเฉยๆ
+  // บันทึกค้างไว้ที่ SQL Server ผ่าน saveStock เดิม — ลงตาราง dbo.stock_request พร้อมเลขที่ใบเบิกของตัวเอง
+  // ส่งเฉพาะ requested ไม่ส่ง remaining จึงไม่มีแถวยอดนับ (dbo.stock_count) งอกตามมา
+  // *** ของชั่วคราว *** เอาออกได้เมื่อ pos_item_id ใน SQL ครบและซิงก์กับชีทแล้ว
+  const parkMissingToSql = async (missingItems, delDate) => {
+    if (!Array.isArray(missingItems) || missingItems.length === 0) return null;
+    const res = await apiCall('saveStock', {
+      branch: effectiveBranch || 'Unknown',
+      username: user?.username || 'Unknown',
+      counterName: '',
+      requestDate: delDate || '',
+      requesterName: user?.username || '',
+      items: missingItems.map(it => ({
+        productId: it.itemCode,
+        itemCode: it.itemCode,
+        name: it.itemName,
+        unit: it.unit,
+        remaining: '',
+        requested: Number(it.qty) || 0,
+      })),
+    }, { timeoutMs: 60000, deadlineMs: 65000 });
+    if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกลง SQL Server ไม่สำเร็จ');
+    return res;
+  };
 
   const submitOrder = async () => {
     if (!orderDelDate) { toast.error('กรุณาเลือกวันที่รับสินค้า'); return; }
@@ -1182,7 +1212,10 @@ export default function StockList() {
 
     setIsOrdering(true);
     setOrderResult(null);
+    setParkedInfo(null);
     const results = [];
+    const parked = [];   // รายการที่ POS ไม่รับ — รวมทุกใบแล้วบันทึกลง SQL Server รอบเดียว
+    let parkReason = '';
     for (const g of groups) {
       const payloadItems = g.items.map(i => ({
         itemId: i.itemId,
@@ -1199,8 +1232,18 @@ export default function StockList() {
           body: JSON.stringify({ outletId, branch: effectiveBranch, deldate: orderDelDate, items: payloadItems }),
         });
         const data = await res.json();
+        if (Array.isArray(data.missingItems) && data.missingItems.length) {
+          parked.push(...data.missingItems);
+          if (data.skipReason && !parkReason) parkReason = data.skipReason;
+        }
         if (data.status === 'success') {
-          results.push({ ok: true, label: g.label, no: data.orderNo, count: data.count, deldate: data.deldate });
+          results.push({
+            ok: true, label: g.label, no: data.orderNo, count: data.count, deldate: data.deldate,
+            missing: Array.isArray(data.missing) ? data.missing : [],
+          });
+        } else if (data.code === 'NO_ITEM_ID') {
+          // ทั้งใบส่งเข้า POS ไม่ได้ — ไม่ใช่ความผิดพลาดที่ต้องให้สาขากดใหม่ ของถูกเก็บลง SQL Server แทน
+          results.push({ ok: false, parked: true, label: g.label, message: data.message || 'ส่งเข้า POS ไม่ได้' });
         } else {
           const detail = Array.isArray(data.missing) && data.missing.length
             ? `${data.message}\n${data.missing.slice(0, 5).join('\n')}`
@@ -1211,15 +1254,32 @@ export default function StockList() {
         results.push({ ok: false, label: g.label, message: err.message });
       }
     }
+    // เก็บรายการที่ POS ไม่รับ ลง SQL Server ก่อนสรุปผล
+    let parkedDocNo = '';
+    let parkError = '';
+    if (parked.length) {
+      try {
+        const pr = await parkMissingToSql(parked, orderDelDate);
+        parkedDocNo = pr?.data?.requisitionNo || '';
+      } catch (e) {
+        parkError = e.message || 'บันทึกลง SQL Server ไม่สำเร็จ';
+      }
+    }
+    setParkedInfo(parked.length
+      ? { count: parked.length, docNo: parkedDocNo, reason: parkReason, error: parkError, items: parked }
+      : null);
+
     setOrderResult(results);
     setIsOrdering(false);
 
     const okResults = results.filter(r => r.ok);
-    if (okResults.length === results.length) {
+    // มีของตกค้าง = ต้องให้สาขาเห็นก่อน ไม่เด้งกลับหน้าหลักแม้ใบที่ส่งได้จะสำเร็จหมด
+    if (parked.length === 0 && okResults.length === results.length) {
       // สำเร็จครบทุกใบ — ปิดหน้าต่างแล้วเด้งกลับหน้าจอหลักทันที
       // เลขที่ใบเบิกส่งไปกับ location.state ให้หน้าหลักขึ้นแถบ "ส่งสำเร็จแล้ว" พร้อมเลขที่ใบ
       setShowOrderModal(false);
       setOrderResult(null);
+      setParkedInfo(null);
       navigate('/', {
         state: {
           orderSuccess: {
@@ -1233,7 +1293,12 @@ export default function StockList() {
       return;
     }
 
-    toast.error(`ส่งสำเร็จ ${okResults.length}/${results.length} ใบ — บางใบมีปัญหา ดูรายละเอียดด้านล่าง`);
+    if (parked.length && !parkError) {
+      toast(`ส่งเข้า POS ได้ ${okResults.length} ใบ — อีก ${parked.length} รายการเก็บไว้ที่ SQL Server แล้ว ดูรายละเอียดด้านล่าง`,
+        { icon: '⚠️', duration: 9000 });
+    } else {
+      toast.error(`ส่งสำเร็จ ${okResults.length} ใบ — บางรายการมีปัญหา ดูรายละเอียดด้านล่าง`);
+    }
     // ดึงใบเบิกค้างใหม่ ให้ใบที่เพิ่งสั่งขึ้นมาทันที
     try {
       const pj = await tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
@@ -1303,6 +1368,8 @@ export default function StockList() {
     setIsManualOrdering(true);
     setManualOrderResults(null);
     const results = [];
+    let parkedTotal = 0;
+    let parkedFailed = 0;
     for (const date of dates) {
       const rows = groups[date];
       try {
@@ -1315,8 +1382,20 @@ export default function StockList() {
           }),
         });
         const data = await res.json();
+        // รายการที่ POS ไม่รับ เก็บไว้ที่ SQL Server แยกตามวันที่รับ (เหมือนปุ่มสั่งของปกติ)
+        let parkedNote = '';
+        if (Array.isArray(data.missingItems) && data.missingItems.length) {
+          try {
+            const pr = await parkMissingToSql(data.missingItems, date);
+            parkedTotal += data.missingItems.length;
+            parkedNote = `เก็บไว้ที่ SQL Server ${data.missingItems.length} รายการ${pr?.data?.requisitionNo ? ` (เลขที่ใบเบิก ${pr.data.requisitionNo})` : ''} — ยังไม่เข้า POS`;
+          } catch (e) {
+            parkedFailed += data.missingItems.length;
+            parkedNote = `⚠️ ${data.missingItems.length} รายการส่งเข้า POS ไม่ได้ และบันทึกลง SQL Server ไม่สำเร็จ (${e.message})`;
+          }
+        }
         if (data.status === 'success') {
-          results.push({ deldate: date, ok: true, no: data.orderNo, count: data.count });
+          results.push({ deldate: date, ok: true, no: data.orderNo, count: data.count, parkedNote });
           // บันทึกสำเนาลงชีท "plan" ด้วย — ไม่บล็อกผลลัพธ์หลักถ้าเขียนชีทไม่สำเร็จ (SQL คือตัวจริงที่บันทึกไปแล้ว)
           try {
             await apiCall('savePlanOrderLog', {
@@ -1331,7 +1410,7 @@ export default function StockList() {
             console.error('บันทึกชีท plan ไม่สำเร็จ:', logErr);
           }
         } else {
-          results.push({ deldate: date, ok: false, message: data.message, missing: data.missing });
+          results.push({ deldate: date, ok: false, message: data.message, missing: data.missing, parkedNote });
         }
       } catch (err) {
         results.push({ deldate: date, ok: false, message: err.message });
@@ -1346,6 +1425,12 @@ export default function StockList() {
     // ลบเฉพาะรายการของวันที่สำเร็จออกจากตะกร้า เหลือเฉพาะวันที่ล้มเหลวไว้ให้แก้ไข/ลองใหม่
     setManualCart(prev => prev.filter(r => failedDates.has(r.delDate)));
 
+    if (parkedFailed) {
+      toast.error(`⚠️ ${parkedFailed} รายการส่งเข้า POS ไม่ได้ และบันทึกลง SQL Server ไม่สำเร็จ — ยังไม่ถูกบันทึกที่ไหนเลย กรุณาลองใหม่`, { duration: 12000 });
+    } else if (parkedTotal) {
+      toast(`${parkedTotal} รายการยังไม่เข้า POS (ไม่มี itemId) — เก็บไว้ที่ SQL Server แล้ว ต้องเติมคอลัมน์ K ในชีท item แล้วสั่งใหม่`,
+        { icon: '⚠️', duration: 12000 });
+    }
     if (okResults.length === results.length) {
       toast.success(`ส่งสำเร็จทั้งหมด ${okResults.length} ใบ (เลขที่ ${okResults.map(r => r.no).join(', ')})`, { duration: 8000 });
     } else if (okResults.length > 0) {
@@ -3112,7 +3197,29 @@ export default function StockList() {
                 </p>
               </div>
 
-              {orderResult && orderResult.every(r => r.ok) && (
+              {parkedInfo && (
+                <div className={`rounded-xl border-2 px-4 py-3 text-sm ${parkedInfo.error ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-amber-300 bg-amber-50 text-amber-800'}`}>
+                  {parkedInfo.error ? (
+                    <p className="font-semibold">⚠️ {parkedInfo.count} รายการส่งเข้า POS ไม่ได้ และบันทึกลง SQL Server ไม่สำเร็จ — ยังไม่ถูกบันทึกที่ไหนเลย กรุณาลองใหม่</p>
+                  ) : (
+                    <>
+                      <p className="font-semibold">
+                        {parkedInfo.count} รายการยังไม่เข้าระบบ POS — เก็บไว้ที่ SQL Server แล้ว
+                        {parkedInfo.docNo ? ` (เลขที่ใบเบิก ${parkedInfo.docNo})` : ''}
+                      </p>
+                      <p className="text-[11px] mt-1">{parkedInfo.reason || 'ไม่มี itemId'} — เติมคอลัมน์ K ในชีท item แล้วสั่งรายการเหล่านี้ใหม่อีกครั้ง</p>
+                    </>
+                  )}
+                  <ul className="mt-2 space-y-0.5 text-[11px] font-mono max-h-28 overflow-y-auto">
+                    {parkedInfo.items.map((it, idx) => (
+                      <li key={`${it.itemCode}-${idx}`}>{it.itemCode} {it.itemName} × {it.qty}</li>
+                    ))}
+                  </ul>
+                  {parkedInfo.error && <p className="text-[11px] mt-2 font-sans">{parkedInfo.error}</p>}
+                </div>
+              )}
+
+              {orderResult && !parkedInfo && orderResult.every(r => r.ok) && (
                 <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-4 py-3 text-center">
                   <p className="text-xs font-medium text-emerald-600">ส่งใบเบิกสำเร็จ • เลขที่ใบเบิก</p>
                   <p className="text-2xl font-bold font-mono text-emerald-700 my-1 tracking-wide">
@@ -3286,6 +3393,11 @@ export default function StockList() {
                             <div className="px-3 py-1.5 bg-rose-50 text-rose-700 text-[11px] border-t border-rose-100 whitespace-pre-line">
                               {dateResult.message}
                               {Array.isArray(dateResult.missing) && dateResult.missing.length > 0 && `\n${dateResult.missing.slice(0, 5).join('\n')}`}
+                            </div>
+                          )}
+                          {dateResult?.parkedNote && (
+                            <div className="px-3 py-1.5 bg-amber-50 text-amber-800 text-[11px] border-t border-amber-100 whitespace-pre-line">
+                              {dateResult.parkedNote}
                             </div>
                           )}
                         </div>
