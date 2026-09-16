@@ -1071,7 +1071,8 @@ function doPost(e) {
       response.data = items;
     } else if (action === 'saveSupCost') {
       // กรอกรายจ่าย (ต้นทุนจาก Supplier): บันทึกลงชีท "ต้นทุนจากsup"
-      // ราคา/หน่วยอ่านสดจากชีท 8.2 (ไฟล์สต๊อก) ฝั่ง server — client ส่งมาแค่ code/qty
+      // ราคา/หน่วยใช้ค่าที่หน้าเว็บส่งมา (อ่านจากทะเบียนสินค้าใน SQL Server มาแล้ว)
+      // ชีท 8.2 เหลือไว้เป็นทางถอยเมื่อรายการนั้นส่งราคามาไม่ครบ
       var supSs = SpreadsheetApp.openById('1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw');
       var supSheet = supSs.getSheetByName('ต้นทุนจากsup');
       if (!supSheet) {
@@ -1081,7 +1082,7 @@ function doPost(e) {
       }
 
       var supNorm = function (id) { return String(id == null ? '' : id).replace(/^0+/, '').trim(); };
-      // ราคาจากชีท 8.2: [0]=รหัส [2]=ราคา
+      // ราคาสำรองจากชีท 8.2: [0]=รหัส [2]=ราคา (ใช้เมื่อหน้าเว็บส่งราคามาไม่ครบเท่านั้น)
       var priceMap82 = {};
       var priceSheet = SpreadsheetApp.openById('1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ').getSheetByName('8.2');
       if (priceSheet) {
@@ -1132,13 +1133,19 @@ function doPost(e) {
         var q = parseFloat(it.qty);
         if (isNaN(q) || q <= 0) return;
         var codeN = supNorm(it.code);
-        // รายการที่กรอกราคาเอง (manualPrice เช่น น้ำแข็ง 11100100) ใช้ราคาที่ user กรอกเสมอ
-        // รายการปกติใช้ราคาจากชีท 8.2 (ถ้าไม่มีจึงใช้ราคาที่ส่งมา)
+        // ราคาที่หน้าเว็บส่งมาเป็นตัวหลักเสมอ — ทั้งราคาที่ user กรอกเอง (manualPrice เช่น
+        // น้ำแข็ง 11100100 และผักทุกแถว) และราคาจากทะเบียนสินค้าใน SQL ของรายการปกติ
+        // ก่อนหน้านี้เอาราคาชีท 8.2 มาทับรายการปกติเสมอ — พอหน้าเว็บย้ายไปอ่านราคาจาก SQL
+        // ตัวเลขที่เห็นตอนกรอกกับที่บันทึกลงชีทจะคนละตัวโดยไม่มีอะไรฟ้อง
+        var sentPrice = parseFloat(it.price);
         var unitPrice;
         if (it.manualPrice) {
-          unitPrice = parseFloat(it.price) || 0;
+          unitPrice = sentPrice || 0;
+        } else if (!isNaN(sentPrice) && sentPrice > 0) {
+          unitPrice = sentPrice;
         } else {
-          unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : (parseFloat(it.price) || 0);
+          // ส่งราคามาไม่ครบ (เช่น รายการที่ยังไม่มีในทะเบียนของสาขานั้น) — ถอยไปใช้ราคากลางในชีท
+          unitPrice = priceMap82[codeN] !== undefined ? priceMap82[codeN] : 0;
         }
         var amount = Math.round(q * unitPrice * 100) / 100;
         if (existRow[codeN]) {

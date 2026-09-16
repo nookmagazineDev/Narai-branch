@@ -124,30 +124,22 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  // โหมดราคาอย่างเดียว (?prices=1) — ใช้ในหน้ากรอกรายจ่าย: คืน code -> {name, price} จากชีท 8.2
+  // โหมดรายการสินค้า+ราคา (?prices=1&branch=xxx) — ใช้ในหน้ากรอกรายจ่าย
+  // คืน code -> {name, unit, price} จากทะเบียนสินค้าใน SQL (InventoryNarai.dbo.stock_item)
+  // ผ่าน office-server เหมือนข้อมูลสต๊อกอื่นๆ (Vercel ต่อ SQL ที่ออฟฟิศตรงไม่ได้)
+  //
+  // เดิมอ่านชีท 8.2 ตรงๆ ซึ่งเป็นสำเนาที่คนคัดลอกมาอีกที ของใหม่ที่เพิ่มในทะเบียนแล้วแต่ยังไม่มี
+  // ใครเติมลงชีทจึงไม่โผล่ในหน้ากรอกรายจ่ายเลย (เช่น ผัก 11090152, 11090153)
   // (รวมไว้ใน endpoint นี้เพราะ Vercel Hobby จำกัด serverless functions ที่ 12 ตัว)
   if (req.query.prices) {
+    const brP = String(req.query.branch || '').toLowerCase().trim();
+    // รายการสินค้าแยกตามสาขา จึงต้องรู้สาขาก่อน — ไม่มีสาขาแปลว่าหน้าเว็บยังโหลดไม่เสร็จ
+    if (!brP) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(PRICE_SHEET)}`);
-      const text = await r.text();
-      if (text.startsWith('<')) return res.status(502).json({ status: 'error', message: 'อ่านชีท 8.2 ไม่ได้' });
-      const a = text.indexOf('{'), b = text.lastIndexOf('}');
-      const j = JSON.parse(text.substring(a, b + 1));
-      const data = {};
-      for (const rw of (j.table.rows || [])) {
-        const c = rw.c || [];
-        const code = normCode(c[0] && c[0].v);
-        if (!code) continue;
-        const price = Number(c[2] && c[2].v);
-        const name = c[1] && c[1].v != null ? String(c[1].v).trim() : '';
-        // หน่วย (คอลัมน์ D) มีเฉพาะบางแถว/บางช่วงเวลาของชีท — ไม่มีก็ส่งค่าว่าง
-        // หน้ากรอกรายจ่ายใช้กับหมวดผักที่ไม่ได้ฮาร์ดโค้ดหน่วยไว้เหมือนรายการซัพพลายเออร์
-        const unit = c[3] && c[3].v != null ? String(c[3].v).trim() : '';
-        if (!Number.isNaN(price)) data[code] = { name, price, unit };
-      }
-      return res.status(200).json({ status: 'success', data });
+      const data = await callOffice('getItemPrices', { branch: brP });
+      return res.status(200).json({ status: 'success', branch: brP, data: data || {} });
     } catch (error) {
-      return res.status(500).json({ status: 'error', message: error.message });
+      return res.status(502).json({ status: 'error', message: error.message });
     }
   }
 

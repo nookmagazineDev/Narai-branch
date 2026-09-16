@@ -35,7 +35,7 @@ office-server จึงต่อสอง pool จากค่าตั้งช
 | ยังเป็นชีท | เหตุผล |
 |---|---|
 | หน้ารับของ + สถานะใบเบิก (ไฟล์ `1bxohT…`) | ทีมสโตร์/ครัวกลางกรอกแท็บ "จัดของ" เอง ย้ายฝ่ายเดียวแล้วเขาทำงานไม่ได้ |
-| ราคากลาง ชีท `8.2` | ตารางราคาที่คนกรอกเอง ใช้คิดมูลค่าสต๊อก ไม่ได้เกิดจากหน้าเว็บ |
+| ราคากลาง ชีท `8.2` | ยังใช้คิดมูลค่าสต๊อก/`ProfitSummary` ใน `/api/stockcount` (โหมดปกติ) เท่านั้น — หน้ากรอกรายจ่ายย้ายไปอ่าน `dbo.stock_item` แล้ว (`getItemPrices`) |
 | รายจ่าย Supplier ชีท `ต้นทุนจากsup` | เหมือนกัน — เป็นข้อมูลนำเข้าจากภายนอก |
 | `getBranches` | อีก 7 หน้าที่ไม่เกี่ยวกับสต๊อกใช้ร่วมกัน รอย้ายพร้อมกลุ่มนั้น |
 
@@ -137,7 +137,7 @@ node scripts/test-stock.mjs --branch=crm
 
 | ตัวอ่าน | ชีทที่อ่าน | ใช้ทำอะไร |
 |---|---|---|
-| `api/stockcount.js` | ข้อมูลนับสตอค, ปิดรอบสิ้นเดือน, 8.2, ค่าเฉลี่ยยอดใช้ต่อหัว, เปอร์เซ็นการเบิก | การ์ดมูลค่าสต๊อก + `ProfitSummary` บนหน้า Dashboard |
+| `api/stockcount.js` | 8.2 (เฉพาะโหมดคิดมูลค่าสต๊อก — โหมด `?prices=1` ย้ายไป SQL แล้ว) | การ์ดมูลค่าสต๊อก + `ProfitSummary` บนหน้า Dashboard |
 | `src/services/dashboardApi.js` | ข้อมูลนับสตอค | ยอดคงเหลือล่าสุดบน Dashboard |
 | `src/pages/MonthEndClosing.jsx` | ผ่าน `getClosingItems` | หน้าปิดยอดสิ้นเดือน |
 
@@ -162,6 +162,7 @@ node scripts/test-stock.mjs --branch=crm
 | `saveMonthEndClosing` / `getMonthEndClosing` / `getClosingItems` | ปิดยอดสิ้นเดือน | 4 (เสร็จแล้ว) |
 | `saveWaste` | บันทึกของเสีย | 4 (เสร็จแล้ว) |
 | `getStockCountRows` / `getMonthEndRows` | แถวดิบให้ `/api/stockcount` คิดมูลค่าสต๊อก | 4 (เสร็จแล้ว) |
+| `getItemPrices` | รายการสินค้า+ราคาของสาขา ให้หน้ากรอกรายจ่าย (`/api/stockcount?prices=1&branch=`) แทนการอ่านชีท 8.2 | 4 (เสร็จแล้ว) |
 | `savePlanOrderLog` / `getPendingOrderStatus` / `cancelPendingOrder` / `getGoodsToReceive` / `saveGoodsReceived` / `confirmReceivedItem` | ชีทงานร่วมกับทีมสโตร์ | ยังไม่ย้าย |
 | `getBranches` | รายชื่อสาขา | ย้ายพร้อมกลุ่มหน้าอื่นที่ใช้ร่วมกัน (ดู hr-sql-migration.md) |
 

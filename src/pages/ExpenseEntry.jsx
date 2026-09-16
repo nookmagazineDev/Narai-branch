@@ -1,11 +1,14 @@
 // กรอกรายจ่าย (ต้นทุนจาก Supplier) — รายการคงที่ กรอกแค่ "จำนวน"
-//   ราคา/หน่วย ดึงสดจากชีท 8.2 (/api/supprices) -> มูลค่า = จำนวน x ราคา
+//   ชื่อ/หน่วย/ราคา ดึงจากทะเบียนสินค้าใน SQL Server (InventoryNarai.dbo.stock_item)
+//   ผ่าน /api/stockcount?prices=1&branch=... -> มูลค่า = จำนวน x ราคา
 //   บันทึกลงชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA...) ผ่าน Apps Script action saveSupCost
+//
+// รายการเป็นของ "สาขาที่เลือก" (ทะเบียนแยกสินค้าตามสาขา) จึงต้องโหลดใหม่ทุกครั้งที่เปลี่ยนสาขา
 //
 // มี 2 หมวดให้สลับด้วยปุ่มด้านบนตาราง
 //   • ซัพพลายเออร์ — รายการคงที่ตาม SUP_ITEMS ด้านล่าง
-//   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากชีท 8.2 ตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
-//                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน โชว์ราคาชีท 8.2 ใต้ช่องให้เทียบ
+//   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากทะเบียนตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
+//                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน โชว์ราคาในทะเบียนใต้ช่องให้เทียบ
 // ทั้งสองหมวดใช้ช่องกรอก/ปุ่มบันทึกชุดเดียวกัน กดบันทึกครั้งเดียวได้ทั้งสองหมวด
 // (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
 import { useEffect, useMemo, useState } from 'react';
@@ -17,7 +20,7 @@ import { apiCall } from '../services/api';
 const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// รายการรหัสคงที่ (ชื่อ/ราคา อัปเดตสดจากชีท 8.2 — หน่วยตามใบรายการ)
+// รายการรหัสคงที่ (ชื่อ/ราคา อัปเดตสดจากทะเบียนสินค้าใน SQL — หน่วยตามใบรายการ)
 const SUP_ITEMS = [
   { code: '11000265', unit: 'ลิตร' },
   { code: '11100006', unit: 'ขวด' },
@@ -29,7 +32,7 @@ const SUP_ITEMS = [
   { code: '11100052', unit: 'ลิตร' },
   { code: '11100091', unit: 'กป.' },
   { code: '11100092', unit: 'กป.' },
-  { code: '11100100', unit: 'ถุง', name: 'น้ำแข็ง', manualPrice: true }, // กรอกราคา/หน่วยเอง (ไม่มีในชีท 8.2)
+  { code: '11100100', unit: 'ถุง', name: 'น้ำแข็ง', manualPrice: true }, // กรอกราคา/หน่วยเอง (ไม่มีในทะเบียน)
   { code: '11100101', unit: 'กล่อง' },
   { code: '11100102', unit: 'กล่อง' },
   { code: '11100103', unit: 'กล่อง' },
@@ -37,8 +40,8 @@ const SUP_ITEMS = [
 ];
 
 // หมวด "ผัก,ผลไม้" — ช่วงรหัสเดียวกับที่ตารางสรุปกำไรใช้แยกหมวด (ProfitSummary.jsx)
-// รายการจริงมาจากชีท 8.2 ทั้งหมด: มีผักตัวใหม่ในชีทก็ขึ้นเองโดยไม่ต้องแก้โค้ด
-// เพดานตั้งเผื่อถึง 11090999: ผักตัวใหม่ในชีทได้รหัสต่อท้ายไปเรื่อยๆ (เช่น 11090152 ข้าวโพดฝัก,
+// รายการจริงมาจากทะเบียนสินค้าใน SQL ทั้งหมด: ฝ่ายจัดซื้อเพิ่มผักตัวใหม่ก็ขึ้นเองโดยไม่ต้องแก้โค้ด
+// เพดานตั้งเผื่อถึง 11090999: ผักตัวใหม่ได้รหัสต่อท้ายไปเรื่อยๆ (เช่น 11090152 ข้าวโพดฝัก,
 // 11090153 แตงกวา) ถ้าล็อกเพดานไว้ที่รหัสสุดท้ายที่เคยมี ผักใหม่จะหายไปจากหน้านี้เงียบๆ
 // หมวดถัดไป (เครื่องดื่ม) เริ่มที่ 11100001 จึงไม่ทับกัน
 const VEG_CODE_MIN = 11090003;
@@ -62,7 +65,7 @@ export default function ExpenseEntry() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
 
-  const [prices, setPrices] = useState(null); // { code: {name, price} }
+  const [prices, setPrices] = useState(null); // { code: {name, price, unit} } ของสาขาที่เลือก
   const [loadingPrices, setLoadingPrices] = useState(true);
   const [qty, setQty] = useState({});        // code -> จำนวน (string)
   const [manualPrice, setManualPrice] = useState({}); // code -> ราคา/หน่วย (string) สำหรับรายการที่กรอกราคาเอง
@@ -76,19 +79,24 @@ export default function ExpenseEntry() {
   const [selBranch, setSelBranch] = useState('');
   const branch = isAdmin ? selBranch : (user?.branch || '');
 
+  // ทะเบียนสินค้าแยกตามสาขา — เปลี่ยนสาขาต้องโหลดใหม่ และต้องล้างของสาขาเดิมทิ้งก่อน
+  // ไม่งั้นระหว่างรอโหลดจะเห็นรายการของสาขาก่อนหน้าค้างอยู่ (กรอกทับไปแล้วบันทึกผิดสาขา)
   useEffect(() => {
+    if (!branch) return;
     let alive = true;
-    fetch('/api/stockcount?prices=1')
+    setLoadingPrices(true);
+    setPrices(null);
+    fetch(`/api/stockcount?prices=1&branch=${encodeURIComponent(branch)}`)
       .then((r) => r.json())
       .then((res) => {
         if (!alive) return;
         if (res?.status === 'success') setPrices(res.data || {});
-        else toast.error(res?.message || 'ดึงราคาจากชีท 8.2 ไม่สำเร็จ');
+        else toast.error(res?.message || 'ดึงรายการสินค้าจาก SQL ไม่สำเร็จ');
       })
-      .catch(() => alive && toast.error('ดึงราคาจากชีท 8.2 ไม่สำเร็จ'))
+      .catch(() => alive && toast.error('ดึงรายการสินค้าจาก SQL ไม่สำเร็จ'))
       .finally(() => alive && setLoadingPrices(false));
     return () => { alive = false; };
-  }, []);
+  }, [branch]);
 
   // ดึงข้อมูลที่บันทึกไว้ของ (สาขา+วันที่) มาแสดงเพื่อแก้ไข — บันทึกซ้ำจะทับแถวเดิม
   const [loadingExisting, setLoadingExisting] = useState(false);
@@ -109,13 +117,13 @@ export default function ExpenseEntry() {
             if (it.manualPrice) mp[it.code] = String(saved[key].price ?? '');
           }
         });
-        // รายการที่ไม่ได้อยู่ในลิสต์คงที่ (เช่น ผักจากชีท 8.2) — คีย์ที่ใช้คือรหัสที่ตัดศูนย์นำหน้าแล้ว
+        // รายการที่ไม่ได้อยู่ในลิสต์คงที่ (เช่น ผักจากทะเบียน) — คีย์ที่ใช้คือรหัสที่ตัดศูนย์นำหน้าแล้ว
         // ซึ่งตรงกับคีย์ของแถวหมวดผัก จึงเติมได้เลยไม่ต้องรอราคาโหลดเสร็จ
         const supKeys = new Set(SUP_ITEMS.map((it) => String(it.code).replace(/^0+/, '')));
         Object.keys(saved).forEach((key) => {
           if (supKeys.has(key)) return;
           q[key] = String(saved[key].qty ?? '');
-          mp[key] = String(saved[key].price ?? ''); // ใช้เฉพาะแถวที่ไม่มีราคาในชีท 8.2
+          mp[key] = String(saved[key].price ?? ''); // ใช้เฉพาะแถวที่กรอกราคาเอง
         });
         setQty(q);
         setManualPrice(mp);
@@ -147,20 +155,20 @@ export default function ExpenseEntry() {
   const supRows = useMemo(() => SUP_ITEMS.map((it) => {
     const q = parseFloat(qty[it.code]) || 0;
     if (it.manualPrice) {
-      // รายการกรอกราคาเอง (ไม่ดึงจากชีท 8.2) — ราคา/หน่วยพิมพ์เอง
+      // รายการกรอกราคาเอง (ไม่มีในทะเบียน) — ราคา/หน่วยพิมพ์เอง
       const price = parseFloat(manualPrice[it.code]) || 0;
       return { ...it, name: it.name, price, hasPrice: price > 0, qty: q, amount: q * price };
     }
     const p = prices?.[norm(it.code)] || null;
     const price = p ? p.price : 0;
-    return { ...it, name: p ? p.name : '(ไม่พบใน 8.2)', price, hasPrice: !!p, qty: q, amount: q * price };
+    return { ...it, name: p ? p.name : '(ไม่พบในทะเบียนของสาขานี้)', price, hasPrice: !!p, qty: q, amount: q * price };
   }), [prices, qty, manualPrice]);
 
-  // หมวดผัก: ทุกรหัสในชีท 8.2 ที่อยู่ในช่วงรหัสผัก เรียงตามรหัส
+  // หมวดผัก: ทุกรหัสในทะเบียนสินค้าของสาขานี้ที่อยู่ในช่วงรหัสผัก เรียงตามรหัส
   //
-  // ราคา/หน่วยของผักกรอกเองได้ทุกแถว (ราคาผักขึ้นลงรายวัน ราคาในชีท 8.2 เป็นแค่ค่าตั้งต้น)
-  //   ไม่ได้แตะช่อง = ใช้ราคาจากชีท / พิมพ์ทับ = ใช้ราคาที่พิมพ์ / ลบจนว่าง = ถือว่ายังไม่กรอกราคา
-  // ทุกแถวส่ง manualPrice: true เสมอ ไม่งั้นฝั่งชีทจะเอาราคาจาก 8.2 มาทับราคาที่พิมพ์
+  // ราคา/หน่วยของผักกรอกเองได้ทุกแถว (ราคาผักขึ้นลงรายวัน ราคาในทะเบียนเป็นแค่ค่าตั้งต้น)
+  //   ไม่ได้แตะช่อง = ใช้ราคาในทะเบียน / พิมพ์ทับ = ใช้ราคาที่พิมพ์ / ลบจนว่าง = ถือว่ายังไม่กรอกราคา
+  // ทุกแถวส่ง manualPrice: true เสมอ ไม่งั้นฝั่งชีทจะเอาราคากลางมาทับราคาที่พิมพ์
   const vegRows = useMemo(() => {
     if (!prices) return [];
     return Object.keys(prices)
@@ -168,16 +176,16 @@ export default function ExpenseEntry() {
       .sort((a, b) => Number(a) - Number(b))
       .map((code) => {
         const p = prices[code] || {};
-        const sheetPrice = Number(p.price) || 0;
+        const basePrice = Number(p.price) || 0;
         const typed = manualPrice[code];
-        const price = typed === undefined ? sheetPrice : (parseFloat(typed) || 0);
+        const price = typed === undefined ? basePrice : (parseFloat(typed) || 0);
         const q = parseFloat(qty[code]) || 0;
         return {
           code,
-          name: String(p.name || '').trim() || '(ไม่มีชื่อในชีท 8.2)',
+          name: String(p.name || '').trim() || '(ไม่มีชื่อในทะเบียน)',
           unit: String(p.unit || '').trim(),
           manualPrice: true,
-          sheetPrice,
+          basePrice,
           price,
           hasPrice: price > 0,
           qty: q,
@@ -242,7 +250,7 @@ export default function ExpenseEntry() {
                 <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">แก้ไขข้อมูลเดิม ({existingCount} รายการ)</span>
               )}
             </h1>
-            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • ราคา/หน่วยจากชีท 8.2 (หมวดผักแก้ราคาเองได้) • บันทึกลงชีท "ต้นทุนจากsup"</p>
+            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • รายการ/ราคาจากทะเบียนสินค้า SQL ตามสาขา (หมวดผักแก้ราคาเองได้) • บันทึกลงชีท "ต้นทุนจากsup"</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -307,20 +315,24 @@ export default function ExpenseEntry() {
 
         {tab === 'veg' && !loadingPrices && vegRows.length > 0 && (
           <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-emerald-50/40">
-            ราคา/หน่วยของผักแก้ได้ทุกแถว — ราคาจากชีท 8.2 แสดงไว้ใต้ช่องกรอกเสมอ พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในชีท
+            ราคา/หน่วยของผักแก้ได้ทุกแถว — ราคาในทะเบียนสินค้าแสดงไว้ใต้ช่องกรอกเสมอ พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในทะเบียน
           </p>
         )}
 
-        {loadingPrices ? (
+        {!branch ? (
+          <div className="py-16 flex flex-col items-center text-gray-400 text-sm gap-2">
+            <Store className="w-6 h-6" /> เลือกสาขาก่อน แล้วรายการสินค้าของสาขานั้นจะขึ้นมา
+          </div>
+        ) : loadingPrices ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm">
-            <RefreshCw className="w-6 h-6 animate-spin mb-3" /> กำลังดึงราคาจากชีท 8.2…
+            <RefreshCw className="w-6 h-6 animate-spin mb-3" /> กำลังดึงรายการสินค้าจาก SQL…
           </div>
         ) : viewRows.length === 0 ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm gap-2">
             <Carrot className="w-6 h-6" />
             {vegSearch.trim()
               ? `ไม่พบรายการที่ตรงกับ "${vegSearch.trim()}"`
-              : `ไม่พบรายการผักในชีท 8.2 (ช่วงรหัส ${VEG_CODE_MIN}–${VEG_CODE_MAX})`}
+              : `ไม่พบรายการผักในทะเบียนสินค้าของสาขานี้ (ช่วงรหัส ${VEG_CODE_MIN}–${VEG_CODE_MAX})`}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -345,25 +357,25 @@ export default function ExpenseEntry() {
                       <td className="px-2 py-2">
                         <input
                           type="number" min="0" step="any" inputMode="decimal"
-                          value={manualPrice[r.code] ?? (r.sheetPrice > 0 ? String(r.sheetPrice) : '')}
+                          value={manualPrice[r.code] ?? (r.basePrice > 0 ? String(r.basePrice) : '')}
                           onChange={(e) => setManualPrice((p) => ({ ...p, [r.code]: e.target.value }))}
                           className="w-full min-w-[96px] px-2 py-2 border border-emerald-200 bg-emerald-50/40 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-right font-mono text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           placeholder="ราคา/หน่วย"
                         />
-                        {/* ราคาจากชีท 8.2 โชว์ใต้ช่องเสมอ ให้เทียบได้ว่าราคาวันนี้ต่างจากราคากลางแค่ไหน
+                        {/* ราคาในทะเบียนโชว์ใต้ช่องเสมอ ให้เทียบได้ว่าราคาวันนี้ต่างจากราคากลางแค่ไหน
                             ถ้าพิมพ์ทับไปแล้วบรรทัดนี้กดคืนค่าได้ */}
-                        {r.sheetPrice !== undefined && (
-                          r.sheetPrice <= 0 ? (
-                            <div className="mt-1 text-right text-[11px] text-gray-400">ยังไม่มีราคาในชีท 8.2</div>
-                          ) : r.price === r.sheetPrice ? (
-                            <div className="mt-1 text-right text-[11px] text-gray-400">ชีท 8.2 {baht(r.sheetPrice)}</div>
+                        {r.basePrice !== undefined && (
+                          r.basePrice <= 0 ? (
+                            <div className="mt-1 text-right text-[11px] text-gray-400">ยังไม่มีราคาในทะเบียน</div>
+                          ) : r.price === r.basePrice ? (
+                            <div className="mt-1 text-right text-[11px] text-gray-400">ทะเบียน {baht(r.basePrice)}</div>
                           ) : (
                             <button
                               type="button"
                               onClick={() => setManualPrice((p) => { const n = { ...p }; delete n[r.code]; return n; })}
                               className="mt-1 w-full text-right text-[11px] text-amber-600 hover:text-amber-700 hover:underline"
                             >
-                              ชีท 8.2 {baht(r.sheetPrice)} — กดคืนค่า
+                              ทะเบียน {baht(r.basePrice)} — กดคืนค่า
                             </button>
                           )
                         )}
@@ -405,7 +417,7 @@ export default function ExpenseEntry() {
       <div className="flex justify-end">
         <button
           onClick={save}
-          disabled={saving || loadingPrices || filledCount === 0}
+          disabled={saving || loadingPrices || !branch || filledCount === 0}
           className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 shadow-md shadow-emerald-200"
         >
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}

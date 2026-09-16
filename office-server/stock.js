@@ -188,6 +188,44 @@ async function getStockItems(body, session) {
   });
 }
 
+/* ==================== ราคา/ชื่อสินค้าให้หน้ากรอกรายจ่าย ====================
+   คืน { รหัส: { name, unit, price } } ของสาขานั้น — /api/stockcount?prices=1 ส่งต่อให้หน้าเว็บ
+
+   เดิมหน้ากรอกรายจ่ายอ่านชีท 'ราคากลาง 8.2' ตรงๆ ผ่าน gviz ซึ่งเป็นสำเนาที่คนคัดลอกมาอีกที
+   ของใหม่ที่ฝ่ายจัดซื้อเพิ่มในทะเบียนสินค้าจึงไม่โผล่ในหน้านี้จนกว่าจะมีคนไปเติมในชีทให้
+   (เคสที่เจอ: ผักรหัส 11090152 ข้าวโพดฝัก / 11090153 แตงกวา หายไปทั้งที่มีในทะเบียนแล้ว)
+   ตัวนี้อ่าน dbo.stock_item ซึ่งเป็นทะเบียนตัวจริงแทน — เพิ่มสินค้าที่เดียวแล้วขึ้นทุกหน้า
+
+   กรองตามสาขาเหมือน getStockItems ทุกประการ (สินค้าคนละชุดกันในแต่ละสาขา) และตัด
+   'ปิดการใช้งาน' ทิ้ง ไม่งั้นของที่เลิกขายไปแล้วจะกลับมาให้กรอกอีก */
+async function getItemPrices(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) throw badRequest('ระบุสาขา');
+
+  const rows = await queryRead(
+    `SELECT i.item_key, i.item_code, i.item_name, i.unit, i.price
+       FROM dbo.stock_item i
+       JOIN dbo.stock_item_branch b ON b.item_key = i.item_key
+      WHERE b.branch = @itemBranch
+        AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
+      ORDER BY i.sort_order, i.item_code`,
+    { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
+  );
+
+  // คีย์เป็นรหัสที่ normalize แล้ว ให้ตรงกับที่หน้าเว็บใช้จับคู่ (ตัด 0 นำหน้า)
+  const data = {};
+  for (const r of rows) {
+    const code = normCode(r.item_key || r.item_code);
+    if (!code) continue;
+    data[code] = {
+      name: str(r.item_name),
+      unit: str(r.unit),
+      price: r.price === null || r.price === undefined ? 0 : Number(r.price),
+    };
+  }
+  return data;
+}
+
 /* ========================= หน้ารวมสต๊อกทุกสาขา =========================
    ยอดคงเหลือรวมของสินค้าแต่ละตัว = ผลรวมของทุกสาขา โดยสาขาไหนเคยนับแล้วใช้ยอดนับล่าสุด
    สาขาที่ยังไม่เคยนับใช้ยอดยกมาแทน (กติกาเดิมของ Apps Script ทั้งดุ้น)
@@ -903,6 +941,7 @@ async function saveWaste(body, session) {
 
 export const STOCK_ACTIONS = {
   getStockItems,
+  getItemPrices,
   getStockTotal,
   stockStatus,
   saveStock,
