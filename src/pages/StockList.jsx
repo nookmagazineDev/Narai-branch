@@ -515,9 +515,13 @@ export default function StockList() {
     toast.success(`ใส่ค่าลง ${days.length} วัน (${dowText}) ของ ${thaiMonths[currentCalMonth]} แล้ว — กดบันทึกเพื่อยืนยัน`);
   };
 
-  const handleSaveAllPcts = async () => {
-    if (!effectiveBranch) return;
-    if (!canEditCovers) { toast.error('แก้ไขจำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all'); return; }
+  /**
+   * วันที่ค่าในช่องกรอกต่างจากที่บันทึกไว้ = รายการที่ต้องส่งไปบันทึก
+   *
+   * แยกออกมาเพราะต้องใช้สองที่: ตอนกดบันทึกจริง กับตอนนับให้ปุ่มโชว์ว่าค้างกี่วัน
+   * ถ้าเขียนเงื่อนไขซ้ำสองชุด วันหนึ่งจะเพี้ยนไม่ตรงกันแล้วปุ่มจะโกหก
+   */
+  const buildCoverUpdates = () => {
     const isTwoTier = isTwoTierBranch;
 
     const updates = [];
@@ -560,6 +564,21 @@ export default function StockList() {
       });
     }
 
+    return updates;
+  };
+
+  // จำนวนวันที่ยังไม่ได้บันทึก — ใช้เตือนบนปุ่ม ไม่ต้องรอให้กดก่อนถึงจะรู้
+  const pendingCoverDays = useMemo(
+    () => buildCoverUpdates().length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pctInputMap, pct259InputMap, pct359InputMap, specialPcts, isTwoTierBranch]
+  );
+
+  const handleSaveAllPcts = async () => {
+    if (!effectiveBranch) return;
+    if (!canEditCovers) { toast.error('แก้ไขจำนวนหัวลูกค้าได้เฉพาะผู้ใช้สิทธิ์ all'); return; }
+
+    const updates = buildCoverUpdates();
     if (updates.length === 0) {
       // ไม่ใช่ข้อผิดพลาด แต่คนกดมักตีความว่า "บันทึกไม่ติด" — บอกให้ชัดว่าไม่มีอะไรต่างจากที่บันทึกไว้
       setPctMsg({ kind: 'info', text: 'ไม่มีอะไรเปลี่ยน — ตัวเลขที่กรอกตรงกับที่บันทึกไว้อยู่แล้ว (เลขสีเทาคือค่าคาดการณ์ ยังไม่นับว่าแก้ ต้องพิมพ์ทับก่อน)' });
@@ -2028,6 +2047,21 @@ export default function StockList() {
                       </div>
                     </div>
 
+                    {/* ค่าที่ใส่ไว้แต่ยังไม่ได้กดบันทึก — เตือนให้เห็นชัด
+                        เคสจริง: ส่วนกลางกด "ใส่ค่าลงวันที่เลือก" แล้วปิดหน้าไป นึกว่าบันทึกแล้ว
+                        พอสาขาเปิดดูวันรุ่งขึ้นเลขยังเป็นของเก่า เพราะค่าใหม่ไม่เคยถึงฐานข้อมูล */}
+                    {canEditCovers && pendingCoverDays > 0 && (
+                      <div className="flex items-start gap-2 text-[11px] rounded-lg px-3 py-2 border bg-amber-50 border-amber-300 text-amber-900 font-semibold">
+                        <span className="shrink-0">✋</span>
+                        <span className="flex-1 leading-relaxed">
+                          มี {pendingCoverDays} วันที่แก้ไว้แต่ <u>ยังไม่ได้บันทึก</u> — ต้องกดปุ่ม
+                          "บันทึกจำนวนหัวลูกค้าที่ปรับ" ด้านล่างสุด สาขาถึงจะเห็นตัวเลขใหม่
+                          <br />
+                          <span className="font-normal">ถ้าปิดหน้านี้ไปก่อนกดบันทึก ค่าที่ใส่ไว้จะหายทั้งหมด</span>
+                        </span>
+                      </div>
+                    )}
+
                     {/* ผลล่าสุดของแผงนี้ — ค้างไว้จนกว่าจะกดปิดหรือกดบันทึกรอบใหม่
                         ข้อความจากเซิร์ฟเวอร์ต้องอ่านทันและถ่ายรูปส่งต่อได้ toast 4 วินาทีไม่พอ */}
                     {pctMsg && (
@@ -2346,10 +2380,20 @@ export default function StockList() {
                             type="button"
                             onClick={handleSaveAllPcts}
                             disabled={isSavingAllPcts}
-                            className="w-full sm:w-auto px-5 py-2.5 bg-amber-500 text-white text-xs font-semibold rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm shadow-amber-200 shrink-0 cursor-pointer"
+                            className={`w-full sm:w-auto px-5 py-2.5 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0 cursor-pointer ${
+                              pendingCoverDays > 0
+                                ? 'bg-amber-600 hover:bg-amber-700 shadow-md shadow-amber-300 ring-2 ring-amber-300 animate-pulse'
+                                : 'bg-amber-500 hover:bg-amber-600 shadow-sm shadow-amber-200'
+                            }`}
                           >
                             {isSavingAllPcts ? <Loader2 className="w-3 h-3 animate-spin" /> : '💾'}
-                            <span>{isSavingAllPcts ? 'กำลังบันทึก...' : 'บันทึกจำนวนหัวลูกค้าที่ปรับ'}</span>
+                            <span>
+                              {isSavingAllPcts
+                                ? 'กำลังบันทึก...'
+                                : pendingCoverDays > 0
+                                  ? `บันทึกจำนวนหัวลูกค้าที่ปรับ (${pendingCoverDays} วัน)`
+                                  : 'บันทึกจำนวนหัวลูกค้าที่ปรับ'}
+                            </span>
                           </button>
                           )}
                         </div>
