@@ -1,5 +1,5 @@
 import { getPool, queryRead, replyDbError } from '../lib/mysql.js';
-import { USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
+import { USAGE_API_BASE, fetchUpstream, fetchSheet } from '../lib/upstream.js';
 
 // สั่งของ/ขอเบิกจากสาขา — เขียนตรงลง MySQL: inventory.dyndns.tv
 //   หัวใจคือตาราง myfbdata.orderd (ใบสั่งของกลาง, Ord_ReqType='TRF')
@@ -29,6 +29,8 @@ const BATCH_ID = 1;      // Inv_BatchID
 // (InventoryNarai.dbo.stock_item) ตั้งแต่ย้ายระบบแล้ว — สองแหล่งนี้ไม่ตรงกันเมื่อไหร่ สาขาจะเห็น
 // สินค้าในตารางนับแต่กดส่งใบเบิกไม่ได้เพราะหา itemid ไม่เจอ (หรือได้ itemid ของคนละตัว)
 // ตอนนี้จึงอ่านที่เดียวกับที่หน้าเว็บอ่าน โดย office-server ซิงก์ชีทเข้า SQL ให้ทุกชั่วโมง (item-sync.js)
+// แต่ยังคงชั้นอ่านชีทตรงไว้เป็น "ตัวสำรอง" (loadSheetMaps ข้างล่าง) เพราะช่วงรอรอบซิงก์ ของที่เพิ่ง
+// เติม itemid ในชีทจะยังไม่อยู่ใน SQL แล้วทำให้ใบเบิกตกทั้งใบ — สาขาส่งของไม่ได้ทั้งวันเพราะของตัวเดียว
 //
 // Vercel ต่อ SQL Server ที่ออฟฟิศตรงไม่ได้ (ไฟร์วอลล์เปิดให้เฉพาะ IP ในไทย) จึงเดินผ่าน
 // office-server เหมือน /api/schedule และ /api/stockcount
@@ -82,6 +84,42 @@ async function itemIdMap() {
   return (await loadItemRegistry()).map;
 }
 
+// ── ตัวสำรอง: อ่านชีท 'item' ตรง ๆ แบบก่อนย้ายเข้า SQL ──
+// ทะเบียนใน SQL เป็นสำเนาที่ซิงก์จากชีทชั่วโมงละครั้ง (office-server/item-sync.js) ของที่จัดซื้อเพิ่ง
+// เติม itemid (คอลัมน์ K) จึงยังไม่อยู่ใน SQL จนกว่าจะถึงรอบ — ระหว่างนั้นสาขากดส่งใบเบิกไม่ได้ทั้งใบ
+// เพราะรายการเดียวที่หา itemid ไม่เจอทำให้ทั้งใบตก ชั้นนี้อ่านชีทตรงเหมือนโค้ดเดิมเพื่อให้ส่งของทันวัน
+//
+// ใช้เป็น "ตัวสำรอง" เท่านั้น ไม่ใช่ตัวแทนทะเบียน — ทะเบียนใน SQL ยังเป็นแหล่งหลักเหมือนเดิม
+// เพราะเป็นที่เดียวกับที่หน้านับสต๊อก/กรอกรายจ่ายอ่านอยู่ ถ้าอ่านคนละแหล่งกันจะได้ itemid คนละตัว
+const ITEM_SHEET_ID = process.env.ITEM_SHEET_ID || '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
+const ITEM_SHEET_GID = process.env.ITEM_SHEET_GID || '302875824';
+let sheetCache = { at: 0, map: null, units: null };
+
+/** อ่านชีท item — fresh = ไม่เอาของในแคช (ใช้ตอนที่แคชยังหา itemid ไม่เจอ เผื่อเพิ่งมีคนเติม) */
+async function loadSheetMaps({ fresh = false } = {}) {
+  if (!fresh && sheetCache.map && Date.now() - sheetCache.at < REGISTRY_TTL_MS) return sheetCache;
+  const url = `https://docs.google.com/spreadsheets/d/${ITEM_SHEET_ID}/gviz/tq?tqx=out:json&gid=${ITEM_SHEET_GID}`;
+  const txt = await fetchSheet(url).then(r => r.text());
+  const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
+  if (s < 0 || e < 0) throw new Error('อ่านชีทรายการสินค้าไม่ได้ (ตรวจการแชร์ลิงก์ของชีท)');
+  const json = JSON.parse(txt.slice(s, e + 1));
+  const map = new Map();   // รหัสสินค้า (A) → itemid (K)
+  const units = {};        // รหัสสินค้า (A) → หน่วยเบิก (L)
+  for (const row of json.table.rows || []) {
+    const cell = i => (row.c && row.c[i] ? row.c[i].v : null);
+    const code = String(cell(0) ?? '').trim();
+    if (!code) continue;
+    const id = Number(cell(10)) || 0;
+    // รหัสในชีทมี 0 นำหน้าบ้างไม่มีบ้าง เก็บไว้ทั้งสองแบบเหมือนทะเบียน
+    if (id) { map.set(code, id); map.set(normCode(code), id); }
+    const u = Number(cell(11)) || 0;
+    if (u > 0) units[code] = u;
+  }
+  if (map.size === 0) throw new Error('ชีทรายการสินค้าไม่มี itemid สักรายการ (คอลัมน์ K)');
+  sheetCache = { at: Date.now(), map, units };
+  return sheetCache;
+}
+
 // เวลาไทย (Vercel รันเป็น UTC)
 function bangkokNow() {
   const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }); // 'YYYY-MM-DD HH:mm:ss'
@@ -115,9 +153,17 @@ export default async function handler(req, res) {
   if (req.method === 'GET' && req.query.units) {
     try {
       const { units } = await loadItemRegistry();
-      return res.status(200).json({ status: 'success', count: Object.keys(units).length, units });
+      return res.status(200).json({ status: 'success', count: Object.keys(units).length, units, source: 'sql' });
     } catch (e) {
-      return res.status(500).json({ status: 'error', message: e.message });
+      // เครื่องออฟฟิศดับ = หน้าคำนวณยอดเบิกไม่มีหน่วยเบิกเลย แล้วไปปัดยอดเป็นจำนวนเต็มธรรมดาแทน
+      // ถอยมาอ่านชีทเหมือนก่อนย้ายระบบ ได้ค่าชุดเดียวกัน (คอลัมน์ L) ดีกว่าปล่อยให้ปัดผิดหน่วย
+      try {
+        const { units } = await loadSheetMaps();
+        return res.status(200).json({ status: 'success', count: Object.keys(units).length, units, source: 'sheet' });
+      } catch (sheetErr) {
+        console.error('อ่านหน่วยเบิกจากชีทไม่สำเร็จ:', sheetErr.message);
+        return res.status(500).json({ status: 'error', message: e.message });
+      }
     }
   }
 
@@ -169,15 +215,38 @@ export default async function handler(req, res) {
 
   const conn = await getPool().getConnection();
   try {
-    // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา — ลำดับ: ทะเบียนสินค้า (SQL) → รหัสสินค้าใน POS
+    // หา itemId ให้รายการที่เว็บไม่ได้ส่งมา
+    //   ทะเบียนสินค้า (SQL) → ชีท item ตรง ๆ → รหัสสินค้าใน POS
+    // เก็บสาเหตุที่อ่านแต่ละแหล่งไม่ได้ไว้ด้วย ไม่งั้นเวลาเครื่องออฟฟิศดับจะไปโผล่เป็น
+    // "ไม่มี itemId" ซึ่งทำให้คนไล่แก้ผิดทาง (ไปนั่งเติมชีทที่มีค่าอยู่แล้ว)
+    const lookupProblems = [];
+    let sourcesRead = 0;   // อ่านทะเบียนสำเร็จกี่แหล่ง — 0 แปลว่าไม่รู้เลยว่าสินค้ามี itemid หรือไม่
+    const fillFrom = (map) => {
+      for (const it of clean) {
+        if (!it.itemId) it.itemId = map.get(it.itemCode) || map.get(normCode(it.itemCode)) || 0;
+      }
+    };
+
     if (clean.some(it => !it.itemId)) {
       try {
-        const fromRegistry = await itemIdMap();
-        for (const it of clean) {
-          if (!it.itemId) it.itemId = fromRegistry.get(it.itemCode) || fromRegistry.get(normCode(it.itemCode)) || 0;
-        }
+        fillFrom(await itemIdMap());
+        sourcesRead++;
       } catch (e) {
         console.error('อ่าน itemid จากทะเบียนสินค้าไม่สำเร็จ:', e.message);
+        lookupProblems.push(`ทะเบียนใน SQL: ${e.message}`);
+      }
+    }
+
+    // ทะเบียนใน SQL ตามชีทช้าได้ถึงหนึ่งชั่วโมง — ของที่เพิ่งเติม itemid ในชีทต้องถอยมาอ่านชีทเอง
+    if (clean.some(it => !it.itemId)) {
+      try {
+        fillFrom((await loadSheetMaps()).map);
+        sourcesRead++;
+        // ยังขาดอยู่ = ที่แคชไว้อาจเป็นชุดก่อนที่จัดซื้อเพิ่งเติม ดึงชีทใหม่ให้อีกรอบ จะได้ส่งได้เลย
+        if (clean.some(it => !it.itemId)) fillFrom((await loadSheetMaps({ fresh: true })).map);
+      } catch (e) {
+        console.error('อ่าน itemid จากชีท item ไม่สำเร็จ:', e.message);
+        lookupProblems.push(`ชีท item: ${e.message}`);
       }
     }
 
@@ -196,9 +265,15 @@ export default async function handler(req, res) {
 
     const noItemId = clean.filter(it => !it.itemId);
     if (noItemId.length) {
+      // "เติมคอลัมน์ K" ใช้ได้เฉพาะตอนที่อ่านทะเบียนได้จริงแล้วค่าว่าง — ถ้าอ่านไม่ได้สักแหล่งต้องบอกตามนั้น
+      // ไม่งั้นเครื่องออฟฟิศดับทีไร สาขาจะไปนั่งเติมชีทที่มีค่าอยู่แล้วทุกที
+      const note = lookupProblems.length ? ` · หมายเหตุ: ${lookupProblems.join(' · ')}` : '';
+      const message = sourcesRead === 0
+        ? `อ่านทะเบียนสินค้าไม่ได้ จึงไม่รู้ itemId ของ ${noItemId.length} รายการ — ${lookupProblems.join(' · ')}`
+        : `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item แล้วกดส่งอีกครั้ง (ระบบอ่านชีทให้ใหม่ทันที ไม่ต้องรอรอบซิงก์)${note}`;
       return res.status(400).json({
         status: 'error',
-        message: `มี ${noItemId.length} รายการที่ไม่มี itemId — กรุณาเติมคอลัมน์ K ในชีท item แล้วรอรอบซิงก์ (หรือสั่งซิงก์เอง)`,
+        message,
         missing: noItemId.map(it => `${it.itemCode} ${it.itemName}`),
       });
     }
