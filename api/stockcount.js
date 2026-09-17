@@ -121,16 +121,34 @@ function closingMonthValue(rows, targetMonth) {
  * แคชไว้ในอินสแตนซ์ 10 นาที เพราะหน้า Dashboard เรียก endpoint นี้ทีละหลายสาขาพร้อมกัน แต่ทะเบียน
  * เป็นก้อนเดียวกันทุกสาขาและเปลี่ยนวันละไม่กี่ครั้ง (office-server ซิงก์จากชีทชั่วโมงละครั้ง)
  */
-let priceCache = { at: 0, map: null };
-async function itemPriceMap() {
-  if (priceCache.map && Date.now() - priceCache.at < 10 * 60 * 1000) return priceCache.map;
+let registryCache = { at: 0, map: null };
+
+/**
+ * ทะเบียนสินค้าทั้งชุด: รหัส (normalize แล้ว) -> { name, unit, price, status }
+ * ใช้ร่วมกันระหว่างตัวคิดมูลค่าสต๊อก (เอาแค่ราคา) กับโหมด ?prices=1 (เอาชื่อ/หน่วยด้วย)
+ */
+async function itemRegistryMap() {
+  if (registryCache.map && Date.now() - registryCache.at < 10 * 60 * 1000) return registryCache.map;
   const rows = await callOffice('getItemRegistry', {});
   const map = {};
   for (const it of (rows || [])) {
     const code = normCode(it.key || it.code);
-    if (code) map[code] = Number(it.price) || 0;
+    if (!code) continue;
+    map[code] = {
+      name: String(it.name || '').trim(),
+      unit: String(it.unit || '').trim(),
+      price: Number(it.price) || 0,
+      status: String(it.status || '').trim(),
+    };
   }
-  priceCache = { at: Date.now(), map };
+  registryCache = { at: Date.now(), map };
+  return map;
+}
+
+async function itemPriceMap() {
+  const reg = await itemRegistryMap();
+  const map = {};
+  for (const code of Object.keys(reg)) map[code] = reg[code].price;
   return map;
 }
 
@@ -160,9 +178,38 @@ export default async function handler(req, res) {
     const brP = String(req.query.branch || '').toLowerCase().trim();
     // รายการสินค้าแยกตามสาขา จึงต้องรู้สาขาก่อน — ไม่มีสาขาแปลว่าหน้าเว็บยังโหลดไม่เสร็จ
     if (!brP) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
+    // &codes=11000265,11100006,... — รหัสที่ "ต้องได้ชื่อ/ราคาเสมอ" แม้คอลัมน์ J ของชีท item
+    // ไม่ได้ระบุสาขานี้ไว้ (รายการคงที่ของหน้ากรอกรายจ่าย เช่น น้ำมัน/ซอส/แก๊ส ที่ทุกสาขาต้องกรอก
+    // แต่บางสาขาไม่ได้ถูกใส่ไว้ในทะเบียนแยกสาขา เพราะไม่ได้นับสต๊อกของพวกนี้)
+    //
+    // เดิมหน้ากรอกรายจ่ายอ่านชีทราคากลาง 8.2 ซึ่งเป็นราคารวมทุกสาขา พอย้ายมาอ่านทะเบียนที่กรอง
+    // ตามสาขา รายการคงที่ทั้งใบของสาขาที่ไม่ได้ถูกระบุไว้เลยขึ้น "(ไม่พบในทะเบียนของสาขานี้)" ทั้งแถบ
+    // ราคาในทะเบียนมีค่าเดียวต่อสินค้า (stock_item.price ไม่ได้แยกรายสาขา) การถอยมาอ่านทั้งทะเบียน
+    // จึงได้ชื่อ/หน่วย/ราคาชุดเดียวกับที่สาขาที่ถูกระบุไว้เห็น ไม่ใช่ราคาของสาขาอื่น
+    const wanted = String(req.query.codes || '')
+      .split(',')
+      .map((c) => normCode(c))
+      .filter(Boolean);
     try {
       const data = await callOffice('getItemPrices', { branch: brP });
-      return res.status(200).json({ status: 'success', branch: brP, data: data || {} });
+      const out = { ...(data || {}) };
+      const offBranch = [];
+      const missing = wanted.filter((c) => !out[c]);
+      if (missing.length) {
+        try {
+          const reg = await itemRegistryMap();
+          for (const code of missing) {
+            const it = reg[code];
+            if (!it) continue;   // ไม่มีในทะเบียนเลย = ปล่อยให้หน้าเว็บฟ้องว่าหาไม่เจอตามเดิม
+            // offBranch = หน้าเว็บเอาไปบอกผู้ใช้ว่าแถวนี้ใช้ราคากลางจากทะเบียนรวม
+            out[code] = { name: it.name, unit: it.unit, price: it.price, offBranch: true };
+            offBranch.push(code);
+          }
+        } catch {
+          // ทะเบียนรวมอ่านไม่ได้ก็ยังคืนของสาขาไปก่อน ดีกว่าพังทั้งหน้า
+        }
+      }
+      return res.status(200).json({ status: 'success', branch: brP, data: out, offBranch });
     } catch (error) {
       return res.status(502).json({ status: 'error', message: error.message });
     }

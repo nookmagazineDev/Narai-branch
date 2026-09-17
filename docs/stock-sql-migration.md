@@ -213,6 +213,7 @@ node scripts/test-stock.mjs --branch=crm
 | `saveWaste` | บันทึกของเสีย | 4 (เสร็จแล้ว) |
 | `getStockCountRows` / `getMonthEndRows` | แถวดิบให้ `/api/stockcount` คิดมูลค่าสต๊อก | 4 (เสร็จแล้ว) |
 | `getItemPrices` | รายการสินค้า+ราคาของสาขา ให้หน้ากรอกรายจ่าย (`/api/stockcount?prices=1&branch=`) แทนการอ่านชีท 8.2 | 4 (เสร็จแล้ว) |
+| `getItemRegistry` | ทะเบียนรวมทุกสาขา — ใช้ตีราคามูลค่าสต๊อก และเป็นทางถอยของ `?prices=1&codes=` เมื่อทะเบียนของสาขาไม่ได้ระบุรายการคงที่ของหน้ากรอกรายจ่ายไว้ | 4 (เสร็จแล้ว) |
 | `savePlanOrderLog` / `getPendingOrderStatus` / `cancelPendingOrder` / `getGoodsToReceive` / `saveGoodsReceived` / `confirmReceivedItem` | ชีทงานร่วมกับทีมสโตร์ | ยังไม่ย้าย |
 | `getBranches` | รายชื่อสาขา | ย้ายพร้อมกลุ่มหน้าอื่นที่ใช้ร่วมกัน (ดู hr-sql-migration.md) |
 
