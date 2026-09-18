@@ -60,6 +60,14 @@ GO
 
 -- สิทธิ์เท่าที่เว็บต้องใช้จริง ไม่ให้เกินนี้
 -- (ไม่ให้ db_owner / ไม่ให้ ALTER / ไม่ให้ CREATE — เปลี่ยนสคีมาต้องใช้ sa เท่านั้น)
+-- hr_branch: ตั้งแต่ย้ายไปอ่านทะเบียนแม่ (docs/branch-hub-view.sql) ตัวนี้เป็น view
+-- ที่อ่านจาก InventoryNarai แล้ว เขียนไม่ได้ — GRANT เกินไว้ไม่ได้เปิดช่องอะไรเพิ่ม
+-- (view นี้ join สองตาราง SQL Server จึง UPDATE ผ่านไม่ได้อยู่แล้ว) และเหลือไว้ให้
+-- คำสั่งนี้ยังรันผ่านตอนที่เครื่องไหนยังไม่ได้สลับเป็น view
+--
+-- ⚠️ สิทธิ์แค่นี้ยังไม่พอถ้าสลับเป็น view แล้ว — ต้องมี SELECT บนตารางต้นทาง
+--    ในฐาน InventoryNarai ด้วย (cross-database ownership chaining ปิดอยู่ตามค่าเริ่มต้น)
+--    ตัวให้สิทธิ์นั้นอยู่ในขั้นที่ 4 ของ docs/branch-hub-view.sql
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_branch        TO narai_web;
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_employee      TO narai_web;
 GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.hr_timesheet     TO narai_web;
