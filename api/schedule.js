@@ -46,6 +46,17 @@ const READ_ONLY = new Set([
   'getStoreFulfillmentDetail',
   'getStoreReceivingDetail',
   'getStorePendingEditApprovals',
+  // เมนูครัวกลาง เรียกจากแอป storefct (ดู office-server/kitchen.js)
+  'getKitchenItems',
+  'getKitchenRecipes',
+  'getKitchenRecipe',
+  'getProductionPlans',
+  'getProductionOrders',
+  'getBranchDemand',
+  'getOrderMaterials',
+  'getMaterialIssues',
+  'getKitchenBalance',
+  'getProductionReport',
 ]);
 
 export default async function handler(req, res) {

@@ -18,6 +18,7 @@ import sql from 'mssql';
 import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-db.js';
 import { STOCK_ACTIONS } from './stock.js';
 import { STORE_WORK_ACTIONS } from './storework.js';
+import { KITCHEN_ACTIONS } from './kitchen.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
 } from './hr-session.js';
@@ -987,6 +988,9 @@ const ACTIONS = {
   // งานสโตร์/โกดัง (จัดของ/รับของ/ดึงข้อมูล/ยกเลิก) — เรียกจากแอป storefct คนละโปรเจกต์
   // แต่เดินทางเดียวกัน เพราะ Vercel ต่อ SQL Server ตรงไม่ได้เหมือนกัน
   ...STORE_WORK_ACTIONS,
+
+  // เมนูครัวกลาง (สูตร/สั่งผลิต/เบิกวัตถุดิบ/คงเหลือ/รายงาน) — เรียกจาก storefct เหมือนกัน
+  ...KITCHEN_ACTIONS,
 };
 
 /* action ที่เรียกได้ทั้งที่ยังไม่ได้ล็อกอิน — มีตัวเดียวคือ login เอง
