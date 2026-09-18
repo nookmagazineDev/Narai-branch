@@ -754,6 +754,86 @@ async function saveMaterialIssue(body, session) {
 }
 
 
+/**
+ * บันทึกรับวัตถุดิบเข้าครัวหนึ่งใบ (หลายรายการ)
+ *
+ * ครัวกลางไม่ใช่ outlet ในระบบ POS จึงไม่มีใบเบิกของตัวเองให้ไหลเข้า store_receiving
+ * แบบที่สาขาทำ ทางรับของของครัวจึงเป็นตารางนี้ — คนกรอกเองตอนของมาถึง
+ */
+async function saveMaterialReceipt(body, session) {
+  const receiveDate = ymd(body?.receiveDate) || bangkokNow().date;
+  const rawItems = Array.isArray(body?.items) ? body.items : [];
+  const recorder = recorderOf(body, session);
+
+  const items = [];
+  const seen = new Map();
+  for (const it of rawItems) {
+    const key = normCode(it?.itemKey || it?.code);
+    const qty = num(it?.qty);
+    if (!key || qty <= 0) continue;
+    // UNIQUE (doc_no, item_key) ทำให้ของตัวเดียวกันใส่สองบรรทัดในใบเดียวไม่ได้ — รวมยอดให้
+    if (seen.has(key)) { seen.get(key).qty += qty; continue; }
+    const row = {
+      key,
+      code: str(it?.code || it?.itemCode) || key,
+      name: str(it?.name || it?.itemName).slice(0, 255),
+      qty,
+      unit: orNull(it?.unit),
+      note: orNull(it?.note),
+    };
+    seen.set(key, row);
+    items.push(row);
+  }
+  if (items.length === 0) throw badRequest('ไม่มีรายการวัตถุดิบที่รับเข้า');
+
+  const sourceName = str(body?.sourceName) || 'โกดัง';
+
+  return withTransaction(async (run) => {
+    const docNo = await nextDocNo(run, 'dbo.kitchen_material_receipt', 'MR', receiveDate);
+    for (const it of items) {
+      await run(
+        `INSERT INTO dbo.kitchen_material_receipt
+           (doc_no, receive_date, item_key, item_code, item_name, qty, unit, source_name, note, recorder)
+         VALUES (@doc_no, CONVERT(DATE, @receive_date, 23), @item_key, @item_code,
+                 @item_name, @qty, @unit, @source_name, @note, @recorder);`,
+        {
+          doc_no: { type: sql.NVarChar(50), value: docNo },
+          receive_date: { type: sql.NVarChar(10), value: receiveDate },
+          item_key: { type: sql.NVarChar(50), value: it.key },
+          item_code: { type: sql.NVarChar(50), value: it.code },
+          item_name: { type: sql.NVarChar(255), value: it.name },
+          qty: { type: sql.Decimal(18, 3), value: it.qty },
+          unit: { type: sql.NVarChar(50), value: it.unit },
+          source_name: { type: sql.NVarChar(255), value: sourceName },
+          note: { type: sql.NVarChar(500), value: it.note },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
+    }
+    return { docNo, count: items.length, message: `บันทึกรับวัตถุดิบ ${docNo} แล้ว (${items.length} รายการ)` };
+  });
+}
+
+async function getMaterialReceipts(body) {
+  const from = ymd(body?.dateFrom);
+  const to = ymd(body?.dateTo);
+  if (!from || !to) throw badRequest('ต้องระบุช่วงวันที่ (dateFrom, dateTo)');
+
+  const rows = await runSql(
+    `SELECT receipt_id, doc_no, receive_date, item_key, item_code, item_name,
+            qty, unit, source_name, note, recorder, recorded_at
+       FROM dbo.kitchen_material_receipt
+      WHERE receive_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
+      ORDER BY receive_date DESC, doc_no, item_name;`,
+    {
+      from: { type: sql.NVarChar(10), value: from },
+      to: { type: sql.NVarChar(10), value: to },
+    }
+  );
+  return { receipts: rows };
+}
+
+
 /* ==========================================================================
    วัตถุดิบคงเหลือ
 ========================================================================== */
@@ -762,6 +842,10 @@ async function saveMaterialIssue(body, session) {
  * คงเหลือของครัวกลาง คำนวณสดจากเหตุการณ์ ไม่ได้เก็บเป็นตัวเลขนิ่ง
  *
  *   คงเหลือ = ยอดนับล่าสุด + รับเข้าหลังวันนับ - เบิกไปใช้หลังวันนับ + ผลิตได้หลังวันนับ
+ *
+ * "รับเข้า" มาจากสองทางรวมกัน: kitchen_material_receipt (ครัวกรอกเองตอนของมาถึง ซึ่งเป็นทาง
+ * ปกติ เพราะครัวกลางไม่ใช่ outlet ในระบบ POS) และ store_receiving ของสาขาที่ชื่อตรงกับ
+ * KITCHEN_BRANCH (เผื่อวันหนึ่งครัวถูกเพิ่มเป็นสาขาจริง จะได้ไม่ต้องย้ายข้อมูล)
  *
  * ตัวตั้งคือการนับจริง การนับรอบใหม่จึงล้างความคลาดเคลื่อนสะสมให้เอง
  * สินค้าที่ไม่เคยถูกนับเลยจะนับรวมทุกอย่างตั้งแต่ต้น (COALESCE เป็น 1900-01-01)
@@ -786,14 +870,15 @@ async function getKitchenBalance(body) {
         SELECT item_key FROM dbo.kitchen_recipe_item
         UNION SELECT product_key FROM dbo.kitchen_recipe
         UNION SELECT item_key FROM dbo.kitchen_material_issue
+        UNION SELECT item_key FROM dbo.kitchen_material_receipt
      )
      SELECT i.item_key, i.item_code, i.item_name, i.unit,
             COALESCE(lc.remaining, 0) AS counted_qty,
             lc.count_date,
-            COALESCE(rc.qty, 0) AS received_qty,
+            COALESCE(mr.qty, 0) + COALESCE(rc.qty, 0) AS received_qty,
             COALESCE(iss.qty, 0) AS issued_qty,
             COALESCE(pr.qty, 0) AS produced_qty,
-            COALESCE(lc.remaining, 0) + COALESCE(rc.qty, 0)
+            COALESCE(lc.remaining, 0) + COALESCE(mr.qty, 0) + COALESCE(rc.qty, 0)
               - COALESCE(iss.qty, 0) + COALESCE(pr.qty, 0) AS balance
        FROM dbo.stock_item i
        JOIN scope s ON s.item_key = i.item_key
@@ -804,6 +889,12 @@ async function getKitchenBalance(body) {
             AND r.receive_date > COALESCE(lc.count_date, '19000101')
             AND (@as_of IS NULL OR r.receive_date <= CONVERT(DATE, @as_of, 23))
        ) rc
+       OUTER APPLY (
+         SELECT SUM(m.qty) AS qty FROM dbo.kitchen_material_receipt m
+          WHERE m.item_key = i.item_key
+            AND m.receive_date > COALESCE(lc.count_date, '19000101')
+            AND (@as_of IS NULL OR m.receive_date <= CONVERT(DATE, @as_of, 23))
+       ) mr
        OUTER APPLY (
          SELECT SUM(m.qty) AS qty FROM dbo.kitchen_material_issue m
           WHERE m.item_key = i.item_key
@@ -1009,6 +1100,8 @@ export const KITCHEN_ACTIONS = {
   getOrderMaterials,
   getMaterialIssues,
   saveMaterialIssue,
+  getMaterialReceipts,
+  saveMaterialReceipt,
   getKitchenBalance,
   saveProductionRun,
   deleteProductionRun,
@@ -1025,6 +1118,7 @@ export const KITCHEN_READ_ONLY = [
   'getBranchDemand',
   'getOrderMaterials',
   'getMaterialIssues',
+  'getMaterialReceipts',
   'getKitchenBalance',
   'getProductionReport',
 ];
