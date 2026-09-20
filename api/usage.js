@@ -1,4 +1,5 @@
 import { fetchSheet } from '../lib/upstream.js';
+import { outletIdOf } from '../lib/branchOutlet.js';
 // ดึงข้อมูล "ยอดใช้จากระบบ" จาก Google Sheet (ชีท UsageHistory) แทน API เดิม
 // Spreadsheet: 1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg
 // คอลัมน์ A: วันที่ | B: เลขสาขา | C: ชื่อสาขา | D: รหัสสินค้า | F: จำนวนที่ใช้ไป
@@ -61,13 +62,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'error', message: 'ระบุสาขา, วันที่เริ่มต้น และวันที่สิ้นสุดไม่ครบถ้วน' });
   }
 
-  const branchMap = {
-    'sjp': '7', 'zjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
-    'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
-    'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '902', 'zbw': '400',
-    'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
-    'zk3': '906', 'zip': '12'
-  };
+  // 'zip' ยังไม่ยุบเข้าทะเบียนกลาง เพราะรีโปนี้พูดไม่ตรงกันว่ามันคือสาขาไหน:
+  // ที่นี่ชี้ไป 12 (crm) แต่ api/insert_order.js กับ office-server/stock.js ชี้ไปกลุ่ม zjp/sjp
+  // คงพฤติกรรมเดิมของหน้านี้ไว้ก่อน รอคนที่รู้ของจริงมาชี้ขาดแล้วค่อยย้ายเข้าทะเบียน
+  const localOnly = { zip: '12' };
 
   // แมปรหัสสาขาในเว็บ -> ชื่อสาขาในชีท (กรณีชื่อไม่ตรงกัน เช่น เว็บใช้ zjp แต่ชีทเป็น SJP)
   const branchAlias = {
@@ -77,7 +75,7 @@ export default async function handler(req, res) {
   const branchKey = String(branch).toLowerCase().trim();
   // ชื่อสาขาที่คาดว่าจะอยู่ในชีท (คอลัมน์ C) ใช้ alias ถ้ามี
   const sheetBranchName = (branchAlias[branchKey] || branchKey).toLowerCase().trim();
-  const outletId = String(queryOutletId || branchMap[branchKey] || '').trim();
+  const outletId = String(queryOutletId || outletIdOf(branchKey) || localOnly[branchKey] || '').trim();
 
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
 

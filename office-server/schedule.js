@@ -282,6 +282,47 @@ const userPayload = (row) => ({
 });
 
 /**
+ * outletId ของผู้ใช้ — ยึดทะเบียนสาขา (dbo.hr_branch) เป็นแหล่งจริงแหล่งเดียว
+ *
+ * เดิม outletId ที่สาขาถืออยู่มาจาก hr_user.outlet_id (ตอน login) ส่วนดรอปดาวน์ของผู้ใช้สิทธิ์ all
+ * อ่านจาก hr_branch.outlet_id — สองตารางนี้ไม่มีอะไรบังคับให้ตรงกัน พอไม่ตรงเมื่อไหร่ แอดมินกับ
+ * สาขาจะเห็น "สินค้ารอเข้า / ใบเบิกค้าง / ยอดรับเข้า" คนละชุด โดยไม่มีอะไรฟ้อง
+ *
+ * ทะเบียนสาขาเป็นตัวที่มีคนดูแลจริง (is_active, ชื่อเต็ม, outlet) จึงให้ชนะ และถ้าทะเบียนไม่มี
+ * ค่าให้ค่อยใช้ของเดิมใน hr_user (เช่น 'all' ที่ไม่ใช่สาขาจริง หรือสาขาที่ยังไม่ได้ลงทะเบียน)
+ */
+async function outletFromBranchRegistry(branch) {
+  const codes = branchGroup(primaryBranch(branch) || branch);
+  if (codes.length === 0) return null;
+  const params = {};
+  const list = codes.map((c, i) => { params[`b${i}`] = { type: sql.NVarChar(50), value: c }; return `@b${i}`; });
+  const rows = await queryRead(
+    `SELECT outlet_id FROM dbo.hr_branch
+      WHERE LOWER(branch) IN (${list.join(', ')}) AND outlet_id IS NOT NULL`,
+    params
+  );
+  return rows.length ? rows[0].outlet_id : null;
+}
+
+/** payload ตอน login ที่ outletId ผ่านทะเบียนสาขาแล้ว */
+async function payloadWithRegistryOutlet(payload) {
+  try {
+    const fromRegistry = await outletFromBranchRegistry(payload.branch);
+    if (fromRegistry === null || fromRegistry === undefined || String(fromRegistry) === '') return payload;
+    if (String(fromRegistry) !== String(payload.outletId ?? '')) {
+      // ไม่ใช่เรื่องปกติ — ต้องมีคนไปแก้ให้ตรงกัน ไม่งั้นแก้ที่เดียวแล้วอีกหน้ายังผิดอยู่
+      console.warn(`outletId ของ "${payload.username}" (สาขา ${payload.branch}) ไม่ตรงกัน: ` +
+        `hr_user=${payload.outletId || '(ว่าง)'} · hr_branch=${fromRegistry} — ใช้ของ hr_branch`);
+    }
+    return { ...payload, outletId: fromRegistry };
+  } catch (err) {
+    // อ่านทะเบียนไม่ได้ก็ยังต้องล็อกอินได้ ใช้ของเดิมไปก่อน
+    console.warn('อ่าน outletId จากทะเบียนสาขาไม่สำเร็จ:', err?.message || err);
+    return payload;
+  }
+}
+
+/**
  * ตรวจชื่อผู้ใช้/รหัสผ่าน — action เดียวที่เรียกได้โดยยังไม่มีเซสชัน (ดู NO_SESSION ท้ายไฟล์)
  *
  * ตอบข้อความเดียวกันทั้งกรณี "ไม่มีชื่อนี้" กับ "รหัสผิด" โดยตั้งใจ
@@ -321,7 +362,7 @@ async function login(body) {
             { username: { type: sql.NVarChar(100), value: username } })
         );
       }
-      return userPayload(row);
+      return payloadWithRegistryOutlet(userPayload(row));
     }
   }
 
@@ -338,12 +379,12 @@ async function login(body) {
   });
   console.info(`คัดลอกผู้ใช้ "${username}" (สาขา ${fromSheet.branch}) จากชีทเข้า hr_user แล้ว`);
 
-  return {
+  return payloadWithRegistryOutlet({
     username,
     branch: fromSheet.branch,
     outletId: fromSheet.outletId,
     name: row?.display_name || '',
-  };
+  });
 }
 
 /** รายชื่อสาขา — ตอบเป็น [{name, outletId}] ให้ตรงกับที่หน้าเว็บอ่าน (br.name) */

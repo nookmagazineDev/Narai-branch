@@ -1,4 +1,5 @@
 import { queryRead, replyDbError } from '../lib/mysql.js';
+import { DB_SUFFIX_BY_OUTLET } from '../lib/branchOutlet.js';
 
 // ใบเบิกค้าง (สั่งแล้วยังไม่ได้รับของ) — อ่านตรงจาก myfbdata.orderd
 //   ใบที่ยังไม่ได้รับ = ยังไม่มีรายการไหนถูกบันทึกรับเข้า (Ord_Rcv ยังว่าง)
@@ -10,11 +11,6 @@ import { queryRead, replyDbError } from '../lib/mysql.js';
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
 // รหัสสาขา → ชื่อฐานข้อมูลสาขา (ใช้อ่านเลขใบล่าสุดจาก config — ชุดเดียวกับ insert_order)
-const DB_SUFFIX = {
-  7: 'zjp', 12: 'crm', 19: 'xcm', 37: 'slr', 51: 'sum', 55: 'sts', 59: 'xum',
-  61: 'scs', 63: 'smp', 67: 'xsb', 72: 'xhh', 78: 'hrs', 79: 'clk', 80: 'p90',
-  400: 'zbw', 401: 'zpt', 501: 'wrm', 902: 'hps', 906: 'zk3', 950: 'fct',
-};
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -49,7 +45,7 @@ export default async function handler(req, res) {
     // ให้ MySQL ใช้ PRIMARY KEY (Ord_No นำหน้า) ชี้ตรงจุด → เหลือ ~0.2 วิ
     let inClause = '';
     let inParams = [];
-    const suffix = DB_SUFFIX[Number(outletId)];
+    const suffix = DB_SUFFIX_BY_OUTLET[Number(outletId)];
     if (suffix) {
       try {
         const cfg = await queryRead(`SELECT Cfg_LstOrdID AS v FROM \`myfbdata${suffix}\`.config LIMIT 1`);

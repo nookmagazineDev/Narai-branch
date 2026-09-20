@@ -1,5 +1,6 @@
 import { getPool, queryRead, replyDbError } from '../lib/mysql.js';
 import { USAGE_API_BASE, fetchUpstream, fetchSheet } from '../lib/upstream.js';
+import { DB_SUFFIX_BY_OUTLET, DB_SUFFIX_BY_BRANCH } from '../lib/branchOutlet.js';
 
 // สั่งของ/ขอเบิกจากสาขา — เขียนตรงลง MySQL: inventory.dyndns.tv
 //   หัวใจคือตาราง myfbdata.orderd (ใบสั่งของกลาง, Ord_ReqType='TRF')
@@ -9,15 +10,8 @@ import { USAGE_API_BASE, fetchUpstream, fetchSheet } from '../lib/upstream.js';
 // POST body: { outletId, branch, deldate:'YYYY-MM-DD', items:[{itemId,itemCode,itemName,qty,unit,price}], dryRun }
 // GET  ?peek=<Ord_No>&outletId=<id>  → ดูใบที่บันทึกไปแล้ว (ใช้ตรวจสอบผลลัพธ์)
 
-// รหัสสาขา (outletId) → ชื่อฐานข้อมูลสาขา myfbdata<suffix>
-// ตรวจสอบแล้วจากค่า Cfg_LstOrdID ที่ตรงกับใบสั่งล่าสุดของแต่ละสาขาจริง
-const DB_SUFFIX = {
-  7: 'zjp', 12: 'crm', 19: 'xcm', 37: 'slr', 51: 'sum', 55: 'sts', 59: 'xum',
-  61: 'scs', 63: 'smp', 67: 'xsb', 72: 'xhh', 78: 'hrs', 79: 'clk', 80: 'p90',
-  400: 'zbw', 401: 'zpt', 501: 'wrm', 902: 'hps', 906: 'zk3', 950: 'fct',
-};
-// สาขาที่รหัสในเว็บกับชื่อ DB ไม่ตรงกัน
-const BRANCH_ALIAS = { sjp: 'zjp', zip: 'zjp' };
+// รหัสสาขา (outletId) → ชื่อฐานข้อมูลสาขา myfbdata<suffix> อยู่ที่ lib/branchOutlet.js ที่เดียว
+// (ตรวจสอบแล้วจากค่า Cfg_LstOrdID ที่ตรงกับใบสั่งล่าสุดของแต่ละสาขาจริง)
 
 const SUP_ID = 490;      // คลังกลางที่จ่ายของ (ตรงกับ Trn_From ในใบรับ)
 const REQ_TYPE = 'TRF';  // ใบขอโอน/เบิกระหว่างสาขา (ใช้ทั้ง Ord_ReqType และ Inv_Type)
@@ -128,9 +122,9 @@ function bangkokNow() {
 
 async function resolveDb(conn, outletId, branch) {
   const cands = [];
-  if (DB_SUFFIX[Number(outletId)]) cands.push(DB_SUFFIX[Number(outletId)]);
+  if (DB_SUFFIX_BY_OUTLET[Number(outletId)]) cands.push(DB_SUFFIX_BY_OUTLET[Number(outletId)]);
   const b = String(branch || '').toLowerCase().trim();
-  if (b) cands.push(BRANCH_ALIAS[b] || b);
+  if (b) cands.push(DB_SUFFIX_BY_BRANCH[b] || b);
   for (const suffix of cands) {
     const db = 'myfbdata' + suffix;
     try {
