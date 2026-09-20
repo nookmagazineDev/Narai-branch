@@ -419,44 +419,9 @@ export default function StockList() {
     }
   }, [effectiveBranch]);
 
-  /**
-   * ค่าที่ "แอดมินสิทธิ์ all แก้ให้" (จำนวนหัวลูกค้า + ค่าตั้งเบิก) — ดึงใหม่ให้เองเมื่อกลับมาที่แท็บ
-   *
-   * เครื่องสาขามักเปิดหน้านับสต๊อกค้างไว้ทั้งวัน ส่วน loadData/loadSpecialPcts ยิงแค่ตอนเปิดหน้า
-   * (useEffect ผูกกับสาขา) ผลคือแอดมินแก้ค่าให้แล้วหน้าสาขายังโชว์ตัวเลขเก่าจนกดรีเฟรช
-   * — อาการ "หน้าแอดมินแก้แล้วหน้าสาขาไม่แก้ตาม"
-   *
-   * ทำเฉพาะผู้ใช้ที่แก้ค่าเหล่านี้ไม่ได้ (สาขา) เพราะถ้าทำกับแอดมินด้วย ค่าที่กำลังพิมพ์ค้างไว้
-   * ในปฏิทินจะถูกของจากเซิร์ฟเวอร์ทับตอนสลับแท็บ
-   *
-   * อัปเดตเฉพาะฟิลด์ค่าตั้งเบิกของแต่ละสินค้า ไม่แตะ remaining/requested ที่สาขากรอกค้างไว้
-   * (จึงไม่เรียก loadData ซึ่งเซ็ต items ใหม่ทั้งชุดและล้างสิ่งที่กรอกไปแล้ว)
-   */
-  useEffect(() => {
-    if (canEditCovers) return;
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible' || !effectiveBranch) return;
-      loadSpecialPcts(effectiveBranch);
-      tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(effectiveBranch)}`)
-        .then((res) => {
-          if (res?.status !== 'success') return;
-          const avgMap = res.data || {}, modeMap = res.modes || {}, parMap = res.par || {};
-          setItems(prev => prev.map(item => {
-            const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
-            return {
-              ...item,
-              avgPerHead: avgMap[nid] !== undefined ? Number(avgMap[nid]) : undefined,
-              calcMode: modeMap[nid] === 'par' ? 'par' : 'avg',
-              parQty: parMap[nid] !== undefined ? Number(parMap[nid]) : undefined,
-            };
-          }));
-        })
-        .catch(() => {});
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveBranch, canEditCovers]);
+  /* หมายเหตุ: ตัวรีเฟรช "ค่าที่แอดมินแก้ให้" ตอนสลับแท็บถูกยุบเข้าไปใน refreshFromServer แล้ว
+     (ดึงทุก 60 วินาทีและตอนกลับมาที่แท็บ ครอบคลุมทั้งยอดนับ ค่าตั้งเบิก และจำนวนหัวลูกค้า)
+     ของเดิมกันผู้ใช้สิทธิ์ all ไว้ทั้งก้อน แอดมินจึงไม่เคยได้ข้อมูลใหม่เลยจนกว่าจะรีเฟรชหน้าเอง */
 
   useEffect(() => {
     const newMap = {}, new259 = {}, new359 = {};
@@ -820,7 +785,8 @@ export default function StockList() {
   const pulseRef = useRef('');       // ลายนิ้วมือข้อมูลสาขาครั้งล่าสุดที่เห็น
   const lastFullAt = useRef(0);      // เวลาที่ดึงของหนักครั้งล่าสุด (ใช้ตอน stockPulse ใช้ไม่ได้)
 
-  const pulseSig = (d) => `${d?.counts}|${d?.lastCountAt}|${d?.requests}|${d?.lastRequestId}`;
+  const pulseSig = (d) => [d?.counts, d?.lastCountAt, d?.requests, d?.lastRequestId,
+    d?.settings, d?.lastSettingAt, d?.covers, d?.lastCoverAt].join('|');
 
   const refreshFromServer = async ({ silent = true } = {}) => {
     const branch = effectiveBranch;
@@ -831,24 +797,45 @@ export default function StockList() {
       const outletId = isAll
         ? (branches.find(b => b.name === branch)?.outletId || '')
         : (user?.outletId || '');
-      const [itemsRes, incomingRes, pulseRes] = await Promise.all([
+      const [itemsRes, incomingRes, pulseRes, avgRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
         outletId
           ? tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`)
           : Promise.resolve(null),
         apiCall('stockPulse', { branch }).catch(() => null),
+        // ค่าตั้งเบิกที่แอดมินแก้จากอีกเครื่อง — ต้องตามมาด้วย ไม่งั้น "คำนวณยอดเบิก" ใช้ค่าเก่า
+        tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`).catch(() => null),
       ]);
       // จดลายนิ้วมือ ณ ตอนที่ดึงของหนักมา รอบเช็คถัดไปจะได้เทียบกับของจริง
       if (pulseRes?.status === 'success') pulseRef.current = pulseSig(pulseRes.data);
       if (itemsRes?.status !== 'success') throw new Error(itemsRes?.message || 'ดึงข้อมูลใหม่ไม่สำเร็จ');
       const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
 
+      const avgOk = avgRes?.status === 'success';
+      const avgMap = avgOk ? (avgRes.data || {}) : {};
+      const modeMap = avgOk ? (avgRes.modes || {}) : {};
+      const parMap = avgOk ? (avgRes.par || {}) : {};
+
       let changedRows = 0;
       setItems(prev => {
         const merged = mergeStockItems(prev, itemsRes.data, incomingMap, prevMonthFromHistory);
         changedRows = merged.changed;
-        return merged.items;
+        // อ่านค่าตั้งเบิกไม่ได้รอบนี้ = คงของเดิมไว้ ดีกว่าล้างค่าที่ใช้คำนวณทิ้ง
+        if (!avgOk) return merged.items;
+        return merged.items.map(it => {
+          const nid = String(it.productId).replace(/^0+/, '').toLowerCase();
+          return {
+            ...it,
+            avgPerHead: avgMap[nid] !== undefined ? Number(avgMap[nid]) : undefined,
+            calcMode: modeMap[nid] === 'par' ? 'par' : 'avg',
+            parQty: parMap[nid] !== undefined ? Number(parMap[nid]) : undefined,
+          };
+        });
       });
+
+      // ปฏิทินจำนวนหัวลูกค้า: ดึงใหม่เฉพาะคนที่แก้ไม่ได้ (สาขา) — ถ้าทำกับแอดมินด้วย
+      // ตัวเลขที่กำลังพิมพ์ค้างในปฏิทินจะถูกของจากเซิร์ฟเวอร์ทับ
+      if (!canEditCovers) loadSpecialPcts(branch);
 
       setLastSyncedAt(new Date());
       if (!silent) {
@@ -1810,9 +1797,19 @@ export default function StockList() {
 
     setIsSaving(true);
     try {
-      const payloadItems = itemsToSave.map(item => ({ ...item, requested: item.requested ? Number(item.requested) : 0 }));
-      // บันทึกทีเดียว 200-300 รายการ + อาจต้องรอคิวสาขาอื่นที่กดพร้อมกัน (ฝั่ง GAS ล็อกตอนเขียนชีท)
-      // ให้เวลามากกว่าค่ามาตรฐาน 30 วิ เพราะถ้าตัดกลางคันฝั่ง GAS ไม่ได้หยุดตาม แล้วผู้ใช้จะกดซ้ำจนข้อมูลซ้ำ
+      // ส่งเฉพาะ 5 ฟิลด์ที่ saveStock ใช้จริง — เดิมใช้ {...item} ซึ่งลาก stockHistory
+      // (ประวัติการนับทั้งหมดของสินค้านั้น) ไปด้วยทุกแถว นับเต็มชั้น 200-300 รายการ
+      // กลายเป็นส่งข้อมูลหลัก MB ผ่านเน็ตสาขา ทั้งที่ปลายทางไม่ได้ใช้อะไรเลย
+      const payloadItems = itemsToSave.map(item => ({
+        productId: item.productId,
+        name: item.name,
+        unit: item.unit,
+        remaining: item.remaining,
+        requested: item.requested ? Number(item.requested) : 0,
+      }));
+      // บันทึกทีเดียว 200-300 รายการ + อาจต้องรอคิวสาขาอื่นที่กดพร้อมกัน
+      // เพดานจริงคือ maxDuration 60 วิใน vercel.json — รอนานกว่านั้นไม่มีประโยชน์
+      // (ของเดิมรอ 90 วิ ฟังก์ชันถูกฆ่าไปตั้งแต่ 60 แล้วผู้ใช้เห็น error ที่ไม่บอกอะไร)
       const res = await apiCall('saveStock', {
         branch: effectiveBranch || 'Unknown',
         username: user?.username || 'Unknown',
@@ -1820,7 +1817,7 @@ export default function StockList() {
         requestDate,
         requesterName,
         items: payloadItems
-      }, { timeoutMs: 90000, deadlineMs: 95000 });
+      }, { timeoutMs: 55000, deadlineMs: 58000 });
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
 
@@ -1938,7 +1935,35 @@ export default function StockList() {
     const label = mode === 'par' ? 'ค่าเติมเต็มสตอค' : 'ค่าเฉลี่ยต่อหัว';
     const current = calcValueOf(item);
     const trimmed = String(raw).trim();
-    if (trimmed === '') { clearDraft(); return; }  // ปล่อยว่าง = ยกเลิก คืนค่าเดิม
+    // ล้างช่างจนว่าง = สั่งลบค่านั้นทิ้ง (ตั้งผิดแล้วต้องแก้กลับได้)
+    // เดิมตรงนี้ return เฉย ๆ ทำให้ค่าเก่าเด้งกลับมาทุกครั้ง ลบไม่ได้เลยสักวิธี
+    if (trimmed === '') {
+      if (current === undefined) { clearDraft(); return; }   // ไม่มีค่าอยู่แล้ว ไม่ต้องยิง
+      if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
+      setSavingAvg(s2 => ({ ...s2, [pid]: true }));
+      await queueCalcWrite(async () => {
+        try {
+          const res = await apiCall('saveAvgPerHead', {
+            branch: String(effectiveBranch).toLowerCase(),
+            code: pid, name: item.name || '', mode, clear: true,
+          });
+          if (res.status === 'success') {
+            setItems(prev => prev.map(it => it.productId === pid
+              ? { ...it, ...(mode === 'par' ? { parQty: undefined } : { avgPerHead: undefined }) }
+              : it));
+            clearDraft();
+            toast.success(res.message || `ลบ${label}แล้ว`);
+          } else {
+            toast.error(res.message || `ลบ${label}ไม่สำเร็จ`);
+          }
+        } catch (e) {
+          toast.error(errMessage(e));
+        } finally {
+          setSavingAvg(s2 => { const n = { ...s2 }; delete n[pid]; return n; });
+        }
+      });
+      return;
+    }
     const num = Number(trimmed);
     if (!Number.isFinite(num) || num < 0) { toast.error(`${label}ไม่ถูกต้อง`); clearDraft(); return; }
     if (current !== undefined && num === current) { clearDraft(); return; } // ไม่เปลี่ยน

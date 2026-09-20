@@ -427,7 +427,7 @@ async function stockPulse(body, session) {
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   const p = branchIn(branch).params;
   const list = branchIn(branch).list;
-  const [counts, requests] = await Promise.all([
+  const [counts, requests, settings] = await Promise.all([
     queryRead(
       `SELECT COUNT(*) AS n, CONVERT(NVARCHAR(19), MAX(counted_at), 120) AS last_at
          FROM dbo.stock_count WHERE branch IN (${list})`,
@@ -438,12 +438,28 @@ async function stockPulse(body, session) {
          FROM dbo.stock_request WHERE branch IN (${list})`,
       p
     ),
+    // ค่าตั้งเบิก + จำนวนหัวลูกค้า — แอดมินแก้จากอีกเครื่อง สาขาต้องเห็นตามโดยไม่ต้องรีเฟรชเอง
+    queryRead(
+      `SELECT
+         (SELECT COUNT(*) FROM dbo.stock_avg_per_head WHERE branch IN (${list})) AS avg_n,
+         (SELECT CONVERT(NVARCHAR(19), MAX(updated_at), 120)
+            FROM dbo.stock_avg_per_head WHERE branch IN (${list})) AS avg_at,
+         (SELECT COUNT(*) FROM dbo.stock_branch_percent WHERE branch IN (${list})) AS pct_n,
+         (SELECT CONVERT(NVARCHAR(19), MAX(updated_at), 120)
+            FROM dbo.stock_branch_percent WHERE branch IN (${list})) AS pct_at`,
+      p
+    ),
   ]);
+  const st = settings[0] || {};
   return {
     counts: Number(counts[0]?.n || 0),
     lastCountAt: str(counts[0]?.last_at),
     requests: Number(requests[0]?.n || 0),
     lastRequestId: Number(requests[0]?.last_id || 0),
+    settings: Number(st.avg_n || 0),
+    lastSettingAt: str(st.avg_at),
+    covers: Number(st.pct_n || 0),
+    lastCoverAt: str(st.pct_at),
   };
 }
 
@@ -670,6 +686,9 @@ async function saveAvgPerHead(body, session) {
   const mode = calcModeOf(body.mode);
   // ส่ง value มาว่าง = แค่สลับโหมด ไม่แตะตัวเลข (ติ๊กช่องก่อนแล้วค่อยพิมพ์ตัวเลขทีหลังได้)
   const hasValue = body.value !== undefined && body.value !== null && str(body.value) !== '';
+  // clear = ลบค่าของโหมดนั้นทิ้ง (ตั้งผิดแล้วต้องแก้กลับได้ ไม่ใช่แก้ได้แต่ลบไม่ได้)
+  // ต่างจาก "ไม่ส่ง value มา" ซึ่งแปลว่าไม่แตะตัวเลข จึงต้องมีธงแยกไม่ให้สองกรณีนี้ปนกัน
+  const clearing = body.clear === true || body.clear === 'true';
   const value = hasValue ? Number(body.value) : null;
   const label = mode === 'par' ? 'ค่าเติมเต็มสตอค' : 'ค่าเฉลี่ยต่อหัว';
   if (!branch) throw badRequest('ไม่ระบุสาขา');
@@ -690,7 +709,8 @@ async function saveAvgPerHead(body, session) {
        ON t.branch = s.branch AND t.item_key = s.item_key
      WHEN MATCHED THEN UPDATE SET
        item_code = @item_code, item_name = ISNULL(NULLIF(@item_name, N''), t.item_name),
-       avg_qty = ISNULL(@avg_qty, t.avg_qty), par_qty = ISNULL(@par_qty, t.par_qty),
+       avg_qty = CASE WHEN @clear_avg = 1 THEN NULL ELSE ISNULL(@avg_qty, t.avg_qty) END,
+       par_qty = CASE WHEN @clear_par = 1 THEN NULL ELSE ISNULL(@par_qty, t.par_qty) END,
        calc_mode = @calc_mode, updated_at = SYSDATETIME()
      WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, avg_qty, par_qty, calc_mode)
        VALUES (@branch, @item_key, @item_code, @item_name, ISNULL(@avg_qty, 0), @par_qty, @calc_mode);`,
@@ -704,8 +724,11 @@ async function saveAvgPerHead(body, session) {
       calc_mode: { type: sql.NVarChar(10), value: mode },
       avg_qty: { type: sql.Decimal(18, 4), value: mode === 'avg' ? value : null },
       par_qty: { type: sql.Decimal(18, 4), value: mode === 'par' ? value : null },
+      clear_avg: { type: sql.Bit, value: clearing && mode === 'avg' ? 1 : 0 },
+      clear_par: { type: sql.Bit, value: clearing && mode === 'par' ? 1 : 0 },
     }
   );
+  if (clearing) return { message: `ลบ${label}แล้ว`, branch, code, mode, cleared: true };
   return { message: `บันทึก${label}แล้ว`, branch, code, mode, value };
 }
 
@@ -823,19 +846,29 @@ async function getBranchPercent(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   const alias = branchAliases(branch);
+  // สาขาสองรหัส (zjp/sjp) อาจมีข้อมูลเก่าค้างอยู่ใต้ทั้งสองรหัสในวันเดียวกัน — ต้องมีตัวตัดสิน
+  // ว่าแถวไหนชนะ ไม่งั้นค่าที่โชว์ขึ้นกับลำดับที่ SQL คืนมา (ไม่การันตี) กลายเป็นบางครั้งได้ค่าเก่า
+  // ฝั่งเว็บใช้ .find() ซึ่งหยิบ "แถวแรก" ที่ตรงวัน จึงเรียงให้รหัสที่ขอมาอยู่หน้าสุด แล้วตัดซ้ำทิ้งที่นี่เลย
   const rows = await queryRead(
     `SELECT CONVERT(NVARCHAR(10), percent_date, 23) AS date_text, percent_value, qty_259, qty_359
        FROM dbo.stock_branch_percent
       WHERE branch IN (@b0, @b1)
-      ORDER BY percent_date`,
+      ORDER BY percent_date, CASE WHEN branch = @branch THEN 0 ELSE 1 END`,
     {
+      branch: { type: sql.NVarChar(50), value: branch },
       b0: { type: sql.NVarChar(50), value: alias[0] },
       b1: { type: sql.NVarChar(50), value: alias[1] || alias[0] },
     }
   );
+  const seen = new Set();
   return {
     branch,
-    data: rows.map((r) => ({
+    data: rows.filter((r) => {
+      const d = str(r.date_text);
+      if (seen.has(d)) return false;   // วันเดียวกันเอาแถวของรหัสที่ขอมาเท่านั้น
+      seen.add(d);
+      return true;
+    }).map((r) => ({
       date: r.date_text,
       percent: Number(r.percent_value ?? 0),
       // ไม่ใส่คีย์เลยเมื่อไม่มีค่า — ฝั่งเว็บแยก "ไม่เคยกรอก" กับ "กรอกเป็น 0" ด้วย undefined
