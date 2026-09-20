@@ -24,8 +24,12 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 config({ path: path.join(here, '..', '.env') });
 
-const { stockDb, isConfigured, describeDbError } = await import('../hr-db.js');
+// hr_branch / hr_user อยู่ฐาน HR (narai_hr) — ไม่ใช่ InventoryNarai ของหน้านับสต๊อก
+// (InventoryNarai มีตารางชื่อเดียวกันค้างอยู่จากตอนย้ายระบบ แต่คนละสคีมาและไม่ใช่ตัวที่ระบบใช้)
+const { hrDb, isConfigured, describeDbError } = await import('../hr-db.js');
 const { OUTLET_BY_BRANCH, branchSiblings } = await import('../../lib/branchOutlet.js');
+
+const HR_DB = process.env.HR_DB_NAME || 'narai_hr';
 
 if (!isConfigured()) {
   console.error('ยังไม่ได้ตั้งค่า HR_DB_USER / HR_DB_PASSWORD ใน office-server/.env');
@@ -36,9 +40,23 @@ const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const line = () => console.log('─'.repeat(78));
 
 try {
+  // ตารางรุ่นเก่าบางเครื่องยังไม่มีคอลัมน์ is_active — ถอยไปอ่านแบบไม่มีคอลัมน์นั้นแทนที่จะล้มทั้งสคริปต์
+  const readBranches = async () => {
+    try {
+      return await hrDb.queryRead('SELECT branch, branch_name, outlet_id, is_active FROM dbo.hr_branch ORDER BY branch');
+    } catch (err) {
+      if (!/Invalid column name/i.test(err?.message || '')) throw err;
+      console.log('  (ตารางนี้ยังไม่มีคอลัมน์ is_active — ถือว่าทุกสาขาเปิดใช้งาน)');
+      const rows = await hrDb.queryRead('SELECT branch, branch_name, outlet_id FROM dbo.hr_branch ORDER BY branch');
+      return rows.map((r) => ({ ...r, is_active: true }));
+    }
+  };
+
+  console.log(`อ่านจากฐาน ${HR_DB} (dbo.hr_branch / dbo.hr_user)`);
+  console.log('');
   const [branches, users] = await Promise.all([
-    stockDb.queryRead('SELECT branch, branch_name, outlet_id, is_active FROM dbo.hr_branch ORDER BY branch'),
-    stockDb.queryRead('SELECT username, branch, outlet_id FROM dbo.hr_user ORDER BY branch, username'),
+    readBranches(),
+    hrDb.queryRead('SELECT username, branch, outlet_id FROM dbo.hr_user ORDER BY branch, username'),
   ]);
 
   const problems = [];
