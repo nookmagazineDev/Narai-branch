@@ -12,7 +12,7 @@
 
 // ฐานข้อมูลของสต๊อกคือ InventoryNarai คนละตัวกับ narai_hr ของตารางงาน จึงใช้ stockDb
 import { sql, stockDb } from './hr-db.js';
-import { branchFor } from './hr-session.js';
+import { branchFor, branchGroup } from './hr-session.js';
 import { syncItemsFromSheet } from './item-sync.js';
 
 const { queryRead, withTransaction } = stockDb;
@@ -60,12 +60,29 @@ const forbidden = (msg) => Object.assign(new Error(msg), { forbidden: true });
  */
 const normCode = (v) => str(v).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
-/** สาขาที่ถือว่าเป็นสาขาเดียวกันตอนค้นข้อมูลเก่า (zjp กับ sjp ใช้ปนกันมาแต่ไหนแต่ไร) */
-const branchAliases = (branch) => {
-  const b = str(branch).toLowerCase();
-  if (b === 'zjp' || b === 'sjp') return ['zjp', 'sjp'];
-  return [b];
-};
+/** สาขาที่ถือว่าเป็นสาขาเดียวกันตอนค้นข้อมูลเก่า (zjp กับ sjp ใช้ปนกันมาแต่ไหนแต่ไร)
+    อ่านจากทะเบียนกลุ่มสาขาใน hr-session.js ที่เดียว — เพิ่มคู่ใหม่ที่นั่นแล้วที่นี่ได้ผลตาม */
+const branchAliases = (branch) => branchGroup(branch);
+
+/**
+ * ชุดพารามิเตอร์สำหรับ `WHERE branch IN (...)` ที่ครอบรหัสพี่น้องทั้งกลุ่ม
+ *
+ * ทำไมต้องครอบ: ผู้ใช้สิทธิ์ all เลือกสาขาจากดรอปดาวน์ซึ่งยุบรหัสพี่น้องเหลือตัวเดียว (sjp)
+ * แต่สาขาเองล็อกอินและบันทึกด้วยอีกรหัส (zjp) — ถ้าฝั่งอ่านกรองแบบตรงตัว แอดมินกับสาขา
+ * จะเห็นคนละชุดข้อมูลทั้งที่เป็นร้านเดียวกัน (ยอดนับ ยอดยกมา ใบเบิก ปิดยอดสิ้นเดือน)
+ *
+ * ฝั่งเขียนยังใช้รหัสที่ส่งมาตามเดิมเสมอ ไม่แปลง (ดูกติกาใน hr-session.js)
+ */
+function branchIn(branch, prefix = 'ba') {
+  const params = {};
+  const list = branchGroup(branch)
+    .map((code, i) => {
+      params[`${prefix}${i}`] = { type: sql.NVarChar(50), value: code };
+      return `@${prefix}${i}`;
+    })
+    .join(', ');
+  return { list, params };
+}
 
 const two = (n) => String(n).padStart(2, '0');
 
@@ -93,6 +110,7 @@ async function getStockItems(body, session) {
   const itemBranch = itemBranchOf(branch);
 
   const branchParam = { branch: { type: sql.NVarChar(50), value: branch } };
+  const inBranch = branchIn(branch);
 
   const [items, counts, balances, requests, categories] = await Promise.all([
     queryRead(
@@ -110,15 +128,16 @@ async function getStockItems(body, session) {
       `SELECT item_key, remaining, counter_name,
               CONVERT(NVARCHAR(19), counted_at, 120) AS counted_text
          FROM dbo.stock_count
-        WHERE branch = @branch
+        WHERE branch IN (${inBranch.list})
         ORDER BY item_key, counted_at, count_id`,
-      branchParam
+      inBranch.params
     ),
     queryRead(
       `SELECT item_key, balance, CONVERT(NVARCHAR(19), updated_at, 120) AS updated_text
          FROM dbo.stock_balance
-        WHERE branch = @branch`,
-      branchParam
+        WHERE branch IN (${inBranch.list})
+        ORDER BY updated_at, CASE WHEN branch = @branch THEN 1 ELSE 0 END`,
+      { ...branchParam, ...inBranch.params }
     ),
     // ใบเบิกครั้งล่าสุดต่อสินค้า — แถวที่ใหม่ที่สุดคือแถวที่ต่อท้ายทีหลัง จึงใช้ request_id ตัดสิน
     // (เวลาบันทึกในชีทเก่าบางแถวว่าง ถ้าเรียงด้วยเวลาอย่างเดียวแถวเหล่านั้นจะจมหายไป)
@@ -128,10 +147,10 @@ async function getStockItems(body, session) {
          FROM dbo.stock_request r
          JOIN (SELECT item_key, MAX(request_id) AS request_id
                  FROM dbo.stock_request
-                WHERE branch = @branch
+                WHERE branch IN (${inBranch.list})
                 GROUP BY item_key) last_one
            ON last_one.request_id = r.request_id`,
-      branchParam
+      inBranch.params
     ),
     // หมวดจัดเก็บ: อ่านครอบรหัสพี่น้อง (zjp/sjp) เหมือนค่าตั้งเบิก ของเก่าที่บันทึกไว้ใต้อีกรหัส
     // จึงยังเห็น — เรียงให้แถวของ "รหัสที่ขอมา" มาท้ายสุด เพื่อให้ชนะตอนยัดลง Map ถ้ามีทั้งสองรหัส
@@ -406,16 +425,17 @@ async function stockStatus() {
 async function stockPulse(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   if (!branch) throw badRequest('ไม่ระบุสาขา');
-  const p = { branch: { type: sql.NVarChar(50), value: branch } };
+  const p = branchIn(branch).params;
+  const list = branchIn(branch).list;
   const [counts, requests] = await Promise.all([
     queryRead(
       `SELECT COUNT(*) AS n, CONVERT(NVARCHAR(19), MAX(counted_at), 120) AS last_at
-         FROM dbo.stock_count WHERE branch = @branch`,
+         FROM dbo.stock_count WHERE branch IN (${list})`,
       p
     ),
     queryRead(
       `SELECT COUNT(*) AS n, ISNULL(MAX(request_id), 0) AS last_id
-         FROM dbo.stock_request WHERE branch = @branch`,
+         FROM dbo.stock_request WHERE branch IN (${list})`,
       p
     ),
   ]);
@@ -916,9 +936,9 @@ async function getMonthEndClosing(body, session) {
             qty, unit_price, amount, recorder,
             CONVERT(NVARCHAR(19), saved_at, 120) AS saved_text
        FROM dbo.stock_month_end
-      WHERE branch = @branch
+      WHERE branch IN (${branchIn(branch).list})
       ORDER BY item_key, closing_id`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    branchIn(branch).params
   );
 
   const out = {};
@@ -950,11 +970,11 @@ async function getMonthEndRows(body, session) {
     `SELECT CONVERT(NVARCHAR(10), closing_date, 23) AS date_text, item_key, item_code, item_name, unit,
             qty, unit_price, amount
        FROM dbo.stock_month_end
-      WHERE branch = @branch
+      WHERE branch IN (${branchIn(branch).list})
         AND (@month IS NULL OR CONVERT(NVARCHAR(7), closing_date, 23) = @month)
       ORDER BY closing_id`,
     {
-      branch: { type: sql.NVarChar(50), value: branch },
+      ...branchIn(branch).params,
       month: { type: sql.NVarChar(7), value: /^\d{4}-\d{2}$/.test(month) ? month : null },
     }
   );
@@ -982,12 +1002,12 @@ async function getStockCountRows(body, session) {
   const rows = await queryRead(
     `SELECT CONVERT(NVARCHAR(10), counted_at, 23) AS date_text, item_key, item_code, item_name, unit, remaining
        FROM dbo.stock_count
-      WHERE branch = @branch
+      WHERE branch IN (${branchIn(branch).list})
         AND (@from IS NULL OR counted_at >= CONVERT(DATETIME2(0), @from + ' 00:00:00', 120))
         AND (@to IS NULL OR counted_at <= CONVERT(DATETIME2(0), @to + ' 23:59:59', 120))
       ORDER BY counted_at, count_id`,
     {
-      branch: { type: sql.NVarChar(50), value: branch },
+      ...branchIn(branch).params,
       from: { type: sql.NVarChar(10), value: /^\d{4}-\d{2}-\d{2}$/.test(from) ? from : null },
       to: { type: sql.NVarChar(10), value: /^\d{4}-\d{2}-\d{2}$/.test(to) ? to : null },
     }
