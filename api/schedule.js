@@ -28,6 +28,7 @@ const READ_ONLY = new Set([
   'getHistoryData',
   // หน้านับสต๊อก (ยังไม่เปิดใช้จากหน้าเว็บ — ดู docs/stock-sql-migration.md)
   'getStockItems',
+  'stockPulse',
   'getStockTotal',
   'getItemPrices',
   'getItemRegistry',
@@ -61,6 +62,11 @@ const READ_ONLY = new Set([
 
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
+  // รุ่นที่ deploy อยู่ตอนนี้ — หน้าเว็บเอาไปเทียบกับรหัสรุ่นที่ฝังมากับไฟล์ของตัวเอง
+  // ต่างกันเมื่อไหร่แปลว่าเบราว์เซอร์ถือไฟล์ชุดเก่าค้างอยู่ (ดู src/services/api.js)
+  // ใส่เป็น header ของ endpoint ที่หน้าเว็บเรียกอยู่แล้ว จะได้ไม่ต้องเพิ่มไฟล์ใน api/
+  // (Vercel Hobby จำกัด serverless function ไว้ 12 ตัว ตอนนี้เต็มพอดี)
+  res.setHeader('x-app-build', process.env.VERCEL_GIT_COMMIT_SHA || 'dev');
   if (req.method !== 'POST') {
     return res.status(405).json({ status: 'error', message: 'รองรับเฉพาะ POST' });
   }

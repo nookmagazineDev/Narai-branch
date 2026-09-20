@@ -781,7 +781,9 @@ export default function StockList() {
           };
         }));
       } else {
-        toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
+        // โชว์สาเหตุจริงจากเซิร์ฟเวอร์ — เช่น "หน้านี้เป็นเวอร์ชันเก่า กรุณากด Ctrl+Shift+R"
+        // ที่ Apps Script ตอบกลับมาเมื่อเครื่องที่ถือไฟล์ชุดเก่ายิงมาหามัน
+        toast.error(itemsRes.message || 'ไม่สามารถดึงข้อมูลรายการสินค้าได้', { duration: 10000 });
       }
       if (empRes?.status === 'success') setEmployees(empRes.data);
 

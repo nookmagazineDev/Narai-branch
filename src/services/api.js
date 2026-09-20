@@ -1,3 +1,4 @@
+/* global __BUILD_ID__ */
 import { branchGroup, branchCodes } from '../utils/branchAlias';
 
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
@@ -12,6 +13,39 @@ export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPt
 // รอย้ายพร้อมกลุ่มของหน้านั้นๆ จะได้ทดสอบพร้อมกัน — /api/schedule รองรับ action นี้ไว้แล้ว
 // ---------------------------------------------------------------------------
 const SQL_ENDPOINT = '/api/schedule';
+
+/* ───────────── จับเครื่องที่ยังถือไฟล์ชุดเก่าค้างอยู่ ─────────────
+   หน้าเว็บเลือกว่าจะยิงไป SQL หรือ Apps Script จาก SQL_ACTIONS ซึ่งถูก "ฝังอยู่ในไฟล์ JavaScript
+   ที่เบราว์เซอร์โหลดไป" ไม่ใช่ค่าที่ถามเซิร์ฟเวอร์ตอนใช้งาน เครื่องที่แคชไฟล์ชุดเก่าไว้ (หรือเปิดจาก
+   bookmark ของ deployment เก่า) จึงยังยิงไป Apps Script แล้วอ่าน-เขียนชีทต่อไปได้เงียบ ๆ
+   เคสจริง: สาขา CRM นับสต๊อกวันที่ 20/09/2026 ลงชีท ส่วนแอดมินดู SQL เห็นแค่ 17/09 ไม่มีอะไรฟ้อง
+
+   /api/schedule ตอบ header x-app-build = รุ่นที่ deploy อยู่จริง เทียบกับรุ่นที่ฝังมากับไฟล์นี้
+   ต่างกันเมื่อไหร่ = ไฟล์ชุดนี้เก่าแล้ว ต้องบอกผู้ใช้ให้โหลดใหม่ ไม่ปล่อยให้ทำงานต่อแบบไม่รู้ตัว */
+const BUILD_ID = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
+let staleBuild = false;
+
+/** ไฟล์ที่เบราว์เซอร์ถืออยู่เก่ากว่าที่ deploy อยู่จริงหรือยัง */
+export const isStaleBuild = () => staleBuild;
+
+function checkBuild(response) {
+  // 'dev' = รันในเครื่องนักพัฒนา (ยังไม่มีรหัสรุ่นจริง) ไม่ต้องเทียบ
+  if (staleBuild || BUILD_ID === 'dev') return;
+  let served;
+  try {
+    served = response.headers.get('x-app-build') || '';
+  } catch {
+    return;   // บางเบราว์เซอร์/โหมดอ่าน header ไม่ได้ ไม่ใช่เรื่องที่ต้องทำให้คำขอล้ม
+  }
+  if (!served || served === 'dev' || served === BUILD_ID) return;
+  staleBuild = true;
+  console.warn(`หน้าเว็บนี้เป็นไฟล์รุ่น ${BUILD_ID.slice(0, 7)} แต่เซิร์ฟเวอร์ให้บริการรุ่น ${served.slice(0, 7)} แล้ว`);
+  try {
+    window.dispatchEvent(new CustomEvent('app-stale-build', { detail: { loaded: BUILD_ID, served } }));
+  } catch {
+    // ไม่มี window (เทส/SSR) — แค่ตั้งธงไว้ก็พอ
+  }
+}
 
 // เปิดทีละกลุ่ม ไม่เปิดรวดเดียว เพราะบาง action มีหน้าอื่นใช้ร่วมด้วย
 //
@@ -446,6 +480,8 @@ const requestOnce = async (action, payload, timeoutMs, via) => {
   } finally {
     clearTimeout(timer);
   }
+
+  if (toSql) checkBuild(response);
 
   // อ่านเป็น text ก่อน เพราะเวลา GAS ล่ม/ติดลิมิต มันตอบเป็นหน้า HTML ไม่ใช่ JSON
   let text;
