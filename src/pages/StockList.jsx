@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
 import { tryGetJson } from '../services/dashboardApi';
-import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import { loadStockDraft, saveStockDraft, clearStockDraft, countDraftValues } from '../utils/stockDrafts';
+import { mergeStockItems } from '../utils/stockMerge';
+import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList, Calculator, Plus, X, Trash2, Check, ChevronLeft, ChevronRight, FileDown, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import * as XLSX from 'xlsx';
@@ -736,11 +738,17 @@ export default function StockList() {
         tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`),
         // ยอดยกมาเดือนที่แล้ว = ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ชีท ปิดรอบสิ้นเดือน) — ยอดปิดบัญชีจริง
         tryGetJson(`/api/stockcount?closingprev=1&branch=${encodeURIComponent(branch)}`),
+        // ลายนิ้วมือตั้งต้น — ถ้าไม่จดไว้ตั้งแต่ตอนเปิดหน้า การบันทึกของอีกเครื่องในนาทีแรก
+        // จะกลายเป็น "ค่าตั้งต้น" ไปเฉย ๆ แล้วเราจะไม่รู้ตัวจนกว่าจะมีการบันทึกครั้งถัดไป
+        apiCall('stockPulse', { branch }).catch(() => null),
       ]);
       if (settled[0].status === 'rejected') throw settled[0].reason;
-      const [itemsRes, empRes, incomingRes, avgRes, closingRes] =
+      const [itemsRes, empRes, incomingRes, avgRes, closingRes, pulseRes] =
         settled.map(s => s.status === 'fulfilled' ? s.value : null);
+      pulseRef.current = pulseRes?.status === 'success' ? pulseSig(pulseRes.data) : '';
 
+      // ร่างที่ค้างในเครื่องนี้ อ่านไว้นอกบล็อกเพราะต้องใช้ตอนแจ้งผู้ใช้ด้านล่างด้วย
+      const draftOf = (isAll ? null : loadStockDraft(branch)) || { values: {} };
       if (itemsRes.status === 'success') {
         const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
         const avgMap = (avgRes?.status === 'success') ? avgRes.data : {};
@@ -749,14 +757,18 @@ export default function StockList() {
         const modeMap = (avgRes?.status === 'success') ? (avgRes.modes || {}) : {};
         const parMap = (avgRes?.status === 'success') ? (avgRes.par || {}) : {};
         const closingMap = (closingRes?.status === 'success') ? closingRes.data : {};
+        const draftValues = draftOf.values;   // ยอดที่นับไปแล้วแต่ยังไม่ได้กดบันทึก — เอากลับมาใส่ช่องให้
         setItems(itemsRes.data.map(item => {
           const nid = String(item.productId).replace(/^0+/, '');
           // ใช้ยอดปิดรอบสิ้นเดือนก่อน ถ้าเดือนนั้นยังไม่เคยปิดยอด ค่อย fallback ไปยอดนับล่าสุดของเดือนก่อน (วิธีเดิม)
           const closing = closingMap[nid];
           const pm = closing ? null : prevMonthFromHistory(item.stockHistory);
           const incoming = incomingMap[nid];
+          const saved = draftValues[String(item.productId)];
           return {
-            ...item, remaining: '', requested: '',
+            ...item,
+            remaining: saved?.remaining ?? '',
+            requested: saved?.requested ?? '',
             prevMonthQty: closing ? closing.qty : (pm ? pm.qty : undefined),
             prevMonthDate: closing ? closing.date : (pm ? pm.date : ''),
             prevMonthFromClosing: !!closing,
@@ -772,12 +784,142 @@ export default function StockList() {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
       }
       if (empRes?.status === 'success') setEmployees(empRes.data);
+
+      // บอกให้รู้ว่าที่เห็นในช่องมาจากร่างในเครื่อง ไม่ใช่ของที่บันทึกขึ้นเซิร์ฟเวอร์แล้ว
+      const restored = countDraftValues(draftOf);
+      if (restored > 0) {
+        if (draftOf.counterName) setCounterName(draftOf.counterName);
+        if (draftOf.requesterName) setRequesterName(draftOf.requesterName);
+        if (draftOf.requestDate) setRequestDate(draftOf.requestDate);
+        toast(`กู้คืนยอดที่กรอกค้างไว้ในเครื่องนี้ ${restored} รายการ — ยังไม่ได้บันทึกขึ้นเซิร์ฟเวอร์`,
+          { icon: '📝', duration: 8000 });
+      }
+      setLastSyncedAt(new Date());
     } catch (err) {
       toast.error(errMessage(err));
     } finally {
       setLoading(false);
     }
   };
+
+  /* ───────────────── ดึงข้อมูลใหม่โดยไม่ทับยอดที่กำลังกรอก ─────────────────
+     สองเครื่องนับสาขาเดียวกันพร้อมกันคือเรื่องปกติของหน้านี้ แต่ loadData ยิงแค่ตอนเปิดหน้า
+     (และหลังกดบันทึก เฉพาะเครื่องที่กด) อีกเครื่องจึงค้างอยู่กับยอดนับล่าสุดชุดเก่าทั้งวัน
+
+     ตัวนี้ดึง getStockItems ใหม่แล้ว "ผสม" ลงของเดิม: เอาเฉพาะฟิลด์ที่มาจากเซิร์ฟเวอร์
+     (ยอดนับล่าสุด ยอดยกมา ใบเบิกล่าสุด ชื่อ/ราคา/หมวด) ส่วน remaining/requested ที่ผู้ใช้
+     พิมพ์ค้างไว้ไม่แตะเลย — จะเรียก loadData ตรง ๆ ไม่ได้เพราะมันเซ็ต items ใหม่ทั้งชุด
+     แล้วล้างยอดที่นับมาทั้งชั้นทิ้ง
+
+     สินค้าที่หายไป/เพิ่มเข้ามาในทะเบียนจะตามไปด้วย เพราะสร้างรายการใหม่จากลำดับของเซิร์ฟเวอร์ */
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const pulseRef = useRef('');       // ลายนิ้วมือข้อมูลสาขาครั้งล่าสุดที่เห็น
+  const lastFullAt = useRef(0);      // เวลาที่ดึงของหนักครั้งล่าสุด (ใช้ตอน stockPulse ใช้ไม่ได้)
+
+  const pulseSig = (d) => `${d?.counts}|${d?.lastCountAt}|${d?.requests}|${d?.lastRequestId}`;
+
+  const refreshFromServer = async ({ silent = true } = {}) => {
+    const branch = effectiveBranch;
+    if (!branch || refreshingRef.current) return;
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    try {
+      const outletId = isAll
+        ? (branches.find(b => b.name === branch)?.outletId || '')
+        : (user?.outletId || '');
+      const [itemsRes, incomingRes, pulseRes] = await Promise.all([
+        apiCall('getStockItems', { branch }),
+        outletId
+          ? tryGetJson(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}&incoming=1`)
+          : Promise.resolve(null),
+        apiCall('stockPulse', { branch }).catch(() => null),
+      ]);
+      // จดลายนิ้วมือ ณ ตอนที่ดึงของหนักมา รอบเช็คถัดไปจะได้เทียบกับของจริง
+      if (pulseRes?.status === 'success') pulseRef.current = pulseSig(pulseRes.data);
+      if (itemsRes?.status !== 'success') throw new Error(itemsRes?.message || 'ดึงข้อมูลใหม่ไม่สำเร็จ');
+      const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
+
+      let changedRows = 0;
+      setItems(prev => {
+        const merged = mergeStockItems(prev, itemsRes.data, incomingMap, prevMonthFromHistory);
+        changedRows = merged.changed;
+        return merged.items;
+      });
+
+      setLastSyncedAt(new Date());
+      if (!silent) {
+        toast.success(changedRows > 0
+          ? `อัปเดตข้อมูลแล้ว · มี ${changedRows} รายการที่เปลี่ยนไปจากเครื่องอื่น`
+          : 'อัปเดตข้อมูลแล้ว · ตรงกับเซิร์ฟเวอร์');
+      }
+    } catch (err) {
+      // รอบอัตโนมัติเงียบไว้ ไม่งั้นเน็ตสะดุดทีจะมี toast แดงเด้งทั้งวันระหว่างนับของ
+      if (!silent) toast.error(errMessage(err));
+    } finally {
+      refreshingRef.current = false;
+      setIsRefreshing(false);
+    }
+  };
+
+  /* ถามเบา ๆ ว่ามีใครบันทึกอะไรใหม่หรือยัง — เปลี่ยนจริงค่อยดึงของหนัก
+     getStockItems ลากประวัติการนับทั้งสาขามาด้วย ถ้าให้ทุกเครื่องยิงทุกนาทีทั้งวันคือเปลืองเปล่า
+     stockPulse คืนแค่ 4 ตัวเลข (จำนวนแถว + ของล่าสุด) เทียบกับของเดิมก็รู้แล้วว่าต้องดึงไหม */
+  const checkForChanges = async () => {
+    const branch = effectiveBranch;
+    if (!branch || refreshingRef.current) return;
+    try {
+      const res = await apiCall('stockPulse', { branch });
+      if (res?.status !== 'success') throw new Error(res?.message || 'pulse ไม่สำเร็จ');
+      const sig = pulseSig(res.data);
+      if (pulseRef.current && pulseRef.current !== sig) await refreshFromServer({ silent: true });
+      else pulseRef.current = sig;
+    } catch {
+      // office-server รุ่นเก่ายังไม่มี stockPulse (หรือเน็ตสะดุด) — ถอยไปดึงของหนักแต่ห่าง ๆ
+      // ดีกว่าปล่อยให้สองเครื่องไม่ตรงกันทั้งวันเพราะตัวเช็คใช้ไม่ได้
+      if (Date.now() - lastFullAt.current > 5 * 60 * 1000) {
+        lastFullAt.current = Date.now();
+        await refreshFromServer({ silent: true });
+      }
+    }
+  };
+
+  /* ดึงข้อมูลใหม่เอง: ตอนกลับมาที่แท็บ + ทุก 60 วินาทีขณะแท็บเปิดอยู่
+     เครื่องสาขาเปิดหน้านี้ค้างไว้ทั้งวัน ถ้าไม่ดึงเองเลยจะไม่มีวันเห็นสิ่งที่อีกเครื่องบันทึก
+     60 วินาทีพอสำหรับงานนับ (คนเดินนับของช้ากว่านั้นมาก) และเบาพอที่จะไม่กวนเซิร์ฟเวอร์ออฟฟิศ
+     — เก็บฟังก์ชันไว้ใน ref เพื่อไม่ต้องตั้ง interval ใหม่ทุกครั้งที่ re-render */
+  const refreshRef = useRef(null);
+  useEffect(() => { refreshRef.current = checkForChanges; });
+
+  const conflictCount = useMemo(() => items.filter(i => i.conflict).length, [items]);
+
+  /* เก็บยอดที่กรอกค้างไว้ลงเครื่องอัตโนมัติ — กันนับมาทั้งชั้นแล้วเผลอรีเฟรช/แท็บถูกปิด/เครื่องหลับ
+     หน่วงครึ่งวินาทีหลังหยุดพิมพ์ จะได้ไม่เขียน localStorage ทุกตัวอักษร
+     เฉพาะผู้ใช้สาขา — สิทธิ์ all เป็นหน้าอ่านอย่างเดียว ไม่มีอะไรให้ค้าง */
+  useEffect(() => {
+    if (isAll || !effectiveBranch || items.length === 0) return undefined;
+    const timer = setTimeout(() => {
+      const values = {};
+      for (const it of items) values[String(it.productId)] = { remaining: it.remaining, requested: it.requested };
+      saveStockDraft(effectiveBranch, { values, counterName, requesterName, requestDate });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [items, counterName, requesterName, requestDate, effectiveBranch, isAll]);
+
+  useEffect(() => {
+    if (!effectiveBranch) return undefined;
+    const pull = () => {
+      if (document.visibilityState !== 'visible') return;   // แท็บหลังบ้านไม่ต้องยิง
+      refreshRef.current?.();
+    };
+    const timer = setInterval(pull, 60000);
+    document.addEventListener('visibilitychange', pull);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', pull);
+    };
+  }, [effectiveBranch]);
 
   const fetchApiData = async () => {
     if (!effectiveBranch || !apiStartDate || !apiEndDate) {
@@ -1115,7 +1257,8 @@ export default function StockList() {
 
   const handleInputChange = (index, field, value) => {
     const newItems = [...items];
-    newItems[index][field] = value;
+    // พิมพ์ทับแล้ว = เห็นคำเตือนแล้วและตัดสินใจเอง ป้ายเตือนของแถวนั้นจึงหมดหน้าที่
+    newItems[index] = { ...newItems[index], [field]: value, conflict: undefined };
     setItems(newItems);
   };
 
@@ -1679,6 +1822,19 @@ export default function StockList() {
       if (res.status === 'success') {
         toast.success(res.message || 'บันทึกข้อมูลเรียบร้อยแล้ว');
 
+        // แถวที่เซิร์ฟเวอร์ข้าม = มีเครื่องอื่นบันทึกสินค้าตัวเดียวกันในวินาทีเดียวกันไปก่อน
+        // เดิมหายเงียบ ๆ ตอนนี้บอกให้รู้ และคงยอดที่กรอกไว้ให้กดบันทึกซ้ำได้ทันที
+        const skipped = res.data?.skipped || [];
+        if (skipped.length > 0) {
+          toast.error(
+            `⚠️ ${skipped.length} รายการไม่ได้บันทึก เพราะมีเครื่องอื่นบันทึกสินค้าตัวเดียวกันไปแล้ว\n` +
+            skipped.slice(0, 5).map(x => `${x.code} ${x.name}`).join('\n') +
+            (skipped.length > 5 ? `\n…และอีก ${skipped.length - 5} รายการ` : '') +
+            '\n\nยอดที่กรอกไว้ยังอยู่ในช่อง ตรวจแล้วกดบันทึกอีกครั้งได้เลย',
+            { duration: 15000, style: { whiteSpace: 'pre-line' } },
+          );
+        }
+
         // ที่นี่ไม่ส่งใบเบิกเข้า POS — การกดบันทึกแค่เก็บยอดนับกับรายการขอเบิกลง SQL (saveStock)
         // เท่านั้น ใบเบิกจริงส่งผ่านโมดัล "สั่งของ" ซึ่ง POST ไป /api/insert_order แล้วได้เลขใบ
         // จาก POS (Cfg_LstOrdID) กลับมา
@@ -1687,11 +1843,21 @@ export default function StockList() {
         // ขณะที่ api/insert_order.js รับ GET แค่ ?units=1 กับ ?peek= นอกนั้นตอบ 405 เสมอ
         // จึงไม่เคยสร้างใบเบิกได้จริงสักครั้ง มีแต่ทำให้ขึ้น toast แดงหลอกทุกครั้งที่กดบันทึก
 
-        setItems(items.map(item => ({ ...item, remaining: '', requested: '' })));
-        setRequestDate('');
-        setRequesterName('');
-        setCounterName('');
-        loadData(effectiveBranch);
+        const skippedIds = new Set(skipped.map(x => String(x.code)));
+        setItems(items.map(item => (
+          skippedIds.has(String(item.productId))
+            ? item                                                      // ยังไม่ได้ลง เก็บยอดไว้กดซ้ำ
+            : { ...item, remaining: '', requested: '', conflict: undefined }
+        )));
+        if (skipped.length === 0) {
+          setRequestDate('');
+          setRequesterName('');
+          setCounterName('');
+        }
+        clearStockDraft(effectiveBranch);   // ลงเซิร์ฟเวอร์แล้ว ร่างในเครื่องหมดหน้าที่
+        // ใช้ตัวผสมแทน loadData — loadData เซ็ต items ใหม่ทั้งชุด ยอดของแถวที่เซิร์ฟเวอร์ข้าม
+        // (มีคนบันทึกชนวินาทีเดียวกัน) จะถูกล้างทิ้งไปด้วยทั้งที่ยังไม่ได้บันทึกจริง
+        refreshFromServer({ silent: true });
 
       } else {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
@@ -1911,6 +2077,20 @@ export default function StockList() {
               {isAll ? 'ดูข้อมูลแบบอ่านอย่างเดียว' : 'จัดการรายการสินค้า'} · สาขา:{' '}
               <span className={`font-semibold ${isAll ? 'text-blue-600' : 'text-purple-600'}`}>{branchLabel}</span>
             </p>
+            {/* ข้อมูลที่มองอยู่เก่าแค่ไหน — หน้านี้มักเปิดค้างทั้งวันและมีอีกเครื่องนับสาขาเดียวกันอยู่ */}
+            {lastSyncedAt && (
+              <p className="text-[11px] text-gray-400 mt-1 flex items-center gap-1.5 flex-wrap">
+                <span title="เวลาที่ดึงข้อมูลจากเซิร์ฟเวอร์ครั้งล่าสุด (ดึงเองทุก 1 นาที)">
+                  ข้อมูล ณ {lastSyncedAt.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.
+                </span>
+                {isRefreshing && <span className="text-purple-400">· กำลังอัปเดต…</span>}
+                {conflictCount > 0 && (
+                  <span className="text-amber-600 font-medium">
+                    · ⚠️ {conflictCount} รายการถูกเครื่องอื่นบันทึกระหว่างที่กรอกค้างไว้
+                  </span>
+                )}
+              </p>
+            )}
           </div>
         </div>
 
@@ -1936,6 +2116,15 @@ export default function StockList() {
               </button>
             </>
           )}
+          <button
+            onClick={() => refreshFromServer({ silent: false })}
+            disabled={isRefreshing || !effectiveBranch}
+            title="ดึงยอดนับล่าสุดจากเซิร์ฟเวอร์ (ไม่ล้างยอดที่กรอกค้างไว้)"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-gray-600 border border-gray-200 rounded-xl font-medium hover:bg-gray-50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span className="text-sm">อัปเดตข้อมูล</span>
+          </button>
           <button
             onClick={fetchPendingOrders}
             disabled={isLoadingPending}
@@ -2667,6 +2856,16 @@ export default function StockList() {
                               <div className="text-[10px] text-gray-400 mt-0.5" title={`นับโดย: ${item.lastStockCounter || '-'}`}>
                                 {String(item.lastStockDate || '').split(' ')[0]}
                                 {item.lastStockCounter && <span className="ml-1 text-indigo-400">· {item.lastStockCounter}</span>}
+                              </div>
+                            )}
+                            {/* มีเครื่องอื่นบันทึกสินค้าตัวนี้ระหว่างที่เรากรอกค้างไว้ — บอกให้เห็น ไม่ทับค่าที่กรอกให้เงียบ ๆ */}
+                            {item.conflict && (
+                              <div
+                                className="mt-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 leading-tight"
+                                title={`อีกเครื่องบันทึก ${item.conflict.qty} เมื่อ ${item.conflict.at || '-'}${item.conflict.by ? ` โดย ${item.conflict.by}` : ''} · ยอดที่คุณกรอกไว้ยังอยู่ กดบันทึกจะทับของเดิม`}
+                              >
+                                ⚠️ เครื่องอื่นเพิ่งบันทึก {item.conflict.qty}
+                                {item.conflict.by && <span className="block text-amber-600">โดย {item.conflict.by}</span>}
                               </div>
                             )}
                           </td>
