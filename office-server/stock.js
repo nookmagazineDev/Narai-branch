@@ -399,6 +399,34 @@ async function stockStatus() {
 }
 
 
+/* ลายนิ้วมือของข้อมูลสาขานั้น — ใช้ถามถี่ ๆ ว่า "มีใครบันทึกอะไรใหม่หรือยัง"
+   หน้านับสต๊อกเปิดค้างทั้งวันและมีหลายเครื่องนับสาขาเดียวกัน ถ้าให้ทุกเครื่องยิง getStockItems
+   ทุกนาทีจะเป็นการลากประวัติการนับทั้งสาขา (หลักหมื่นแถว) ข้ามประเทศไปเปล่า ๆ ทั้งวัน
+   ตัวนี้คืนแค่ 4 ตัวเลข ถ้าเท่าเดิมแปลว่าไม่มีอะไรเปลี่ยน หน้าเว็บก็ไม่ต้องดึงของหนัก */
+async function stockPulse(body, session) {
+  const branch = str(branchFor(session, body.branch)).toLowerCase();
+  if (!branch) throw badRequest('ไม่ระบุสาขา');
+  const p = { branch: { type: sql.NVarChar(50), value: branch } };
+  const [counts, requests] = await Promise.all([
+    queryRead(
+      `SELECT COUNT(*) AS n, CONVERT(NVARCHAR(19), MAX(counted_at), 120) AS last_at
+         FROM dbo.stock_count WHERE branch = @branch`,
+      p
+    ),
+    queryRead(
+      `SELECT COUNT(*) AS n, ISNULL(MAX(request_id), 0) AS last_id
+         FROM dbo.stock_request WHERE branch = @branch`,
+      p
+    ),
+  ]);
+  return {
+    counts: Number(counts[0]?.n || 0),
+    lastCountAt: str(counts[0]?.last_at),
+    requests: Number(requests[0]?.n || 0),
+    lastRequestId: Number(requests[0]?.last_id || 0),
+  };
+}
+
 /* ============================ บันทึกการนับสต๊อก ============================
    แทน saveStock ของ Apps Script — เขียนลง SQL อย่างเดียว ไม่เขียนชีทอีกแล้ว
 
@@ -455,6 +483,7 @@ async function saveStock(body, session) {
 
   const result = await withTransaction(async (run) => {
     let docNo = '';
+    const skipped = [];   // ยอดนับที่ไม่ได้บันทึกเพราะมีของวินาทีเดียวกันอยู่แล้ว (อีกเครื่องบันทึกไปก่อน)
 
     if (requests.length > 0) {
       // เลขที่ใบเบิกรูปแบบเดิมทุกตัวอักษร: 3 ตัวแรกของสาขา + ปี 2 หลัก + เดือน + ลำดับ 3 หลัก (CRM2608001)
@@ -478,13 +507,21 @@ async function saveStock(body, session) {
 
     // ยิงทีละแถวโดยตั้งใจ — ชุดหนึ่งไม่เกิน 300 แถว บน localhost จึงจบในหลักไม่กี่ร้อยมิลลิวินาที
     // และได้ IF NOT EXISTS กันการกดซ้ำรายแถว ซึ่ง INSERT ก้อนเดียวทำไม่ได้ (ชนคีย์แล้วล้มทั้งชุด)
+    //
+    // แถวที่ถูกข้ามต้องรายงานกลับไปด้วย (@inserted) ไม่ใช่เงียบ ๆ — สองเครื่องนับสาขาเดียวกันแล้ว
+    // กดบันทึกสินค้าตัวเดียวกันในวินาทีเดียวกัน ยอดของคนที่กดทีหลังจะหายไปโดยไม่มีใครรู้
     for (const c of counts) {
-      await run(
-        `IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
+      const ins = await run(
+        `DECLARE @inserted INT = 0;
+         IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
                          WHERE branch = @branch AND item_key = @item_key
                            AND counted_at = CONVERT(DATETIME2(0), @counted_at, 120))
-         INSERT INTO dbo.stock_count (counted_at, branch, item_key, item_code, item_name, unit, remaining, counter_name)
-         VALUES (CONVERT(DATETIME2(0), @counted_at, 120), @branch, @item_key, @item_code, @item_name, @unit, @remaining, @counter_name);`,
+         BEGIN
+           INSERT INTO dbo.stock_count (counted_at, branch, item_key, item_code, item_name, unit, remaining, counter_name)
+           VALUES (CONVERT(DATETIME2(0), @counted_at, 120), @branch, @item_key, @item_code, @item_name, @unit, @remaining, @counter_name);
+           SET @inserted = 1;
+         END
+         SELECT @inserted AS inserted;`,
         {
           counted_at: { type: sql.NVarChar(19), value: savedAt },
           branch: { type: sql.NVarChar(50), value: branch.toLowerCase() },
@@ -496,6 +533,10 @@ async function saveStock(body, session) {
           counter_name: { type: sql.NVarChar(255), value: counterName || null },
         }
       );
+      if (!Number(ins.recordset?.[0]?.inserted)) {
+        skipped.push({ code: c.code, name: c.name || '', remaining: c.remaining });
+        continue;   // ไม่ได้บันทึกยอดนับ ก็ต้องไม่ไปทับยอดยกมาของคนที่บันทึกไปก่อนแล้ว
+      }
 
       // ยอดยกมา = ยอดที่เพิ่งนับ (กติกาเดิมของชีท 'ยอดยกมา' ที่ถูกเขียนทับทุกครั้งที่นับ)
       await run(
@@ -540,14 +581,18 @@ async function saveStock(body, session) {
       );
     }
 
-    return { docNo };
+    return { docNo, skipped };
   });
 
+  const skipped = result.skipped || [];
   return {
-    message: 'บันทึกข้อมูลเรียบร้อยแล้ว' + (result.docNo ? ` (เลขที่ใบเบิก: ${result.docNo})` : ''),
+    message: 'บันทึกข้อมูลเรียบร้อยแล้ว' + (result.docNo ? ` (เลขที่ใบเบิก: ${result.docNo})` : '') +
+      (skipped.length ? ` · ${skipped.length} รายการไม่ได้บันทึก (มีคนบันทึกไว้แล้ว)` : ''),
     requisitionNo: result.docNo,
-    counted: counts.length,
+    counted: counts.length - skipped.length,
     requested: requests.length,
+    // รายการที่ถูกข้าม ให้หน้าเว็บเอาไปเตือนผู้ใช้ว่ายอดของตัวเองไม่ได้ลง
+    skipped,
     savedAt,
   };
 }
@@ -1013,6 +1058,7 @@ async function syncItemRegistry(body, session) {
 
 export const STOCK_ACTIONS = {
   getStockItems,
+  stockPulse,
   getItemPrices,
   getItemRegistry,
   syncItemRegistry,

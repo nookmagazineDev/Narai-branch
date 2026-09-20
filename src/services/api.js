@@ -47,6 +47,7 @@ const SQL_ACTIONS = new Set([
   // การ์ดมูลค่าสต๊อกบนหน้า Dashboard (/api/stockcount) ย้ายมาอ่าน SQL พร้อมกันแล้ว
   // ส่วนที่ยังอยู่บนชีทคือหน้ารับของกับสถานะใบเบิก เพราะเป็นชีทที่ทีมสโตร์กรอกเอง
   'getStockItems',              // StockList
+  'stockPulse',                 // StockList — เช็คเบา ๆ ว่ามีเครื่องอื่นบันทึกอะไรใหม่ไหม
   'getStockTotal',              // StockTotalList
   'saveStock',                  // StockList — บันทึกการนับ + ใบเบิก + ยอดยกมา
   'updateStorageCategory',      // StockList
