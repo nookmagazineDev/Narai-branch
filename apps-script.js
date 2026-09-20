@@ -183,6 +183,28 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var action = data.action;
 
+    // ─────────────── เมนูสต๊อกย้ายไป SQL Server หมดแล้ว ห้ามเขียนลงชีทอีก ───────────────
+    // เหตุผล: หน้าเว็บเลือกปลายทางจากรายชื่อ action ที่ "ฝังอยู่ในไฟล์ JavaScript ที่เบราว์เซอร์โหลดไป"
+    // เครื่องที่ยังถือไฟล์ชุดเก่าค้างในแคช (หรือ bookmark ของ deployment เก่า) จะยิงมาที่นี่แล้ว
+    // อ่าน-เขียนชีทต่อไปเงียบ ๆ ได้ตามปกติ — ผลคือสาขานับสต๊อกลงชีท ส่วนแอดมินดูจาก SQL
+    // เห็นคนละชุดข้อมูลโดยไม่มีอะไรฟ้องเลยสักอย่าง (เคสจริง: สาขา CRM 20/09/2026)
+    //
+    // ตอบเป็น error พร้อมบอกวิธีแก้ ดีกว่าปล่อยให้บันทึกลงผิดที่แล้วไม่มีใครรู้
+    // โค้ดเดิมด้านล่างยังอยู่ครบ ถ้าวันหนึ่งต้องถอยกลับไปใช้ชีทให้ลบบล็อกนี้ทิ้งอย่างเดียว
+    var MOVED_TO_SQL = {
+      getStockItems: 1, getStockTotal: 1, getClosingItems: 1, getMonthEndClosing: 1,
+      saveStock: 1, saveMonthEndClosing: 1, saveWaste: 1, updateStorageCategory: 1,
+      saveAvgPerHead: 1, saveBranchPercentagesBulk: 1, saveBranchPercentage: 1,
+      deleteBranchPercentage: 1
+    };
+    if (MOVED_TO_SQL[action]) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: 'error',
+        message: 'หน้านี้เป็นเวอร์ชันเก่า (ยังบันทึกลงชีทอยู่) ข้อมูลจริงย้ายไปฐานข้อมูลแล้ว — ' +
+                 'กรุณากด Ctrl+Shift+R เพื่อโหลดเวอร์ชันใหม่ แล้วทำรายการอีกครั้ง'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var ss = SpreadsheetApp.openById("1Abot2hKLUO6_z8NRW6c9A0m0ggra3ZE7Yq10kcUPr7Y");
 
     if (action === 'login') {

@@ -1,7 +1,8 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet, Search, Fingerprint } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { isStaleBuild } from '../services/api';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -28,6 +29,28 @@ export default function DashboardLayout() {
         sessionStorage.removeItem('dashboard_top_stats');
       }
     } catch (e) {}
+  };
+
+  /* ไฟล์ที่เบราว์เซอร์ถืออยู่เก่ากว่าที่ deploy จริง — ต้องบอก ไม่ใช่ปล่อยให้ทำงานต่อเงียบ ๆ
+     เครื่องสาขาเปิดหน้าค้างไว้ข้ามวันเป็นเรื่องปกติ และไฟล์ชุดเก่าเคยทำให้บันทึกสต๊อกลงชีทเก่า
+     ทั้งที่ระบบย้ายไป SQL แล้ว โดยหน้าจอขึ้นว่าบันทึกสำเร็จทุกครั้ง (ดู src/services/api.js) */
+  const [stale, setStale] = useState(isStaleBuild);
+  useEffect(() => {
+    const onStale = () => setStale(true);
+    window.addEventListener('app-stale-build', onStale);
+    // เผื่อธงถูกตั้งไประหว่างเรนเดอร์แรกกับตอน effect เริ่มทำงาน (คำขอแรกอาจตอบกลับมาพอดี)
+    const t = setTimeout(() => { if (isStaleBuild()) setStale(true); }, 0);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('app-stale-build', onStale);
+    };
+  }, []);
+
+  // โหลดใหม่พร้อมล้างแคช — ใส่ query ที่ไม่ซ้ำเพื่อบังคับให้เบราว์เซอร์ไปหยิบ index.html ชุดใหม่
+  // (reload() เฉย ๆ อาจหยิบของเดิมในแคชมาอีก ซึ่งคือสาเหตุของปัญหาตั้งแต่แรก)
+  const reloadFresh = () => {
+    const url = `${window.location.pathname}?v=${Date.now()}${window.location.hash || ''}`;
+    window.location.replace(url);
   };
 
   const toggleMenu = (name) => {
@@ -73,6 +96,21 @@ export default function DashboardLayout() {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* หน้านี้เป็นไฟล์รุ่นเก่า — ค้างอยู่บนสุดจนกว่าจะกดโหลดใหม่ */}
+      {stale && (
+        <div className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-white px-4 py-2.5 flex items-center justify-center gap-3 flex-wrap shadow-md">
+          <span className="text-sm font-medium">
+            ⚠️ หน้านี้เป็นเวอร์ชันเก่า ข้อมูลที่บันทึกอาจไม่เข้าระบบจริง
+          </span>
+          <button
+            onClick={reloadFresh}
+            className="px-3 py-1 rounded-lg bg-white text-amber-700 text-sm font-semibold hover:bg-amber-50"
+          >
+            โหลดเวอร์ชันใหม่
+          </button>
+        </div>
+      )}
+
       {/* Mobile Menu Overlay */}
       {isMobileMenuOpen && (
         <div 
