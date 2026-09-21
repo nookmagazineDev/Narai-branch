@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiCall, fetchEmployees as fetchEmployeesApi } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint, Shirt, Plus, Minus, Trash2, Save, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
@@ -36,6 +36,199 @@ export default function EmployeeList() {
   const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+
+  /* ================== ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในคอลัมน์จัดการ) ==================
+     กล่องเดียวทำสองงานที่ลงคนละที่โดยตั้งใจ
+       "จ่ายให้พนักงาน" -> saveEmployeeUniform -> dbo.UniformBranch (ใครได้อะไรไป)
+       "เบิกเข้าสาขา"   -> saveStock ตัวเดิมของหน้านับสต๊อก -> dbo.stock_request
+     ปุ่มเบิกต้องเป็น saveStock เท่านั้น ไม่ใช่ action ใหม่ ไม่งั้นใบเบิกของยูนิฟอร์มจะไม่โผล่
+     ในใบเบิกค้าง/หน้าสั่งของ และทีมโกดังต้องเปิดดูสองที่                                   */
+  const UNIFORM_SIZES = ['ไม่ระบุ', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
+
+  const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
+  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 800000* (โหลดครั้งเดียวใช้ซ้ำ)
+  const [uniformHistory, setUniformHistory] = useState([]);
+  const [uniformLoading, setUniformLoading] = useState(false);
+  const [uniformError, setUniformError] = useState('');
+  const [uniformQuery, setUniformQuery] = useState('');
+  const [uniformPicked, setUniformPicked] = useState(null);
+  const [uniformSize, setUniformSize] = useState('ไม่ระบุ');
+  const [uniformQty, setUniformQty] = useState('1');
+  const [uniformRows, setUniformRows] = useState([]);
+  const [uniformIssuedDate, setUniformIssuedDate] = useState('');
+  const [uniformWantDate, setUniformWantDate] = useState('');
+  const [uniformBusy, setUniformBusy] = useState('');          // '' | 'save' | 'order'
+  const [uniformSummary, setUniformSummary] = useState({});    // hrCode -> { rows, qty }
+
+  /** สาขาของพนักงานแถวนั้น — สาขาทั่วไปไม่มีคอลัมน์สาขาให้ดู ใช้สาขาที่ล็อกอินแทน */
+  const branchOfEmp = (emp) => String(emp?.branch || user?.branch || '').toLowerCase().trim();
+
+  /* ตัวเลขบนปุ่มของทั้งหน้า ขอทีเดียวต่อสาขา ไม่ใช่ถามทีละคน (หน้านี้มีได้เป็นร้อยแถว)
+     แอดมินที่ยังไม่ได้เลือกสาขาในดรอปดาวน์จะไม่มีตัวเลข เพราะ 'all' ไม่ใช่รหัสสาขาจริง */
+  const summaryBranch = isAdmin ? branchFilter : String(user?.branch || '');
+  useEffect(() => {
+    let cancelled = false;
+    const b = String(summaryBranch || '').toLowerCase().trim();
+    if (!b || b === 'all') { setUniformSummary({}); return undefined; }
+    (async () => {
+      try {
+        const res = await apiCall('getUniformSummary', { branch: b });
+        if (!cancelled && res?.status === 'success') setUniformSummary(res.data?.data || {});
+      } catch {
+        // ตัวเลขบนปุ่มเป็นของประกอบ ล้มแล้วไม่ต้องรบกวนผู้ใช้ — กดเข้าไปในกล่องยังเห็นประวัติจริง
+        if (!cancelled) setUniformSummary({});
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [summaryBranch]);
+
+  const resetUniformForm = () => {
+    setUniformQuery('');
+    setUniformPicked(null);
+    setUniformSize('ไม่ระบุ');
+    setUniformQty('1');
+    setUniformRows([]);
+  };
+
+  const openUniformModal = async (emp) => {
+    const branch = branchOfEmp(emp);
+    if (!branch) { toast.error('ไม่ทราบสาขาของพนักงานคนนี้'); return; }
+    const today = ymd(new Date());
+    setUniformTarget({ hrCode: emp.hrCode, fullName: emp.fullName, position: emp.position, branch });
+    setUniformIssuedDate(today);
+    setUniformWantDate(today);
+    setUniformError('');
+    setUniformHistory([]);
+    resetUniformForm();
+    setUniformLoading(true);
+    try {
+      // ทะเบียนไอเทมไม่เปลี่ยนระหว่างวัน โหลดรอบแรกรอบเดียวแล้วใช้ซ้ำทั้งหน้า
+      const [items, history] = await Promise.all([
+        uniformCatalog ? Promise.resolve(null) : apiCall('getUniformItems', {}),
+        apiCall('getEmployeeUniform', { branch, hrCode: emp.hrCode }),
+      ]);
+      if (items && items.status === 'success') setUniformCatalog(items.data?.data || []);
+      else if (items) throw new Error(items.message || 'โหลดรายการยูนิฟอร์มไม่สำเร็จ');
+      if (history?.status === 'success') setUniformHistory(history.data?.data || []);
+      else throw new Error(history?.message || 'โหลดประวัติไม่สำเร็จ');
+    } catch (err) {
+      setUniformError(err?.message || 'โหลดข้อมูลไม่สำเร็จ');
+    } finally {
+      setUniformLoading(false);
+    }
+  };
+
+  const closeUniformModal = () => {
+    setUniformTarget(null);
+    setUniformError('');
+    resetUniformForm();
+  };
+
+  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 800000 มาให้แล้ว
+     ตรงนี้จึงเหลือแค่กรองตามคำค้น ไม่ต้องกรองรหัสซ้ำอีก */
+  const uniformMatches = (() => {
+    const q = uniformQuery.trim().toLowerCase();
+    const list = uniformCatalog || [];
+    if (!q) return list.slice(0, 8);
+    return list
+      .filter((i) => i.code.toLowerCase().includes(q) || String(i.name || '').toLowerCase().includes(q))
+      .slice(0, 8);
+  })();
+
+  const addUniformRow = () => {
+    if (!uniformPicked) { toast.error('เลือกไอเทมก่อน'); return; }
+    const qty = Number(uniformQty);
+    if (!Number.isFinite(qty) || qty <= 0) { toast.error('ใส่จำนวนให้ถูกต้อง'); return; }
+    setUniformRows((rows) => [...rows, {
+      key: `${uniformPicked.code}-${uniformSize}-${Date.now()}`,
+      code: uniformPicked.code,
+      name: uniformPicked.name,
+      unit: uniformPicked.unit,
+      size: uniformSize,
+      qty,
+    }]);
+    setUniformQuery('');
+    setUniformPicked(null);
+    setUniformQty('1');
+  };
+
+  const removeUniformRow = (key) => setUniformRows((rows) => rows.filter((r) => r.key !== key));
+
+  /** บันทึกการจ่าย -> UniformBranch */
+  const handleUniformSave = async () => {
+    if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
+    setUniformBusy('save');
+    try {
+      const res = await apiCall('saveEmployeeUniform', {
+        branch: uniformTarget.branch,
+        hrCode: uniformTarget.hrCode,
+        empName: uniformTarget.fullName,
+        issuedDate: uniformIssuedDate,
+        username: user?.username,
+        items: uniformRows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, size: r.size, qty: r.qty })),
+      });
+      if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกไม่สำเร็จ');
+      toast.success(res.message || 'บันทึกเรียบร้อยแล้ว');
+      resetUniformForm();
+      const again = await apiCall('getEmployeeUniform', { branch: uniformTarget.branch, hrCode: uniformTarget.hrCode });
+      if (again?.status === 'success') setUniformHistory(again.data?.data || []);
+      // ตัวเลขบนปุ่มต้องขยับตามทันที ไม่ต้องรอรีเฟรชหน้า
+      setUniformSummary((prev) => {
+        const cur = prev[uniformTarget.hrCode] || { rows: 0, qty: 0 };
+        return { ...prev, [uniformTarget.hrCode]: {
+          ...cur,
+          rows: cur.rows + uniformRows.length,
+          qty: cur.qty + uniformRows.reduce((sum, r) => sum + r.qty, 0),
+        } };
+      });
+    } catch (err) {
+      toast.error(err?.message || 'บันทึกไม่สำเร็จ');
+    } finally {
+      setUniformBusy('');
+    }
+  };
+
+  /** เบิกเข้าสาขา -> saveStock ตัวเดิม (ลง dbo.stock_request ได้เลขที่ใบเบิกรูปแบบเดิม)
+      ส่งเฉพาะ requested ไม่ส่ง remaining — saveStock จะไม่บันทึกเป็นการนับสต๊อก */
+  const handleUniformOrder = async () => {
+    if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
+    if (!uniformWantDate) { toast.error('ระบุวันที่ต้องการรับของ'); return; }
+    setUniformBusy('order');
+    try {
+      const res = await apiCall('saveStock', {
+        branch: uniformTarget.branch,
+        username: user?.username,
+        requestDate: uniformWantDate,
+        requesterName: uniformTarget.fullName,
+        items: uniformRows.map((r) => ({
+          productId: r.code,
+          name: r.size && r.size !== 'ไม่ระบุ' ? `${r.name} (${r.size})` : r.name,
+          unit: r.unit,
+          requested: r.qty,
+        })),
+      }, { timeoutMs: 55000, deadlineMs: 58000 });
+      if (res?.status !== 'success') throw new Error(res?.message || 'สร้างใบเบิกไม่สำเร็จ');
+      const docNo = res.data?.requisitionNo;
+      toast.success(docNo ? `สร้างใบเบิกเลขที่ ${docNo} แล้ว` : (res.message || 'สร้างใบเบิกแล้ว'));
+    } catch (err) {
+      toast.error(err?.message || 'สร้างใบเบิกไม่สำเร็จ');
+    } finally {
+      setUniformBusy('');
+    }
+  };
+
+  const deleteUniformHistory = async (row) => {
+    if (!uniformTarget) return;
+    if (!window.confirm(`ลบรายการ "${row.name}" ${row.qty} ${row.unit || ''} ของวันที่ ${row.issuedAt}?`)) return;
+    try {
+      const res = await apiCall('deleteEmployeeUniform', { branch: uniformTarget.branch, uniformId: row.id });
+      if (res?.status !== 'success') throw new Error(res?.message || 'ลบไม่สำเร็จ');
+      setUniformHistory((rows) => rows.filter((r) => r.id !== row.id));
+      toast.success('ลบรายการแล้ว');
+    } catch (err) {
+      toast.error(err?.message || 'ลบไม่สำเร็จ');
+    }
+  };
 
   const openScanModal = () => {
     // แอดมินเลือกสาขาในกล่องได้ ถ้ากรองสาขาไว้อยู่แล้วให้ใช้อันนั้นเป็นค่าตั้งต้น
@@ -557,6 +750,18 @@ export default function EmployeeList() {
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
                       <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => openUniformModal(emp)}
+                          title="ยูนิฟอร์มพนักงาน"
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 rounded-md text-xs font-semibold transition-colors"
+                        >
+                          <Shirt className="w-3.5 h-3.5" /> ยูนิฟอร์ม
+                          {uniformSummary[emp.hrCode]?.rows > 0 && (
+                            <span className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-violet-600 text-white rounded-full text-[10px] font-bold">
+                              {uniformSummary[emp.hrCode].rows}
+                            </span>
+                          )}
+                        </button>
                         <label className={`cursor-pointer inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>
                           {uploadingHr === emp.hrCode ? (
                             <><Loader2 className="w-3 h-3 animate-spin" /> กำลังอัป...</>
@@ -727,6 +932,231 @@ export default function EmployeeList() {
             <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
               อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
               <span className="font-medium"> สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว · ช่องที่เป็น — คือวันนั้นสแกนไม่ครบ 4 รอบ
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ยูนิฟอร์มพนักงาน — จ่ายให้พนักงาน (UniformBranch) หรือเบิกเข้าสาขา (stock_request) */}
+      {uniformTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
+
+            <div className="px-5 py-4 bg-violet-700 text-white flex items-center gap-3">
+              <div className="p-2.5 bg-white/20 rounded-xl"><Shirt className="w-5 h-5" /></div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold">ยูนิฟอร์มพนักงาน</h3>
+                <p className="text-xs text-violet-200 truncate">
+                  {uniformTarget.fullName} · รหัส {uniformTarget.hrCode} · สาขา {uniformTarget.branch.toUpperCase()}
+                  {uniformTarget.position ? ` · ${uniformTarget.position}` : ''}
+                </p>
+              </div>
+              <button onClick={closeUniformModal} aria-label="ปิด" className="p-2 rounded-lg bg-white/10 hover:bg-white/20">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {uniformError && (
+                <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{uniformError}</div>
+              )}
+
+              <div className="border border-violet-200 bg-violet-50/60 rounded-xl p-4">
+                <div className="text-sm font-bold text-violet-800 mb-3">เพิ่มรายการ</div>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="relative flex-1 min-w-[240px]">
+                    <label className="block text-xs text-gray-500 mb-1">รหัสยูนิฟอร์ม หรือพิมพ์ชื่อ เช่น &quot;เสื้อ&quot;</label>
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-[34px]" />
+                    <input
+                      type="text"
+                      value={uniformQuery}
+                      onChange={(e) => { setUniformQuery(e.target.value); setUniformPicked(null); }}
+                      placeholder={uniformLoading ? 'กำลังโหลดรายการ...' : '8000001 หรือ เสื้อ'}
+                      disabled={uniformLoading}
+                      className="w-full pl-9 pr-3 py-2 bg-white border border-violet-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                    />
+                    {uniformQuery.trim() && !uniformPicked && (
+                      <div className="absolute left-0 right-0 top-[70px] z-10 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                        <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[11px] text-gray-400">
+                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 800000 · พบ {uniformMatches.length} รายการ
+                        </div>
+                        {uniformMatches.length === 0 ? (
+                          <div className="px-3 py-3 text-xs text-gray-400">ไม่พบไอเทมที่ตรงกับคำค้น</div>
+                        ) : uniformMatches.map((m) => (
+                          <button
+                            key={m.code}
+                            onClick={() => { setUniformPicked(m); setUniformQuery(m.name); }}
+                            className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-violet-50 border-b border-gray-50 last:border-0"
+                          >
+                            <span className="text-xs font-bold text-violet-700 tabular-nums">{m.code}</span>
+                            <span className="flex-1 text-sm text-gray-700 truncate">{m.name}</span>
+                            <span className="text-[11px] text-gray-400">{m.unit}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="w-28">
+                    <label className="block text-xs text-gray-500 mb-1">ไซซ์</label>
+                    <select
+                      value={uniformSize}
+                      onChange={(e) => setUniformSize(e.target.value)}
+                      className="w-full px-2 py-2 bg-white border border-violet-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                    >
+                      {UNIFORM_SIZES.map((sz) => <option key={sz} value={sz}>{sz}</option>)}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">จำนวน</label>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setUniformQty((q) => String(Math.max(1, (Number(q) || 1) - 1)))}
+                        aria-label="ลดจำนวน"
+                        className="w-9 h-9 flex items-center justify-center bg-white border border-violet-200 rounded-lg text-violet-700 hover:bg-violet-50"
+                      ><Minus className="w-4 h-4" /></button>
+                      <input
+                        type="text"
+                        value={uniformQty}
+                        onChange={(e) => setUniformQty(e.target.value.replace(/[^0-9.]/g, ''))}
+                        className="w-14 text-center py-2 bg-white border border-violet-200 rounded-lg text-sm font-bold focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                      />
+                      <button
+                        onClick={() => setUniformQty((q) => String((Number(q) || 0) + 1))}
+                        aria-label="เพิ่มจำนวน"
+                        className="w-9 h-9 flex items-center justify-center bg-white border border-violet-200 rounded-lg text-violet-700 hover:bg-violet-50"
+                      ><Plus className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={addUniformRow}
+                    className="inline-flex items-center gap-2 px-4 h-[38px] bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700"
+                  >
+                    <Plus className="w-4 h-4" /> เพิ่มไอเทม
+                  </button>
+                </div>
+              </div>
+
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
+                  <span className="text-sm font-bold text-gray-700">รายการที่จะบันทึก</span>
+                  <span className="text-[11px] font-semibold text-violet-700 bg-violet-100 rounded-full px-2 py-0.5">
+                    {uniformRows.length} ไอเทม
+                  </span>
+                  <span className="ml-auto text-xs text-gray-400">
+                    รวม {uniformRows.reduce((sum, r) => sum + r.qty, 0)} ชิ้น
+                  </span>
+                </div>
+                {uniformRows.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-gray-400">
+                    ยังไม่มีรายการ — ค้นหารหัสหรือชื่อไอเทมด้านบนแล้วกด &quot;เพิ่มไอเทม&quot;
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <tbody>
+                      {uniformRows.map((r) => (
+                        <tr key={r.key} className="border-b border-gray-50 last:border-0">
+                          <td className="px-4 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{r.code}</td>
+                          <td className="px-2 py-2 text-sm text-gray-800">{r.name}</td>
+                          <td className="px-2 py-2 text-center w-24">
+                            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-0.5">{r.size}</span>
+                          </td>
+                          <td className="px-2 py-2 text-center text-sm font-bold text-gray-800 tabular-nums w-20">{r.qty}</td>
+                          <td className="px-4 py-2 text-center w-16">
+                            <button
+                              onClick={() => removeUniformRow(r.key)}
+                              aria-label="ลบรายการนี้"
+                              className="p-1.5 bg-red-50 text-red-600 border border-red-100 rounded-lg hover:bg-red-100"
+                            ><Trash2 className="w-3.5 h-3.5" /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
+                  <span className="text-sm font-bold text-gray-700">ประวัติที่เคยจ่าย</span>
+                  {uniformLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+                  <span className="ml-auto text-xs text-gray-400">จากตาราง UniformBranch</span>
+                </div>
+                {uniformHistory.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-gray-400">
+                    {uniformLoading ? 'กำลังโหลด...' : 'ยังไม่เคยบันทึกยูนิฟอร์มให้พนักงานคนนี้'}
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <tbody>
+                      {uniformHistory.map((h) => (
+                        <tr key={h.id} className="border-b border-gray-50 last:border-0">
+                          <td className="px-4 py-2 text-xs text-gray-500 tabular-nums w-28">{h.issuedAt}</td>
+                          <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{h.code}</td>
+                          <td className="px-2 py-2 text-sm text-gray-700">{h.name}</td>
+                          <td className="px-2 py-2 text-center text-xs text-gray-500 w-20">{h.size || '-'}</td>
+                          <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 w-16">{h.qty}</td>
+                          <td className="px-2 py-2 text-xs text-gray-400 w-24 truncate">{h.savedBy}</td>
+                          <td className="px-4 py-2 text-center w-16">
+                            <button
+                              onClick={() => deleteUniformHistory(h)}
+                              aria-label="ลบรายการนี้"
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                            ><Trash2 className="w-3.5 h-3.5" /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">วันที่จ่ายของ</label>
+                <input
+                  type="date"
+                  value={uniformIssuedDate}
+                  onChange={(e) => setUniformIssuedDate(e.target.value)}
+                  className="px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">วันที่ต้องการรับของ (สำหรับเบิก)</label>
+                <input
+                  type="date"
+                  value={uniformWantDate}
+                  onChange={(e) => setUniformWantDate(e.target.value)}
+                  className="px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+              <div className="flex-1" />
+              <button
+                onClick={closeUniformModal}
+                className="px-4 py-2 bg-white text-gray-600 border border-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-100"
+              >
+                ปิด
+              </button>
+              <button
+                onClick={handleUniformOrder}
+                disabled={!!uniformBusy || uniformRows.length === 0}
+                title="สร้างใบเบิกลงตารางเดียวกับใบเบิกของสต๊อก"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {uniformBusy === 'order' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                เบิกเข้าสาขา
+              </button>
+              <button
+                onClick={handleUniformSave}
+                disabled={!!uniformBusy || uniformRows.length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 disabled:opacity-50"
+              >
+                {uniformBusy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                จ่ายให้พนักงาน
+              </button>
             </div>
           </div>
         </div>

@@ -92,6 +92,17 @@ const SQL_ACTIONS = new Set([
   'saveMonthEndClosing',        // MonthEndClosing
   'saveWaste',                  // Waste
 
+  // กลุ่มที่ 3.05 — ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน)
+  //
+  // ทั้งชุดเป็นของใหม่ ไม่เคยมีใน Apps Script จึงไม่มีทางถอยไปชีท — เครื่องที่ถือไฟล์เก่า
+  // จะไม่มีปุ่มนี้ให้กดอยู่แล้ว
+  // ปุ่ม "เบิกเข้าสาขา" ในกล่องนั้นไม่ได้อยู่ในลิสต์นี้เพราะมันเรียก saveStock (กลุ่มที่ 3)
+  'getUniformItems',
+  'getUniformSummary',
+  'getEmployeeUniform',
+  'saveEmployeeUniform',
+  'deleteEmployeeUniform',
+
   // กลุ่มที่ 3.1 — หน้ารับสินค้า
   //
   // ต้องสลับพร้อมกับที่แอป storefct สลับ STORE_SOURCE=sql เพราะทั้งสองฝั่งอ้างข้อมูลก้อนเดียวกัน:
