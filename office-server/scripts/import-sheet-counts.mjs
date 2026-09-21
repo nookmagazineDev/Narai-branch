@@ -23,6 +23,8 @@
  *   --branch=crm  เฉพาะสาขาเดียว (ไม่ใส่ = ทุกสาขา)
  *   --apply       เขียนจริง (ไม่ใส่ = รายงานอย่างเดียว)
  *   --requests    รวมใบเบิก (ชีท 'ข้อมูลเบิก') ด้วย
+ *   --url=<URL>   วิธีที่ง่ายที่สุด: เปิดแท็บที่มีข้อมูลจริงในเบราว์เซอร์ แล้วก๊อป URL ทั้งอันมาวาง
+ *                 (สคริปต์แกะ id ไฟล์กับ gid ของแท็บออกมาเอง) ครอบ --file/--gid ที่ใส่มาด้วย
  *   --file=<id>   ชี้ไฟล์อื่น (ค่าเริ่มต้นคือไฟล์สต๊อกที่ Apps Script เขียนลง)
  *   --gid=<gid>   ชี้แท็บยอดนับด้วยเลข gid แทนชื่อ — เอามาจาก #gid=... ท้าย URL ตอนคลิกแท็บนั้น
  *   --tab=<ชื่อ>  ชี้แท็บยอดนับด้วยชื่อ (ค่าเริ่มต้น 'ข้อมูลนับสตอค')
@@ -54,10 +56,16 @@ const WITH_REQUESTS = args.includes('--requests');
 const DAYS = Number(argVal('days', '30')) || 30;
 const ONLY_BRANCH = String(argVal('branch', '')).toLowerCase().trim();
 
-// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs) — ทับด้วย --file= ได้
-const STOCK_SS = String(argVal('file', '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ')).trim();
+// URL ของแท็บที่เปิดอยู่ในเบราว์เซอร์ — แกะ id ไฟล์กับ gid ออกมาให้เอง
+// (ให้คนหาเลข gid เองแล้วพิมพ์ต่อท้ายพารามิเตอร์ พลาดง่ายกว่าก๊อปทั้งแถบที่อยู่มาวาง)
+const TAB_URL = String(argVal('url', '')).trim();
+const urlFile = TAB_URL.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
+const urlGid = TAB_URL.match(/[#?&]gid=(\d+)/);
+
+// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs) — ทับด้วย --url= หรือ --file= ได้
+const STOCK_SS = (urlFile ? urlFile[1] : String(argVal('file', '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ'))).trim();
 const COUNT_TAB = String(argVal('tab', 'ข้อมูลนับสตอค'));
-const COUNT_GID = String(argVal('gid', '')).trim();
+const COUNT_GID = (urlGid ? urlGid[1] : String(argVal('gid', ''))).trim();
 const REQ_TAB = String(argVal('reqtab', 'ข้อมูลเบิก'));
 const REQ_GID = String(argVal('reqgid', '')).trim();
 
@@ -141,6 +149,10 @@ try {
 
   /* ─────────────── ยอดนับ ─────────────── */
   // ชีท 'ข้อมูลนับสตอค': A=วันที่ B=ผู้นับ C=สาขา D=รหัส E=ชื่อ F=หน่วย G=คงเหลือ
+  if (TAB_URL && !urlFile) {
+    console.error('อ่าน --url= ไม่ออก — ต้องเป็นลิงก์ที่มี /spreadsheets/d/<id> อยู่ในนั้น');
+    process.exit(2);
+  }
   console.log(`ไฟล์ ${STOCK_SS}`);
   console.log(`แท็บยอดนับ: ${COUNT_GID ? 'gid=' + COUNT_GID : `'${COUNT_TAB}'`}`);
   const sheetRows = await fetchRows(COUNT_TAB, COUNT_GID);
@@ -175,7 +187,15 @@ try {
   if (sheetRows.length === 0) {
     line();
     console.error('❌ อ่านชีทไม่ได้ หรือแท็บนี้ว่าง — ผลเทียบข้างล่างจึงเชื่อไม่ได้');
-    console.error('   ตรวจ: ไฟล์ตั้งแชร์ "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง และแท็บชื่อ \'ข้อมูลนับสตอค\' ตรงไหม');
+    console.error('   ตรวจ: ไฟล์ตั้งแชร์ "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง และชี้แท็บถูกตัวไหม');
+    process.exit(2);
+  }
+  // อ่านมาได้แต่ใช้ไม่ได้สักแถว = ชี้ผิดแท็บ (คอลัมน์คนละชุด) ไม่ใช่ "ไม่มีอะไรตกค้าง"
+  if (sheetLatest.size === 0) {
+    line();
+    console.error(`❌ อ่านมาได้ ${sheetRows.length} แถว แต่ไม่มีแถวไหนเป็นยอดนับเลย — แท็บนี้ผิดตัว`);
+    console.error('   แท็บยอดนับต้องเรียงคอลัมน์ A=วันที่ B=ผู้นับ C=สาขา D=รหัส E=ชื่อ F=หน่วย G=คงเหลือ');
+    console.error('   เปิดแท็บที่มีข้อมูลจริงในเบราว์เซอร์แล้วก๊อป URL ทั้งอันมาใส่ --url="<วาง URL>"');
     process.exit(2);
   }
 
