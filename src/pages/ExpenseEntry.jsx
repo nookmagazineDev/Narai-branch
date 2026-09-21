@@ -4,6 +4,9 @@
 //   บันทึกลงชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA...) ผ่าน Apps Script action saveSupCost
 //
 // รายการเป็นของ "สาขาที่เลือก" (ทะเบียนแยกสินค้าตามสาขา) จึงต้องโหลดใหม่ทุกครั้งที่เปลี่ยนสาขา
+// ยกเว้นรายการคงที่ของหมวดซัพพลายเออร์ (SUP_ITEMS) ที่ทุกสาขาต้องกรอกเหมือนกัน — ส่งรหัสไปกับ
+// ?codes= ให้ฝั่ง API ถอยไปอ่านทะเบียนรวมเมื่อทะเบียนของสาขาไม่ได้ระบุไว้ ไม่งั้นสาขาที่คอลัมน์
+// "สาขาที่ใช้" ในชีท item ไม่ได้ใส่ของพวกนี้ไว้จะเห็นทั้งแถบเป็น "(ไม่พบในทะเบียน)" กรอกอะไรไม่ได้เลย
 //
 // มี 2 หมวดให้สลับด้วยปุ่มด้านบนตาราง
 //   • ซัพพลายเออร์ — รายการคงที่ตาม SUP_ITEMS ด้านล่าง
@@ -13,7 +16,7 @@
 // (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Wallet, RefreshCw, Save, Store, Truck, Carrot, Search } from 'lucide-react';
+import { Wallet, RefreshCw, Save, Store, Truck, Carrot, Search, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 
@@ -38,6 +41,9 @@ const SUP_ITEMS = [
   { code: '11100103', unit: 'กล่อง' },
   { code: '11130003', unit: 'ถัง' },
 ];
+
+// รหัสของรายการคงที่ที่ต้องได้ชื่อ/ราคาเสมอ ส่งไปกับ ?codes= (ข้ามแถวที่กรอกราคาเอง ซึ่งไม่ได้ใช้ราคาในทะเบียน)
+const SUP_CODES = SUP_ITEMS.filter((it) => !it.manualPrice).map((it) => it.code).join(',');
 
 // หมวด "ผัก,ผลไม้" — ช่วงรหัสเดียวกับที่ตารางสรุปกำไรใช้แยกหมวด (ProfitSummary.jsx)
 // รายการจริงมาจากทะเบียนสินค้าใน SQL ทั้งหมด: ฝ่ายจัดซื้อเพิ่มผักตัวใหม่ก็ขึ้นเองโดยไม่ต้องแก้โค้ด
@@ -65,8 +71,10 @@ export default function ExpenseEntry() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
 
-  const [prices, setPrices] = useState(null); // { code: {name, price, unit} } ของสาขาที่เลือก
+  const [prices, setPrices] = useState(null); // { code: {name, price, unit, offBranch} } ของสาขาที่เลือก
   const [loadingPrices, setLoadingPrices] = useState(true);
+  const [pricesError, setPricesError] = useState('');  // โหลดทะเบียนไม่สำเร็จ — ต้องบอกบนหน้า ไม่ใช่แค่ toast ที่หายไป
+  const [reloadTick, setReloadTick] = useState(0);     // ปุ่ม "ลองใหม่" ของแถบแจ้งเตือนด้านบนตาราง
   const [qty, setQty] = useState({});        // code -> จำนวน (string)
   const [manualPrice, setManualPrice] = useState({}); // code -> ราคา/หน่วย (string) สำหรับรายการที่กรอกราคาเอง
   const [date, setDate] = useState(todayStr());
@@ -86,17 +94,27 @@ export default function ExpenseEntry() {
     let alive = true;
     setLoadingPrices(true);
     setPrices(null);
-    fetch(`/api/stockcount?prices=1&branch=${encodeURIComponent(branch)}`)
+    setPricesError('');
+    // ส่งรหัสของรายการคงที่ไปด้วย (SUP_CODES): สาขาที่ทะเบียนไม่ได้ระบุสินค้าพวกนี้ไว้จะได้
+    // ชื่อ/ราคาจากทะเบียนรวมแทนการขึ้น "(ไม่พบในทะเบียนของสาขานี้)" ทั้งแถบ — ดู api/stockcount.js
+    fetch(`/api/stockcount?prices=1&branch=${encodeURIComponent(branch)}&codes=${encodeURIComponent(SUP_CODES)}`)
       .then((r) => r.json())
       .then((res) => {
         if (!alive) return;
         if (res?.status === 'success') setPrices(res.data || {});
-        else toast.error(res?.message || 'ดึงรายการสินค้าจาก SQL ไม่สำเร็จ');
+        else {
+          setPricesError(res?.message || 'ดึงรายการสินค้าจาก SQL ไม่สำเร็จ');
+          toast.error(res?.message || 'ดึงรายการสินค้าจาก SQL ไม่สำเร็จ');
+        }
       })
-      .catch(() => alive && toast.error('ดึงรายการสินค้าจาก SQL ไม่สำเร็จ'))
+      .catch(() => {
+        if (!alive) return;
+        setPricesError('ดึงรายการสินค้าจาก SQL ไม่สำเร็จ (เครื่องที่ออฟฟิศไม่ตอบ)');
+        toast.error('ดึงรายการสินค้าจาก SQL ไม่สำเร็จ');
+      })
       .finally(() => alive && setLoadingPrices(false));
     return () => { alive = false; };
-  }, [branch]);
+  }, [branch, reloadTick]);
 
   // ดึงข้อมูลที่บันทึกไว้ของ (สาขา+วันที่) มาแสดงเพื่อแก้ไข — บันทึกซ้ำจะทับแถวเดิม
   const [loadingExisting, setLoadingExisting] = useState(false);
@@ -161,7 +179,16 @@ export default function ExpenseEntry() {
     }
     const p = prices?.[norm(it.code)] || null;
     const price = p ? p.price : 0;
-    return { ...it, name: p ? p.name : '(ไม่พบในทะเบียนของสาขานี้)', price, hasPrice: !!p, qty: q, amount: q * price };
+    return {
+      ...it,
+      name: p ? p.name : '(ไม่พบในทะเบียนสินค้า)',
+      // ไม่ได้อยู่ในทะเบียนของสาขานี้ แต่ได้ชื่อ/ราคาจากทะเบียนรวมมาแล้ว — กรอกได้ตามปกติ
+      offBranch: !!p?.offBranch,
+      price,
+      hasPrice: !!p,
+      qty: q,
+      amount: q * price,
+    };
   }), [prices, qty, manualPrice]);
 
   // หมวดผัก: ทุกรหัสในทะเบียนสินค้าของสาขานี้ที่อยู่ในช่วงรหัสผัก เรียงตามรหัส
@@ -206,6 +233,11 @@ export default function ExpenseEntry() {
   const filledCount = filledRows.length;
   const countOf = (rows) => rows.filter((r) => r.qty > 0).length;
   const tabCount = { sup: countOf(supRows), veg: countOf(vegRows) };
+
+  const offBranchCount = supRows.filter((r) => r.offBranch).length;
+  // ติดป้ายรายแถวเฉพาะตอนที่มีบางแถวเท่านั้นที่ถอยไปใช้ทะเบียนรวม — ถ้าเป็นทั้งหมด แถบข้อความ
+  // เหนือตารางบอกครบแล้ว ป้ายทุกแถวจะกลายเป็นขยะสายตาเปล่าๆ
+  const showOffBranchTag = offBranchCount > 0 && offBranchCount < supRows.length;
 
   const viewRows = tab === 'veg' ? vegShown : supRows;
   const viewTotal = viewRows.reduce((s, r) => s + r.amount, 0);
@@ -313,6 +345,13 @@ export default function ExpenseEntry() {
           )}
         </div>
 
+        {tab === 'sup' && !loadingPrices && !pricesError && offBranchCount > 0 && (
+          <p className="px-4 py-2 text-xs text-amber-700 border-b border-gray-100 bg-amber-50/60">
+            {offBranchCount} รายการในหมวดนี้ไม่ได้ถูกระบุไว้ในทะเบียนสินค้าของสาขา {branch} (คอลัมน์ "สาขาที่ใช้" ในชีท item)
+            — ใช้ชื่อ/ราคาจากทะเบียนรวมแทน กรอกและบันทึกได้ตามปกติ
+          </p>
+        )}
+
         {tab === 'veg' && !loadingPrices && vegRows.length > 0 && (
           <p className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100 bg-emerald-50/40">
             ราคา/หน่วยของผักแก้ได้ทุกแถว — ราคาในทะเบียนสินค้าแสดงไว้ใต้ช่องกรอกเสมอ พิมพ์ทับได้ถ้าราคาวันนี้ไม่เท่าในทะเบียน
@@ -326,6 +365,21 @@ export default function ExpenseEntry() {
         ) : loadingPrices ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm">
             <RefreshCw className="w-6 h-6 animate-spin mb-3" /> กำลังดึงรายการสินค้าจาก SQL…
+          </div>
+        ) : pricesError ? (
+          <div className="py-16 flex flex-col items-center text-sm gap-3 px-6 text-center">
+            <AlertTriangle className="w-7 h-7 text-amber-500" />
+            <div className="text-gray-600">
+              โหลดทะเบียนสินค้าไม่สำเร็จ จึงยังไม่มีชื่อ/ราคาให้คิดมูลค่า
+              <div className="text-xs text-gray-400 mt-1">{pricesError}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReloadTick((n) => n + 1)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              <RefreshCw className="w-4 h-4" /> ลองใหม่
+            </button>
           </div>
         ) : viewRows.length === 0 ? (
           <div className="py-16 flex flex-col items-center text-gray-400 text-sm gap-2">
@@ -351,7 +405,14 @@ export default function ExpenseEntry() {
                 {viewRows.map((r) => (
                   <tr key={r.code} className={`hover:bg-gray-50/50 ${r.qty > 0 ? 'bg-emerald-50/30' : ''}`}>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{r.code}</td>
-                    <td className={`px-4 py-2.5 font-medium ${r.hasPrice ? 'text-gray-800' : 'text-amber-600'}`}>{r.name}</td>
+                    <td className={`px-4 py-2.5 font-medium ${r.hasPrice ? 'text-gray-800' : 'text-amber-600'}`}>
+                      {r.name}
+                      {r.offBranch && showOffBranchTag && (
+                        <span className="ml-2 align-middle text-[11px] font-normal px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title={`ไม่ได้อยู่ในทะเบียนของสาขา ${branch} — ใช้ชื่อ/ราคาจากทะเบียนรวม`}>
+                          ทะเบียนรวม
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-center text-gray-500">{r.unit || '-'}</td>
                     {r.manualPrice ? (
                       <td className="px-2 py-2">
