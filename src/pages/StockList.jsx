@@ -212,7 +212,7 @@ const TWO_TIER_BRANCHES = new Set(['crm']);
 //
 // สาขาที่อยู่ในนี้ถือเป็นสาขาหัว 2 ราคาโดยอัตโนมัติ ไม่ต้องใส่ซ้ำใน TWO_TIER_BRANCHES
 // zjp กับ sjp เป็นร้านเดียวกันแต่มีสองรหัส (ดู utils/branchAlias.js) จึงต้องใส่ทั้งคู่
-const UP100_BRANCHES = new Set(['ipr', 'sjp', 'zjp', 'slr']);
+const UP100_BRANCHES = new Set(['ipr', 'sjp', 'zjp', 'slr', 'xcm']);
 
 // สาขานี้เป็นสาขาหัว 2 ราคาหรือไม่ — ดูจาก 4 แหล่งประกอบกัน แหล่งใดเข้าเงื่อนไขก็ถือว่าใช่:
 // 1) ระบุตรงๆ ใน TWO_TIER_BRANCHES  2) ระบุตรงๆ ใน UP100_BRANCHES (UP100 = หัว 2 ราคาอยู่แล้ว)
