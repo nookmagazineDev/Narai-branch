@@ -135,7 +135,7 @@ export function describeDbError(err) {
     return 'ฐานข้อมูล HR ไม่ตอบในเวลาที่กำหนด (คำสั่งหนัก หรือตารางถูกล็อกอยู่) กรุณาลองใหม่อีกครั้ง';
   }
   if (/Invalid object name/i.test(msg)) {
-    return 'ยังไม่ได้สร้างตารางในฐานข้อมูล (รัน docs/schema-hr.sql สำหรับตารางงาน หรือ docs/schema-stock.sql สำหรับหน้านับสต๊อก)';
+    return 'ยังไม่ได้สร้างตารางในฐานข้อมูล (รัน docs/schema-hr.sql สำหรับตารางงาน, docs/schema-stock.sql สำหรับหน้านับสต๊อก หรือ docs/schema-uniform.sql สำหรับกล่องยูนิฟอร์ม)';
   }
   // login มีสิทธิ์ใน narai_hr อยู่แล้ว แต่ยังไม่ได้เพิ่ม user ใน InventoryNarai
   // (ต่อติดแต่ query ไม่ผ่าน — ดูท้ายไฟล์ docs/schema-stock.sql)
