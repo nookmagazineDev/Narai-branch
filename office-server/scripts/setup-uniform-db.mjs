@@ -29,6 +29,11 @@
  * ถ้าขึ้นว่าไม่มีสิทธิ์สร้างตาราง ให้รันซ้ำด้วย --user=sa --password=... ครั้งเดียว
  * แล้วปล่อยให้ service ใช้ login เดิมต่อไปตามปกติ (ไม่ต้องแก้ .env)
  *
+ * ไม่มีรหัส sa: สคริปต์นี้ใช้ Windows Authentication ไม่ได้ (ตัวเชื่อมต่อ mssql ของ Node ต้องมี
+ * user/password) — ให้สร้างตารางด้วยบัญชี Windows ที่เป็น sysadmin แทน แล้วกลับมาตรวจด้วย --check
+ *   sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i ..\docs\schema-uniform.sql
+ * รายละเอียดทุกทาง (รวมกรณีไม่มีบัญชีไหนเป็น sysadmin เลย): docs/uniform-sql-migration.md ข้อ 6
+ *
  * รันซ้ำได้ปลอดภัย: ทุกคำสั่งในสคีมาห่อด้วย IF NOT EXISTS อยู่แล้ว ข้อมูลที่บันทึกไว้ไม่ถูกแตะ
  */
 
@@ -145,7 +150,10 @@ async function main() {
           console.log(`   ${yes(false)} ก้อนคำสั่งที่ ${i + 1} ไม่ผ่าน: ${err.message}`);
           if (/CREATE TABLE permission denied|permission was denied/i.test(err.message)) {
             console.log(`   ${warn}login "${where.login_name}" สร้างตารางไม่ได้ (มีแค่สิทธิ์อ่าน-เขียน)`);
-            console.log('      รันซ้ำครั้งเดียวด้วย: node scripts/setup-uniform-db.mjs --user=sa --password=\'<รหัส sa>\'');
+            console.log('      มีรหัส sa: node scripts/setup-uniform-db.mjs --user=sa --password=\'<รหัส sa>\'');
+            console.log('      ไม่มีรหัส sa: สร้างด้วยบัญชี Windows ที่เป็น sysadmin แล้วกลับมาตรวจด้วย --check');
+            console.log('        sqlcmd -S localhost\\SQLEXPRESS -E -d InventoryNarai -i ..\\docs\\schema-uniform.sql');
+            console.log('      ทุกทางเลือก: docs/uniform-sql-migration.md ข้อ 6');
           }
           throw err;
         }

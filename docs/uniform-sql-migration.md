@@ -59,7 +59,7 @@ node scripts/setup-uniform-db.mjs
 |---|---|
 | SQL Server + ฐาน `InventoryNarai` และตาราง `stock_item`, `stock_request` | สคริปต์ในข้อ 3 บอกให้เองว่าขาดข้อไหน |
 | ตั้ง `HR_DB_USER` / `HR_DB_PASSWORD` ใน `office-server\.env` แล้ว | หน้านับสต๊อกใช้งานได้อยู่ = ตั้งแล้ว |
-| มีไอเทมรหัส `800000*` ในทะเบียนสินค้า | ดูข้อ 6 |
+| มีไอเทมรหัส `800000*` ในทะเบียนสินค้า | ดูข้อ 7 |
 
 ถ้าเป็นเครื่องใหม่ที่ยังไม่มีฐานข้อมูลอะไรเลย ให้รันตามลำดับนี้ก่อน:
 `docs/schema-hr.sql` (ฐาน `narai_hr`) → `docs/schema-stock.sql` (ฐาน `InventoryNarai`) → แล้วค่อยมาข้อ 3
@@ -104,8 +104,8 @@ node scripts/setup-uniform-db.mjs
 | คำสั่ง | ใช้เมื่อ |
 |---|---|
 | `node scripts/setup-uniform-db.mjs --check` | ตรวจอย่างเดียว ไม่เขียนอะไรในฐานข้อมูล |
-| `... --user=sa --password='<รหัส sa>'` | login ของเว็บสร้างตารางไม่ได้ (ดูข้อ 5) |
-| `... --sync-items` | ซิงก์ทะเบียนสินค้าจากชีท BOM ก่อนตรวจ (ไอเทม `800000*` ยังไม่ขึ้น — ดูข้อ 6) |
+| `... --user=sa --password='<รหัส sa>'` | login ของเว็บสร้างตารางไม่ได้ (ไม่มีรหัส sa → ดูข้อ 6) |
+| `... --sync-items` | ซิงก์ทะเบียนสินค้าจากชีท BOM ก่อนตรวจ (ไอเทม `800000*` ยังไม่ขึ้น — ดูข้อ 7) |
 | `... --db=InventoryNarai` | ฐานข้อมูลชื่ออื่น |
 | `... --file=<path>` | ชี้ไฟล์สคีมาเอง |
 
@@ -129,7 +129,7 @@ sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i D:\Narai
 
 1. `node scripts/setup-uniform-db.mjs --check` → ต้องขึ้น ✅ ครบ
 2. เปิดเว็บ → **รายชื่อพนักงาน** → เลือกสาขา → กดปุ่มรูปเสื้อของพนักงานคนหนึ่ง
-   - ช่องค้นหาไอเทมต้องขึ้นรายการ `800000*` (ถ้าว่าง → ข้อ 6)
+   - ช่องค้นหาไอเทมต้องขึ้นรายการ `800000*` (ถ้าว่าง → ข้อ 7)
    - ลองบันทึก 1 รายการ แล้วกดปิด-เปิดกล่องใหม่ ต้องยังเห็นประวัติแถวนั้น
 3. ดูในฐานข้อมูลว่าแถวลงจริง:
 
@@ -145,18 +145,99 @@ SELECT TOP 10 uniform_id, branch, hr_code, emp_name, item_code, item_name, size,
 
 | ข้อความที่ขึ้น | สาเหตุ | วิธีแก้ |
 |---|---|---|
-| `CREATE TABLE permission denied in database 'InventoryNarai'` | login ของเว็บมีแค่ `db_datareader` + `db_datawriter` สร้างตารางไม่ได้ | รันสคริปต์ซ้ำครั้งเดียวด้วย `--user=sa --password='...'` (ไม่ต้องแก้ `.env` และไม่ต้องเพิ่มสิทธิ์ถาวรให้ login ของเว็บ) |
+| `CREATE TABLE permission denied in database 'InventoryNarai'` | login ของเว็บมีแค่ `db_datareader` + `db_datawriter` สร้างตารางไม่ได้ | รันสคริปต์ซ้ำครั้งเดียวด้วย `--user=sa --password='...'` (ไม่ต้องแก้ `.env` และไม่ต้องเพิ่มสิทธิ์ถาวรให้ login ของเว็บ) — **ไม่มีรหัส sa ให้ดูข้อ 6** |
 | `ยังไม่ได้ตั้ง HR_DB_USER / HR_DB_PASSWORD` | ยังไม่ได้ตั้ง `.env` ของ `office-server` | คัดลอก `.env.example` เป็น `.env` แล้วใส่ค่าจริง |
 | `เข้าฐานข้อมูล HR ไม่ได้ (ชื่อผู้ใช้/รหัสผ่าน...)` | รหัสผิด หรือยังไม่เปิด SQL Server Authentication | ตรวจรหัสใน `.env` / เปิด Mixed Mode Authentication แล้วรีสตาร์ท SQL Server |
 | `The server principal ... is not able to access the database` | login มีสิทธิ์ใน `narai_hr` แต่ยังไม่มี user ใน `InventoryNarai` | รันส่วนให้สิทธิ์ท้ายไฟล์ `docs/schema-stock.sql` |
 | หน้าเว็บขึ้น `ยังไม่ได้สร้างตารางในฐานข้อมูล` | ยังไม่ได้รันสคีมา หรือรันผิดฐานข้อมูล | ทำข้อ 3 ให้จบ แล้วเช็คด้วย `--check` ว่าฐานข้อมูลที่ต่อคือ `InventoryNarai` |
-| กล่องเปิดได้ แต่ช่องค้นหาไอเทมว่าง | ไม่มีไอเทมรหัส `800000*` ในทะเบียนสินค้า | ข้อ 6 |
+| กล่องเปิดได้ แต่ช่องค้นหาไอเทมว่าง | ไม่มีไอเทมรหัส `800000*` ในทะเบียนสินค้า | ข้อ 7 |
 | บันทึกที่สาขา `zjp` แล้วเปิดด้วย `sjp` ไม่เห็น | — | ไม่ใช่ปัญหา: โค้ดอ่านครอบรหัสสาขาพี่น้องให้แล้ว (`branchGroup`) ถ้าไม่เห็นจริงให้ตรวจว่าแถวนั้น `branch` เป็นตัวพิมพ์เล็ก |
 | `node` ไม่มีในเครื่อง / `Cannot find module 'mssql'` | ยังไม่ได้ `npm install` ที่โฟลเดอร์ `office-server` | `cd office-server` แล้ว `npm install` (service ตัวนี้ใช้ `mssql` อยู่แล้ว ปกติจะมีอยู่) |
 
 ---
 
-## 6. ไอเทมยูนิฟอร์มต้องมีในทะเบียนสินค้าก่อน
+## 6. ไม่มีรหัส sa / จำรหัส sa ไม่ได้
+
+**ไม่จำเป็นต้องใช้ sa เลย** — sa เป็นแค่ทางที่สะดวกที่สุดเท่านั้น ไล่ตามลำดับนี้
+
+### 6.1 ลองรันตรง ๆ ก่อน (ส่วนใหญ่จบที่ข้อนี้)
+
+login ที่ตั้งไว้ใน `.env` อาจสร้างตารางได้อยู่แล้ว (ถ้าเป็น `sa` เอง หรือถูกใส่ไว้ใน `db_owner`)
+
+```powershell
+cd D:\Narai-branch\office-server
+Select-String -Path .env -Pattern 'HR_DB_USER'     # ดูว่า service ใช้ login อะไร
+node scripts/setup-uniform-db.mjs
+```
+
+ผ่าน = จบ ไม่ต้องอ่านข้อต่อไป
+
+### 6.2 เข้าด้วย Windows Authentication (ไม่ต้องมีรหัสผ่านอะไรทั้งนั้น)
+
+บัญชี Windows ที่เป็นคนติดตั้ง SQL Server ไว้ มักมีสิทธิ์ `sysadmin` อยู่แล้ว
+เปิด **PowerShell แบบ Run as Administrator** บนเครื่องฐานข้อมูล แล้วเช็คก่อนว่าใช่ไหม:
+
+```powershell
+sqlcmd -S localhost\SQLEXPRESS -E -Q "SELECT SUSER_SNAME() AS me, IS_SRVROLEMEMBER('sysadmin') AS sysadmin"
+```
+
+`-E` = เข้าด้วยบัญชี Windows ที่ล็อกอินอยู่ (ไม่ต้องใส่รหัส) — ถ้าเป็น default instance ใช้ `-S localhost`
+ได้ `sysadmin = 1` → สร้างตารางได้เลย:
+
+```powershell
+sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i D:\Narai-branch\docs\schema-uniform.sql
+cd D:\Narai-branch\office-server
+node scripts/setup-uniform-db.mjs --check
+```
+
+ไม่มี `sqlcmd` ในเครื่อง → เปิด **SSMS** → ช่อง Authentication เลือก **Windows Authentication**
+(ไม่ต้องกรอกรหัส) → เปิด `docs\schema-uniform.sql` → เลือกฐานข้อมูล `InventoryNarai` → **F5**
+
+> สคริปต์ `setup-uniform-db.mjs` ใช้ Windows Authentication ไม่ได้ (ตัวเชื่อมต่อ `mssql` ของ Node
+> ต้องมี user/password) จึงต้องสร้างตารางด้วย `sqlcmd -E` หรือ SSMS ในข้อนี้
+> แล้วใช้สคริปต์ `--check` ตรวจต่อ ซึ่งใช้ login ของ service ที่มีรหัสอยู่ใน `.env` แล้ว
+
+### 6.3 อยากให้สคริปต์สร้างตารางเองได้ในครั้งต่อไป
+
+ตอนที่เข้าด้วย sysadmin ได้ (ข้อ 6.2) ให้สิทธิ์สร้างตารางแก่ login ของเว็บไว้เลย:
+
+```sql
+USE InventoryNarai;
+ALTER ROLE db_ddladmin ADD MEMBER narai_web;   -- เปลี่ยนชื่อ login ให้ตรงกับ HR_DB_USER
+```
+
+แลกกันตรงที่ login ของเว็บจะสร้าง/ลบตารางในฐานนี้ได้ถาวร — ถ้าไม่สบายใจ **ไม่ต้องให้ก็ได้**
+สคีมาใหม่ในอนาคตก็รันด้วย `sqlcmd -E` แบบข้อ 6.2 ทุกครั้ง (ปลอดภัยกว่า และไม่ได้ทำบ่อย)
+
+### 6.4 ตั้งรหัส sa ใหม่ (ถ้าอยากได้คืน)
+
+งานยูนิฟอร์มไม่ต้องใช้ แต่ถ้าอยากตั้งใหม่ ตอนเข้าด้วย sysadmin ได้:
+
+```sql
+ALTER LOGIN sa WITH PASSWORD = N'<รหัสใหม่>';
+ALTER LOGIN sa ENABLE;   -- เผื่อ sa ถูกปิดไว้
+```
+
+### 6.5 ทางสุดท้าย — ไม่มีบัญชี Windows ไหนเป็น sysadmin เลย
+
+(ข้อ 6.2 ขึ้น `Login failed` หรือได้ `sysadmin = 0` ทุกบัญชี) ต้องกู้สิทธิ์ผ่าน single-user mode
+ทำจากเครื่องฐานข้อมูลโดยตรง ใน PowerShell แบบ Run as Administrator:
+
+```powershell
+Stop-Service 'MSSQL$SQLEXPRESS'
+# สตาร์ทแบบ single-user: ผู้ที่เป็น local administrator จะเข้าได้ในฐานะ sysadmin
+sc.exe start 'MSSQL$SQLEXPRESS' -m
+sqlcmd -S localhost\SQLEXPRESS -E -Q "ALTER SERVER ROLE sysadmin ADD MEMBER [$env:USERDOMAIN\$env:USERNAME]"
+Restart-Service 'MSSQL$SQLEXPRESS'
+```
+
+ระหว่าง single-user mode ต่อได้ทีละ 1 คำสั่ง — ต้องหยุด service `NaraiUsageAPI` ก่อน
+ไม่งั้นมันจะแย่ง connection เดียวนั้นไป (`Stop-Service NaraiUsageAPI` แล้วค่อย `Start-Service` คืนตอนจบ)
+เสร็จแล้วกลับไปข้อ 6.2
+
+---
+
+## 7. ไอเทมยูนิฟอร์มต้องมีในทะเบียนสินค้าก่อน
 
 กล่องยูนิฟอร์มไม่มีทะเบียนไอเทมของตัวเอง — กรองจาก `dbo.stock_item` เฉพาะรหัสที่ขึ้นต้น **`800000`**
 และสถานะไม่ใช่ `ปิดการใช้งาน` (กรองที่ SQL ไม่ได้ส่งสินค้าทั้งทะเบียนหลักพันรายการไปให้เบราว์เซอร์)
@@ -187,7 +268,7 @@ node scripts/setup-uniform-db.mjs --sync-items
 
 ---
 
-## 7. คำสั่งที่ใช้บ่อยหลังเปิดใช้งาน
+## 8. คำสั่งที่ใช้บ่อยหลังเปิดใช้งาน
 
 ```sql
 -- พนักงานคนหนึ่งได้อะไรไปแล้วบ้าง
@@ -211,7 +292,7 @@ DELETE FROM dbo.UniformBranch WHERE uniform_id = <id>;
 
 ---
 
-## 8. ถอนออก (ถ้าต้องรื้อทำใหม่)
+## 9. ถอนออก (ถ้าต้องรื้อทำใหม่)
 
 ```sql
 DROP TABLE dbo.UniformBranch;   -- ประวัติการจ่ายยูนิฟอร์มทั้งหมดหายไปด้วย
