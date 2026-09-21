@@ -1040,6 +1040,10 @@ const ACTIONS = {
   ...UNIFORM_ACTIONS,
 };
 
+/* ชื่อ action ทั้งหมดของโค้ดชุดนี้ — /health เอาไปแสดง เพื่อให้ตอบได้ว่า "ไม่รู้จักคำสั่ง X"
+   เกิดเพราะ service รันโค้ดเก่า (ไม่มีชื่อนี้ในลิสต์) หรือเพราะพิมพ์ชื่อ action ผิด */
+export const ACTION_NAMES = Object.keys(ACTIONS).sort();
+
 /* action ที่เรียกได้ทั้งที่ยังไม่ได้ล็อกอิน — มีตัวเดียวคือ login เอง
    (ที่เหลือถ้าไม่มี _user ต้องเด้ง 401 เสมอ ไม่งั้นการจำกัดสาขาจะข้ามได้ด้วยการไม่ส่ง _user มา) */
 const NO_SESSION = new Set(['login']);
