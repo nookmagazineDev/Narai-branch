@@ -5,11 +5,46 @@
 // เปิดพอร์ตออกเน็ตด้วย UPnP อัตโนมัติ
 import 'dotenv/config';
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import natUpnp from 'nat-upnp';
 import sql from 'mssql';
-import { scheduleHandler } from './schedule.js';
+import { scheduleHandler, ACTION_NAMES } from './schedule.js';
 import { branchGroup } from './hr-session.js';
 import { syncItemsQuietly } from './item-sync.js';
+
+/* ---- โค้ดชุดไหนที่โปรเซสนี้โหลดมา ----
+   service เป็น Windows Service ที่ชี้ไปโฟลเดอร์หนึ่งแบบตายตัว เวลาอัปเดตโค้ดผิดโฟลเดอร์
+   หรือรีสตาร์ทไม่ติด จะดูไม่ออกเลยจากภายนอก — อาการที่ได้คือหน้าเว็บขึ้น "ไม่รู้จักคำสั่ง ..."
+   ทั้งที่ git บอกว่าโค้ดตรงกับ GitHub แล้ว จึงบอกรหัสคอมมิตกับเวลาสตาร์ทไว้ที่ /health
+   อ่านครั้งเดียวตอนโหลดไฟล์ = ค่าที่ได้คือของโค้ดชุดที่รันอยู่จริง ไม่ใช่ของไฟล์บนดิสก์ตอนนี้ */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const STARTED_AT = new Date().toISOString();
+const CODE_SHA = (() => {
+  try {
+    const gitDir = path.join(HERE, '..', '.git');
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    if (!head.startsWith('ref:')) return head.slice(0, 7);
+    const ref = head.slice(4).trim();
+    const looseRef = path.join(gitDir, ref);
+    if (fs.existsSync(looseRef)) return fs.readFileSync(looseRef, 'utf8').trim().slice(0, 7);
+    // คอมมิตที่ถูกเก็บใน packed-refs (เกิดหลัง git gc) ไม่มีไฟล์ ref แยก
+    const packed = fs.readFileSync(path.join(gitDir, 'packed-refs'), 'utf8');
+    const hit = packed.split('\n').find((l) => l.endsWith(` ${ref}`));
+    return hit ? hit.slice(0, 7) : '';
+  } catch {
+    return ''; // ได้โค้ดมาจาก ZIP (ไม่มี .git) — ไม่ใช่เรื่องผิดปกติ ดู code_mtime แทน
+  }
+})();
+// เวลาที่ไฟล์ schedule.js ถูกแก้ล่าสุด — ใช้ได้แม้โฟลเดอร์ไม่ใช่ git repo
+const CODE_MTIME = (() => {
+  try {
+    return fs.statSync(path.join(HERE, 'schedule.js')).mtime.toISOString();
+  } catch {
+    return '';
+  }
+})();
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SALES_BASE = process.env.SALES_BASE || 'https://api.khanoykorshabu.com/ctranbetweendate';
@@ -401,6 +436,13 @@ app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (req, res) => res.json({
   ok: true,
+  // โค้ดชุดที่โปรเซสนี้รันอยู่ — เทียบกับ `git -C <โฟลเดอร์> rev-parse --short HEAD` ได้ตรงๆ
+  // ต่างกันเมื่อไหร่แปลว่า service ยังไม่ได้รีสตาร์ท หรือชี้ไปคนละโฟลเดอร์กับที่เพิ่งอัปเดต
+  code_sha: CODE_SHA,
+  code_mtime: CODE_MTIME,
+  started_at: STARTED_AT,
+  // action ทั้งหมดที่ /schedule รับได้ในโค้ดชุดนี้ — เช็คชื่อที่ขึ้นว่า "ไม่รู้จักคำสั่ง" ได้จากที่นี่
+  actions: ACTION_NAMES,
   days_cached: salesCache.size,
   recipes: Object.keys(recipe).length,
   // วันที่ข้อมูลยังไม่ครบ (มีรายการขายแต่ยังไม่มีบิลที่จ่ายแล้ว) — ยอดขายวันนั้นจะขึ้นเป็น 0 จนกว่า POS จะ sync

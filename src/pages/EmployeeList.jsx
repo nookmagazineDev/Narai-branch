@@ -42,9 +42,11 @@ export default function EmployeeList() {
        "จ่ายให้พนักงาน" -> saveEmployeeUniform -> dbo.UniformBranch (ใครได้อะไรไป)
        "เบิกเข้าสาขา"   -> saveStock ตัวเดิมของหน้านับสต๊อก -> dbo.stock_request
      ปุ่มเบิกต้องเป็น saveStock เท่านั้น ไม่ใช่ action ใหม่ ไม่งั้นใบเบิกของยูนิฟอร์มจะไม่โผล่
-     ในใบเบิกค้าง/หน้าสั่งของ และทีมโกดังต้องเปิดดูสองที่                                   */
-  const UNIFORM_SIZES = ['ไม่ระบุ', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
+     ในใบเบิกค้าง/หน้าสั่งของ และทีมโกดังต้องเปิดดูสองที่
 
+     ไม่มีช่องเลือกไซซ์โดยตั้งใจ — ทะเบียนสินค้าแยกไซซ์ไว้เป็นคนละรหัสอยู่แล้ว (เสื้อไซซ์ M
+     กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้
+     คอลัมน์ size ใน UniformBranch ยังอยู่ (รับค่าว่าง) เผื่อข้อมูลเก่าและการคีย์ตรงในฐาน      */
   const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
   const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 800000* (โหลดครั้งเดียวใช้ซ้ำ)
   const [uniformHistory, setUniformHistory] = useState([]);
@@ -52,7 +54,6 @@ export default function EmployeeList() {
   const [uniformError, setUniformError] = useState('');
   const [uniformQuery, setUniformQuery] = useState('');
   const [uniformPicked, setUniformPicked] = useState(null);
-  const [uniformSize, setUniformSize] = useState('ไม่ระบุ');
   const [uniformQty, setUniformQty] = useState('1');
   const [uniformRows, setUniformRows] = useState([]);
   const [uniformIssuedDate, setUniformIssuedDate] = useState('');
@@ -85,7 +86,6 @@ export default function EmployeeList() {
   const resetUniformForm = () => {
     setUniformQuery('');
     setUniformPicked(null);
-    setUniformSize('ไม่ระบุ');
     setUniformQty('1');
     setUniformRows([]);
   };
@@ -140,11 +140,10 @@ export default function EmployeeList() {
     const qty = Number(uniformQty);
     if (!Number.isFinite(qty) || qty <= 0) { toast.error('ใส่จำนวนให้ถูกต้อง'); return; }
     setUniformRows((rows) => [...rows, {
-      key: `${uniformPicked.code}-${uniformSize}-${Date.now()}`,
+      key: `${uniformPicked.code}-${Date.now()}`,
       code: uniformPicked.code,
       name: uniformPicked.name,
       unit: uniformPicked.unit,
-      size: uniformSize,
       qty,
     }]);
     setUniformQuery('');
@@ -165,7 +164,7 @@ export default function EmployeeList() {
         empName: uniformTarget.fullName,
         issuedDate: uniformIssuedDate,
         username: user?.username,
-        items: uniformRows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, size: r.size, qty: r.qty })),
+        items: uniformRows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty })),
       });
       if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกไม่สำเร็จ');
       toast.success(res.message || 'บันทึกเรียบร้อยแล้ว');
@@ -202,7 +201,7 @@ export default function EmployeeList() {
         requesterName: uniformTarget.fullName,
         items: uniformRows.map((r) => ({
           productId: r.code,
-          name: r.size && r.size !== 'ไม่ระบุ' ? `${r.name} (${r.size})` : r.name,
+          name: r.name,
           unit: r.unit,
           requested: r.qty,
         })),
@@ -997,17 +996,6 @@ export default function EmployeeList() {
                     )}
                   </div>
 
-                  <div className="w-28">
-                    <label className="block text-xs text-gray-500 mb-1">ไซซ์</label>
-                    <select
-                      value={uniformSize}
-                      onChange={(e) => setUniformSize(e.target.value)}
-                      className="w-full px-2 py-2 bg-white border border-violet-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
-                    >
-                      {UNIFORM_SIZES.map((sz) => <option key={sz} value={sz}>{sz}</option>)}
-                    </select>
-                  </div>
-
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">จำนวน</label>
                     <div className="flex items-center gap-1">
@@ -1060,9 +1048,6 @@ export default function EmployeeList() {
                         <tr key={r.key} className="border-b border-gray-50 last:border-0">
                           <td className="px-4 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{r.code}</td>
                           <td className="px-2 py-2 text-sm text-gray-800">{r.name}</td>
-                          <td className="px-2 py-2 text-center w-24">
-                            <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-0.5">{r.size}</span>
-                          </td>
                           <td className="px-2 py-2 text-center text-sm font-bold text-gray-800 tabular-nums w-20">{r.qty}</td>
                           <td className="px-4 py-2 text-center w-16">
                             <button
@@ -1096,7 +1081,6 @@ export default function EmployeeList() {
                           <td className="px-4 py-2 text-xs text-gray-500 tabular-nums w-28">{h.issuedAt}</td>
                           <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{h.code}</td>
                           <td className="px-2 py-2 text-sm text-gray-700">{h.name}</td>
-                          <td className="px-2 py-2 text-center text-xs text-gray-500 w-20">{h.size || '-'}</td>
                           <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 w-16">{h.qty}</td>
                           <td className="px-2 py-2 text-xs text-gray-400 w-24 truncate">{h.savedBy}</td>
                           <td className="px-4 py-2 text-center w-16">
