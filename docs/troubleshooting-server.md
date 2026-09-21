@@ -70,8 +70,9 @@ Start-Process http://localhost:8787/health
 Restart-Service NaraiUsageAPI     # ถ้าค้าง
 
 # 2) เข้าจากข้างนอกได้ไหม (รันจากที่ไหนก็ได้)
-curl http://storenarai.dyndns.tv:8787/health
-#    ตอบไม่ได้ = เครื่องปิด / dyndns ชี้ IP เก่า / router ไม่ได้ forward พอร์ต 8787
+curl https://usage.khanoykorshabu.com/health
+#    ตอบไม่ได้ = เครื่องปิด / service ไม่ทำงาน / cloudflared บนเครื่องนั้นหยุด
+#    (ทางเข้าเดิม http://storenarai.dyndns.tv:8787 กับ http://inventory.dyndns.tv:8787 เลิกใช้แล้ว)
 ```
 
 - **Google Apps Script**: เปิด [script.google.com](https://script.google.com) → โปรเจกต์ → **Executions** ดูว่ามี error หรือชนลิมิตไหม

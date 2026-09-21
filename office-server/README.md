@@ -97,8 +97,14 @@ powershell -ExecutionPolicy Bypass -File .\install-office-server.ps1
 
 ต้องมี Node.js กับ NSSM (`C:\tools\nssm.exe`) บนเครื่องนั้นก่อน ถ้าไม่มีสคริปจะบอกวิธีติดตั้ง
 
-ฝั่ง Vercel ตั้ง env `USAGE_API_BASE = http://inventory.dyndns.tv:8787` ไว้แล้ว
-พอ office-server ขึ้นที่เครื่องนั้น หน้าเว็บจะใช้ได้ทันที (อาจต้อง Redeploy หนึ่งครั้ง)
+> **สถานะปัจจุบัน (21/09/2026): ยังไม่ได้ย้าย** เครื่องคลาวด์ตัวนี้มี office-server รุ่นเก่าค้างอยู่
+> และ `http://inventory.dyndns.tv:8787` เรียกจาก Vercel ไม่ถึงแล้ว ของจริงที่ใช้งานอยู่คือ
+> เครื่อง `NARAI-PIZZARIA` ผ่าน Cloudflare Tunnel (`https://usage.khanoykorshabu.com`)
+> ซึ่งเป็นค่าเริ่มต้นใน `lib/upstream.js` แล้ว — ฝั่ง Vercel ไม่ต้องตั้ง env `USAGE_API_BASE` เลย
+> (เคยตั้งค่าเก่าค้างไว้แล้วทำให้ทั้งระบบวิ่งไปเครื่องที่เรียกไม่ถึง สาขาบันทึกอะไรไม่ได้ทั้งบ่าย)
+
+ถ้าจะย้ายมาเครื่องคลาวด์จริง ๆ ต้อง `git pull origin main` ให้โค้ดตรงกับ main ก่อนเสมอ
+แล้วค่อยเปลี่ยนทางเข้า — โค้ดคนละรุ่นกันคือที่มาของกับดักข้างล่าง
 
 ### ถ้าเข้าไปเปิดพอร์ตที่ router ไม่ได้ — ใช้ Cloudflare Tunnel แทน
 
@@ -114,6 +120,12 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
 แล้วเปลี่ยน env บน Vercel เป็น `USAGE_API_BASE = https://usage.khanoykorshabu.com`
 
 ดีกว่าการเปิดพอร์ตตรงๆ ตรงที่ได้ HTTPS ฟรี ไม่ต้องพึ่ง dyndns และไม่มีพอร์ตเปิดค้างให้สแกนเจอ
+
+> ⚠️ **ห้ามมี `cloudflared` สองเครื่องผูก tunnel เดียวกันโดยที่โค้ดคนละรุ่น**
+> Cloudflare จะสลับส่งคำขอให้ทีละเครื่อง อาการที่ได้คือ "ใช้ได้บ้างไม่ได้บ้างแบบสุ่ม" ซึ่งไล่หาสาเหตุยากมาก
+> (เกิดขึ้นจริง 21/09/2026 — ยิง `/health` 6 ครั้ง เจอเครื่องเก่า 2 ครั้ง)
+> เช็คก่อนเสมอว่าทุกเครื่องตอบ `code_sha` ตรงกัน วิธีตรวจอยู่ใน
+> [docs/troubleshooting-server.md](../docs/troubleshooting-server.md)
 
 ## ตั้งค่า (ไม่บังคับ) — ไฟล์ .env
 - `PORT` (ค่าเริ่มต้น 8787)
@@ -156,7 +168,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
   - จำกัด 20,000 แถวต่อครั้ง
 
 ## ฝั่ง Vercel
-`api/usagemenu.js` และ `api/dashboard.js` ชี้มาที่ `http://storenarai.dyndns.tv:8787` (ตั้ง env `USAGE_API_BASE` ทับได้)
+`api/usagemenu.js` และ `api/dashboard.js` ชี้มาที่ `https://usage.khanoykorshabu.com` (ค่าเริ่มต้นใน `lib/upstream.js`, ตั้ง env `USAGE_API_BASE` ทับได้)
 
 > ⚠️ route `/dashboard` เป็นโค้ดใหม่ใน `server.js` — ต้อง **`Restart-Service NaraiUsageAPI`** บนเครื่องออฟฟิศก่อน หน้าเว็บถึงจะดึงได้
 
