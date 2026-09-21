@@ -131,12 +131,21 @@ try {
   const sheetRows = await fetchRows('ข้อมูลนับสตอค');
   const fromSheet = [];
   const seen = new Set();
+  // ภาพรวมของชีททั้งไฟล์ — ไม่สนช่วงวันและไม่สน --branch
+  // เดิมรายงานบอกแค่จำนวนแถวที่ผ่านตัวกรองครบทุกชั้น ซึ่งขึ้น 0 ได้ทั้งตอนชีทไม่มีข้อมูลจริง
+  // ตอนอ่านชีทไม่ได้ และตอนสาขาถูกบันทึกด้วยรหัสอื่น แล้วปิดท้ายว่า "ตรงกันแล้ว" ทั้งสามกรณี
+  const sheetLatest = new Map();  // สาขา -> { at, n }
+  let badDate = 0, incomplete = 0;
   for (const row of sheetRows) {
     const countedAt = toSqlDateTime(row[0]);
     const branch = branchCode(row[2]);
     const key = normCode(row[3]);
     const remaining = num(row[6]);
-    if (!countedAt || !branch || !key || remaining === null) continue;
+    if (!countedAt) { badDate++; continue; }
+    if (!branch || !key || remaining === null) { incomplete++; continue; }
+    const cur = sheetLatest.get(branch);
+    if (!cur) sheetLatest.set(branch, { at: countedAt, n: 1 });
+    else { cur.n++; if (countedAt > cur.at) cur.at = countedAt; }
     if (countedAt < cutoff) continue;
     if (ONLY_BRANCH && branch !== ONLY_BRANCH) continue;
     const dedupe = `${branch}|${key}|${countedAt}`;
@@ -144,6 +153,34 @@ try {
     seen.add(dedupe);
     fromSheet.push({ countedAt, branch, key, code: str(row[3]), name: str(row[4]), unit: str(row[5]), remaining, counter: str(row[1]) });
   }
+
+  console.log(`อ่านชีท 'ข้อมูลนับสตอค' ได้ ${sheetRows.length} แถว` +
+    (badDate ? ` · วันที่อ่านไม่ออก ${badDate}` : '') +
+    (incomplete ? ` · สาขา/รหัส/จำนวนไม่ครบ ${incomplete}` : ''));
+  if (sheetRows.length === 0) {
+    line();
+    console.error('❌ อ่านชีทไม่ได้ หรือแท็บนี้ว่าง — ผลเทียบข้างล่างจึงเชื่อไม่ได้');
+    console.error('   ตรวจ: ไฟล์ตั้งแชร์ "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง และแท็บชื่อ \'ข้อมูลนับสตอค\' ตรงไหม');
+    process.exit(2);
+  }
+
+  // วันที่นับล่าสุดของแต่ละสาขา ชีทเทียบ SQL — ตอบคำถาม "ของสาขานี้ตกค้างอยู่ในชีทไหม" ได้ในบรรทัดเดียว
+  const sqlLatest = await stockDb.queryRead(
+    `SELECT branch, CONVERT(NVARCHAR(19), MAX(counted_at), 120) AS at_text, COUNT(*) AS n
+       FROM dbo.stock_count GROUP BY branch`
+  );
+  const sqlByBranch = new Map(sqlLatest.map((r) => [str(r.branch).toLowerCase(), { at: str(r.at_text), n: Number(r.n) }]));
+  const allBranches = [...new Set([...sheetLatest.keys(), ...sqlByBranch.keys()])].sort();
+  console.log('');
+  console.log('  วันที่นับล่าสุด (ทุกสาขา ทุกช่วงเวลา — ไม่ขึ้นกับ --days/--branch)');
+  console.log(`    ${'สาขา'.padEnd(8)}${'ในชีท'.padEnd(22)}${'ใน SQL'.padEnd(22)}`);
+  for (const b of allBranches) {
+    const sh = sheetLatest.get(b);
+    const db = sqlByBranch.get(b);
+    const behind = sh && (!db || db.at < sh.at);   // ชีทใหม่กว่า SQL = มีของตกค้างแน่นอน
+    console.log(`    ${b.padEnd(8)}${(sh ? sh.at : '-').padEnd(22)}${(db ? db.at : '-').padEnd(22)}${behind ? '  ⚠️ ชีทใหม่กว่า' : ''}`);
+  }
+  console.log('');
 
   const inSql = await stockDb.queryRead(
     `SELECT branch, item_key, CONVERT(NVARCHAR(19), counted_at, 120) AS at_text
@@ -203,7 +240,19 @@ try {
     console.log('');
     line();
     if (missing.length === 0 && missingReq.length === 0) {
-      console.log('✅ ไม่มีอะไรตกค้าง ชีทกับ SQL ตรงกันแล้ว');
+      // "ไม่มีแถวขาด" ในช่วงที่ขอ ไม่ได้แปลว่าไม่มีอะไรตกค้างเลย — ของอาจอยู่นอกช่วง --days
+      const stale = [...sheetLatest.entries()].filter(([b, sh]) => {
+        if (ONLY_BRANCH && b !== ONLY_BRANCH) return false;
+        const db = sqlByBranch.get(b);
+        return !db || db.at < sh.at;
+      });
+      if (stale.length) {
+        console.log('⚠️ ในช่วง ' + DAYS + ' วันที่ตรวจไม่มีแถวขาด แต่สาขาข้างล่างยังมียอดในชีทที่ใหม่กว่า SQL');
+        for (const [b, sh] of stale) console.log(`    ${b}  ชีทล่าสุด ${sh.at}`);
+        console.log('ลองขยายช่วงด้วย --days=<จำนวนวัน> ให้ครอบวันที่นั้นแล้วรันใหม่');
+      } else {
+        console.log('✅ ไม่มีอะไรตกค้าง ชีทกับ SQL ตรงกันแล้ว');
+      }
     } else {
       console.log('นี่เป็นการรายงานอย่างเดียว ยังไม่ได้เขียนอะไรลงฐาน');
       console.log('ถ้าตัวเลขถูกต้องแล้ว สั่งใหม่ด้วย --apply เพื่อเติมเข้า SQL');
