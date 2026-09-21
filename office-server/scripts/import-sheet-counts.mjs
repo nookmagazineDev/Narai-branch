@@ -23,6 +23,15 @@
  *   --branch=crm  เฉพาะสาขาเดียว (ไม่ใส่ = ทุกสาขา)
  *   --apply       เขียนจริง (ไม่ใส่ = รายงานอย่างเดียว)
  *   --requests    รวมใบเบิก (ชีท 'ข้อมูลเบิก') ด้วย
+ *   --url=<URL>   วิธีที่ง่ายที่สุด: เปิดแท็บที่มีข้อมูลจริงในเบราว์เซอร์ แล้วก๊อป URL ทั้งอันมาวาง
+ *                 (สคริปต์แกะ id ไฟล์กับ gid ของแท็บออกมาเอง) ครอบ --file/--gid ที่ใส่มาด้วย
+ *   --file=<id>   ชี้ไฟล์อื่น (ค่าเริ่มต้นคือไฟล์สต๊อกที่ Apps Script เขียนลง)
+ *   --gid=<gid>   ชี้แท็บยอดนับด้วยเลข gid แทนชื่อ — เอามาจาก #gid=... ท้าย URL ตอนคลิกแท็บนั้น
+ *   --tab=<ชื่อ>  ชี้แท็บยอดนับด้วยชื่อ (ค่าเริ่มต้น 'ข้อมูลนับสตอค')
+ *   --reqgid= / --reqtab=   อย่างเดียวกันสำหรับแท็บใบเบิก
+ *
+ * ชี้เป้าด้วย gid ดีกว่าชื่อ: ถ้าชื่อแท็บไม่ตรงเป๊ะ (ช่องว่างท้ายชื่อ/สะกดต่าง) gviz อาจคืนแท็บอื่น
+ * มาให้เงียบ ๆ แล้วรายงานจะดูเหมือนอ่านได้ปกติ ทั้งที่เป็นข้อมูลคนละชุด
  *
  * รันซ้ำได้ปลอดภัย — เติมเฉพาะแถวที่ยังไม่มี (เทียบด้วย สาขา+สินค้า+เวลา เหมือน unique key ของตาราง)
  */
@@ -47,8 +56,18 @@ const WITH_REQUESTS = args.includes('--requests');
 const DAYS = Number(argVal('days', '30')) || 30;
 const ONLY_BRANCH = String(argVal('branch', '')).toLowerCase().trim();
 
-// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs)
-const STOCK_SS = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
+// URL ของแท็บที่เปิดอยู่ในเบราว์เซอร์ — แกะ id ไฟล์กับ gid ออกมาให้เอง
+// (ให้คนหาเลข gid เองแล้วพิมพ์ต่อท้ายพารามิเตอร์ พลาดง่ายกว่าก๊อปทั้งแถบที่อยู่มาวาง)
+const TAB_URL = String(argVal('url', '')).trim();
+const urlFile = TAB_URL.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
+const urlGid = TAB_URL.match(/[#?&]gid=(\d+)/);
+
+// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs) — ทับด้วย --url= หรือ --file= ได้
+const STOCK_SS = (urlFile ? urlFile[1] : String(argVal('file', '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ'))).trim();
+const COUNT_TAB = String(argVal('tab', 'ข้อมูลนับสตอค'));
+const COUNT_GID = (urlGid ? urlGid[1] : String(argVal('gid', ''))).trim();
+const REQ_TAB = String(argVal('reqtab', 'ข้อมูลเบิก'));
+const REQ_GID = String(argVal('reqgid', '')).trim();
 
 /* ── ตัวแปลงค่า: ต้องให้ผลตรงกับ scripts/migrate-stock.mjs เป๊ะ ── */
 const pad = (n) => String(n).padStart(2, '0');
@@ -78,13 +97,15 @@ function toSqlDateTime(v) {
   return `${y}-${pad(mo)}-${pad(d)} ${pad(Number(h) || 0)}:${pad(Number(mi) || 0)}:${pad(Number(sec) || 0)}`;
 }
 
-async function fetchRows(sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${STOCK_SS}/gviz/tq?tqx=out:json&headers=0&sheet=${encodeURIComponent(sheetName)}`;
+async function fetchRows(sheetName, gid) {
+  // ชี้ด้วย gid ก่อนเสมอถ้ามี — ชื่อแท็บที่ไม่ตรงเป๊ะทำให้ได้แท็บอื่นมาโดยไม่มีอะไรฟ้อง
+  const target = gid ? `gid=${encodeURIComponent(gid)}` : `sheet=${encodeURIComponent(sheetName)}`;
+  const url = `https://docs.google.com/spreadsheets/d/${STOCK_SS}/gviz/tq?tqx=out:json&headers=0&${target}`;
   const res = await fetch(url, { redirect: 'follow' });
   const text = await res.text();
   const a = text.indexOf('{'), b = text.lastIndexOf('}');
   if (a < 0 || b < 0) {
-    throw new Error(`อ่านชีท '${sheetName}' ไม่ได้ — ตรวจว่าตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง`);
+    throw new Error(`อ่านชีท '${gid ? 'gid=' + gid : sheetName}' ไม่ได้ — ตรวจว่าตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง`);
   }
   const json = JSON.parse(text.slice(a, b + 1));
   const cols = json.table.cols || [];
@@ -128,15 +149,30 @@ try {
 
   /* ─────────────── ยอดนับ ─────────────── */
   // ชีท 'ข้อมูลนับสตอค': A=วันที่ B=ผู้นับ C=สาขา D=รหัส E=ชื่อ F=หน่วย G=คงเหลือ
-  const sheetRows = await fetchRows('ข้อมูลนับสตอค');
+  if (TAB_URL && !urlFile) {
+    console.error('อ่าน --url= ไม่ออก — ต้องเป็นลิงก์ที่มี /spreadsheets/d/<id> อยู่ในนั้น');
+    process.exit(2);
+  }
+  console.log(`ไฟล์ ${STOCK_SS}`);
+  console.log(`แท็บยอดนับ: ${COUNT_GID ? 'gid=' + COUNT_GID : `'${COUNT_TAB}'`}`);
+  const sheetRows = await fetchRows(COUNT_TAB, COUNT_GID);
   const fromSheet = [];
   const seen = new Set();
+  // ภาพรวมของชีททั้งไฟล์ — ไม่สนช่วงวันและไม่สน --branch
+  // เดิมรายงานบอกแค่จำนวนแถวที่ผ่านตัวกรองครบทุกชั้น ซึ่งขึ้น 0 ได้ทั้งตอนชีทไม่มีข้อมูลจริง
+  // ตอนอ่านชีทไม่ได้ และตอนสาขาถูกบันทึกด้วยรหัสอื่น แล้วปิดท้ายว่า "ตรงกันแล้ว" ทั้งสามกรณี
+  const sheetLatest = new Map();  // สาขา -> { at, n }
+  let badDate = 0, incomplete = 0;
   for (const row of sheetRows) {
     const countedAt = toSqlDateTime(row[0]);
     const branch = branchCode(row[2]);
     const key = normCode(row[3]);
     const remaining = num(row[6]);
-    if (!countedAt || !branch || !key || remaining === null) continue;
+    if (!countedAt) { badDate++; continue; }
+    if (!branch || !key || remaining === null) { incomplete++; continue; }
+    const cur = sheetLatest.get(branch);
+    if (!cur) sheetLatest.set(branch, { at: countedAt, n: 1 });
+    else { cur.n++; if (countedAt > cur.at) cur.at = countedAt; }
     if (countedAt < cutoff) continue;
     if (ONLY_BRANCH && branch !== ONLY_BRANCH) continue;
     const dedupe = `${branch}|${key}|${countedAt}`;
@@ -144,6 +180,42 @@ try {
     seen.add(dedupe);
     fromSheet.push({ countedAt, branch, key, code: str(row[3]), name: str(row[4]), unit: str(row[5]), remaining, counter: str(row[1]) });
   }
+
+  console.log(`อ่านชีท 'ข้อมูลนับสตอค' ได้ ${sheetRows.length} แถว` +
+    (badDate ? ` · วันที่อ่านไม่ออก ${badDate}` : '') +
+    (incomplete ? ` · สาขา/รหัส/จำนวนไม่ครบ ${incomplete}` : ''));
+  if (sheetRows.length === 0) {
+    line();
+    console.error('❌ อ่านชีทไม่ได้ หรือแท็บนี้ว่าง — ผลเทียบข้างล่างจึงเชื่อไม่ได้');
+    console.error('   ตรวจ: ไฟล์ตั้งแชร์ "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง และชี้แท็บถูกตัวไหม');
+    process.exit(2);
+  }
+  // อ่านมาได้แต่ใช้ไม่ได้สักแถว = ชี้ผิดแท็บ (คอลัมน์คนละชุด) ไม่ใช่ "ไม่มีอะไรตกค้าง"
+  if (sheetLatest.size === 0) {
+    line();
+    console.error(`❌ อ่านมาได้ ${sheetRows.length} แถว แต่ไม่มีแถวไหนเป็นยอดนับเลย — แท็บนี้ผิดตัว`);
+    console.error('   แท็บยอดนับต้องเรียงคอลัมน์ A=วันที่ B=ผู้นับ C=สาขา D=รหัส E=ชื่อ F=หน่วย G=คงเหลือ');
+    console.error('   เปิดแท็บที่มีข้อมูลจริงในเบราว์เซอร์แล้วก๊อป URL ทั้งอันมาใส่ --url="<วาง URL>"');
+    process.exit(2);
+  }
+
+  // วันที่นับล่าสุดของแต่ละสาขา ชีทเทียบ SQL — ตอบคำถาม "ของสาขานี้ตกค้างอยู่ในชีทไหม" ได้ในบรรทัดเดียว
+  const sqlLatest = await stockDb.queryRead(
+    `SELECT branch, CONVERT(NVARCHAR(19), MAX(counted_at), 120) AS at_text, COUNT(*) AS n
+       FROM dbo.stock_count GROUP BY branch`
+  );
+  const sqlByBranch = new Map(sqlLatest.map((r) => [str(r.branch).toLowerCase(), { at: str(r.at_text), n: Number(r.n) }]));
+  const allBranches = [...new Set([...sheetLatest.keys(), ...sqlByBranch.keys()])].sort();
+  console.log('');
+  console.log('  วันที่นับล่าสุด (ทุกสาขา ทุกช่วงเวลา — ไม่ขึ้นกับ --days/--branch)');
+  console.log(`    ${'สาขา'.padEnd(8)}${'ในชีท'.padEnd(22)}${'ใน SQL'.padEnd(22)}`);
+  for (const b of allBranches) {
+    const sh = sheetLatest.get(b);
+    const db = sqlByBranch.get(b);
+    const behind = sh && (!db || db.at < sh.at);   // ชีทใหม่กว่า SQL = มีของตกค้างแน่นอน
+    console.log(`    ${b.padEnd(8)}${(sh ? sh.at : '-').padEnd(22)}${(db ? db.at : '-').padEnd(22)}${behind ? '  ⚠️ ชีทใหม่กว่า' : ''}`);
+  }
+  console.log('');
 
   const inSql = await stockDb.queryRead(
     `SELECT branch, item_key, CONVERT(NVARCHAR(19), counted_at, 120) AS at_text
@@ -170,7 +242,7 @@ try {
   let missingReq = [];
   if (WITH_REQUESTS) {
     // ชีท 'ข้อมูลเบิก': A=เลขที่ B=เวลาบันทึก C=รหัส D=ชื่อ E=หน่วย F=จำนวน G=วันรับ H=ผู้เบิก I=สาขา
-    const reqRows = await fetchRows('ข้อมูลเบิก');
+    const reqRows = await fetchRows(REQ_TAB, REQ_GID);
     const list = [];
     const seenReq = new Set();
     for (const row of reqRows) {
@@ -203,7 +275,19 @@ try {
     console.log('');
     line();
     if (missing.length === 0 && missingReq.length === 0) {
-      console.log('✅ ไม่มีอะไรตกค้าง ชีทกับ SQL ตรงกันแล้ว');
+      // "ไม่มีแถวขาด" ในช่วงที่ขอ ไม่ได้แปลว่าไม่มีอะไรตกค้างเลย — ของอาจอยู่นอกช่วง --days
+      const stale = [...sheetLatest.entries()].filter(([b, sh]) => {
+        if (ONLY_BRANCH && b !== ONLY_BRANCH) return false;
+        const db = sqlByBranch.get(b);
+        return !db || db.at < sh.at;
+      });
+      if (stale.length) {
+        console.log('⚠️ ในช่วง ' + DAYS + ' วันที่ตรวจไม่มีแถวขาด แต่สาขาข้างล่างยังมียอดในชีทที่ใหม่กว่า SQL');
+        for (const [b, sh] of stale) console.log(`    ${b}  ชีทล่าสุด ${sh.at}`);
+        console.log('ลองขยายช่วงด้วย --days=<จำนวนวัน> ให้ครอบวันที่นั้นแล้วรันใหม่');
+      } else {
+        console.log('✅ ไม่มีอะไรตกค้าง ชีทกับ SQL ตรงกันแล้ว');
+      }
     } else {
       console.log('นี่เป็นการรายงานอย่างเดียว ยังไม่ได้เขียนอะไรลงฐาน');
       console.log('ถ้าตัวเลขถูกต้องแล้ว สั่งใหม่ด้วย --apply เพื่อเติมเข้า SQL');
