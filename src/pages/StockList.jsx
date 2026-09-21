@@ -204,13 +204,30 @@ const UP100_ALL_COVERS_CODES = new Set([
 // เพิ่มรหัสสาขา (ตัวเล็ก) ในนี้ได้เลยเมื่อมีสาขาเปลี่ยนมาใช้ 2 ราคาเพิ่ม
 const TWO_TIER_BRANCHES = new Set(['crm']);
 
-// สาขานี้เป็นสาขาหัว 2 ราคาหรือไม่ — ดูจาก 3 แหล่งประกอบกัน แหล่งใดเข้าเงื่อนไขก็ถือว่าใช่:
-// 1) ระบุตรงๆ ใน TWO_TIER_BRANCHES  2) เดือนที่แล้วมียอดขายทั้ง 259 และ 359 จริง
-// 3) เคยบันทึกจำนวนหัวแยกราคาไว้ในปฏิทิน (กันเคสข้อมูลยอดขายดึงไม่ได้/office-server ล่ม)
+// สาขาที่หัวราคาสูงเป็นแบบ UP100 (ค่าอัพเกรด 259 -> 359 รหัส 101116) แบบระบุตรงๆ
+// เหตุผลเดียวกับ TWO_TIER_BRANCHES: ปกติดูจากยอดขายเดือนที่แล้ว+เดือนนี้ว่ามีรหัส 101116 ไหม
+// สาขาที่เพิ่งเปลี่ยนมาใช้จึงยังตรวจไม่เจอ แล้วได้ผลผิดสองอย่าง — ช่องหัวราคาสูงขึ้นว่า "359"
+// และ 4 ไอเทมใน UP100_ALL_COVERS_CODES ถูกคิดยอดเบิกจากหัวราคาสูงล้วนแทนหัวรวมทุกราคา
+// (เบิกน้อยกว่าที่ใช้จริง เพราะสาขา UP100 เสิร์ฟของพวกนี้ให้ลูกค้าทุกราคา)
+//
+// สาขาที่อยู่ในนี้ถือเป็นสาขาหัว 2 ราคาโดยอัตโนมัติ ไม่ต้องใส่ซ้ำใน TWO_TIER_BRANCHES
+// zjp กับ sjp เป็นร้านเดียวกันแต่มีสองรหัส (ดู utils/branchAlias.js) จึงต้องใส่ทั้งคู่
+const UP100_BRANCHES = new Set(['ipr', 'sjp', 'zjp', 'slr']);
+
+// สาขานี้เป็นสาขาหัว 2 ราคาหรือไม่ — ดูจาก 4 แหล่งประกอบกัน แหล่งใดเข้าเงื่อนไขก็ถือว่าใช่:
+// 1) ระบุตรงๆ ใน TWO_TIER_BRANCHES  2) ระบุตรงๆ ใน UP100_BRANCHES (UP100 = หัว 2 ราคาอยู่แล้ว)
+// 3) เดือนที่แล้วมียอดขายทั้ง 259 และ 359 จริง
+// 4) เคยบันทึกจำนวนหัวแยกราคาไว้ในปฏิทิน (กันเคสข้อมูลยอดขายดึงไม่ได้/office-server ล่ม)
 const isTwoTierBranchOf = (branch, bucketInfo, savedPcts) =>
   TWO_TIER_BRANCHES.has(String(branch || '').toLowerCase().trim())
+  || UP100_BRANCHES.has(String(branch || '').toLowerCase().trim())
   || !!bucketInfo?.hasTwoTier
   || (savedPcts || []).some(p => (Number(p.percent259) || 0) > 0 || (Number(p.percent359) || 0) > 0);
+
+// สาขานี้ใช้หัวราคาสูงแบบ UP100 หรือไม่ — ระบุตรงๆ ก่อน ไม่งั้นดูจากยอดขายที่ office-server ส่งมา
+const isUp100BranchOf = (branch, bucketInfo) =>
+  UP100_BRANCHES.has(String(branch || '').toLowerCase().trim())
+  || bucketInfo?.premiumLabel === 'UP100';
 
 export default function StockList() {
   const { user } = useAuth();
@@ -308,7 +325,7 @@ export default function StockList() {
   // สาขาหัว 2 ราคา — ใช้ตัวเดียวกันทั้งปฏิทินกรอกจำนวนหัวและปุ่มบันทึก (สูตรคำนวณยอดเบิกคำนวณของมันเองตอนกด
   // เพราะต้องใช้ข้อมูลที่ดึงสดในจังหวะนั้น ดู calcRequested)
   // ชื่อเรียกช่องหัวราคาสูงของสาขานี้: UP100 (รหัส 101116) หรือ 359 (รหัส 101002)
-  const premiumLabel = coverBuckets?.premiumLabel || '359';
+  const premiumLabel = isUp100BranchOf(effectiveBranch, coverBuckets) ? 'UP100' : '359';
 
   const isTwoTierBranch = useMemo(
     () => isTwoTierBranchOf(effectiveBranch, coverBuckets, specialPcts),
@@ -1366,7 +1383,7 @@ export default function StockList() {
       // ใช้ข้อมูลที่เพิ่งดึงสดในรอบคำนวณนี้ ไม่พึ่ง state ของหน้าจอ กันกรณีกดคำนวณก่อนหน้าจอโหลดเสร็จ
       const isTwoTierCalc = isTwoTierBranchOf(effectiveBranch, bucketInfo, pctRes.status === 'success' ? pctRes.data : []);
       // สาขานี้ใช้หัวราคาสูงแบบ UP100 (รหัส 101116) หรือแบบ Premium 359 (รหัส 101002)
-      const isUp100Calc = bucketInfo.premiumLabel === 'UP100';
+      const isUp100Calc = isUp100BranchOf(effectiveBranch, bucketInfo);
       const realCoversMap = {};
       const realCovers359Map = {};
       if (realRes && realRes.status === 'success') {
