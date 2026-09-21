@@ -5,7 +5,7 @@
 | ชั้น | ใช้ทำอะไร | ขึ้นที่หน้าไหน | จุดที่พังบ่อย |
 |---|---|---|---|
 | **Google Apps Script** (`src/services/api.js`) | ล็อกอิน, รายการสินค้า, นับสต๊อก, ตารางงาน, WASTE, ปิดยอด | เกือบทุกหน้า | โดนลิมิต execution พร้อมกัน / เปิดสเปรดชีตใหญ่ช้า |
-| **office-server** ที่ออฟฟิศ (`office-server/`) ผ่าน `storenarai.dyndns.tv:8787` | แดชบอร์ด, ยอดขาย, ยอดใช้ตามเมนู (BOM), บิล | แดชบอร์ด, ค้นหารายการขาย, ยอดใช้ในหน้านับสต๊อก | เครื่อง IT-Narai ปิด / เน็ตออฟฟิศหลุด / IP dyndns เปลี่ยน / พอร์ต 8787 ไม่เปิด |
+| **office-server** ที่ออฟฟิศ (`office-server/`) ผ่าน `usage.khanoykorshabu.com` (Cloudflare Tunnel) | แดชบอร์ด, ยอดขาย, ยอดใช้ตามเมนู (BOM), บิล | แดชบอร์ด, ค้นหารายการขาย, ยอดใช้ในหน้านับสต๊อก | เครื่อง IT-Narai ปิด / เน็ตออฟฟิศหลุด / IP dyndns เปลี่ยน / พอร์ต 8787 ไม่เปิด |
 | **MySQL** ที่ `inventory.dyndns.tv` (`api/orderd.js`, `withdrawals.js`, `pending_orders.js`, `insert_order.js`) | ใบรับ, ใบเบิก, ใบเบิกค้าง, ส่งใบสั่งของ | หน้านับสต๊อก (ยอดรับเข้า/ใบเบิก/สั่งของ) | เครื่องปลายทางปิด / connection ค้างตายหลัง Vercel แช่แข็งฟังก์ชัน |
 
 **"เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ" ที่เห็นเป็นข้อความรวมของทั้ง 3 ชั้น** ตอนนี้ข้อความ error บอกสาเหตุจริงแล้ว
@@ -78,6 +78,60 @@ curl http://storenarai.dyndns.tv:8787/health
 - **ถ้า dyndns เปลี่ยน IP หรือย้ายพอร์ต**: ตั้ง env `USAGE_API_BASE` บน Vercel ทับได้เลย ไม่ต้องแก้โค้ด
   (ค่าเริ่มต้นอยู่ที่ `lib/upstream.js`)
 - **MySQL**: ตั้ง env `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` บน Vercel (ค่าเริ่มต้นอยู่ที่ `lib/mysql.js`)
+
+## หน้าเว็บขึ้น "ไม่รู้จักคำสั่ง ..." (หรือใช้ได้บ้างไม่ได้บ้าง)
+
+ข้อความนี้ออกมาจาก **office-server เอง** (`schedule.js`) ไม่ใช่จากหน้าเว็บ แปลว่าคำขอไปถึงเครื่องปลายทางแล้ว
+แต่โค้ดบนเครื่องนั้นเก่ากว่าหน้าเว็บ จึงไม่รู้จัก action ที่เพิ่งเพิ่มเข้ามา
+
+**ไล่สามชั้นนี้ตามลำดับ ตอบได้ทุกกรณี**
+
+```powershell
+# ชั้น 1+2 — หน้าเว็บรุ่นไหน และ Vercel ส่งต่อไปเครื่องไหน
+$b = @{ action='getUniformItems'; _user=@{username='ipr'; branch='ipr'} } | ConvertTo-Json
+try { $r = Invoke-WebRequest -Method Post 'https://narai-branch.vercel.app/api/schedule' -ContentType 'application/json' -Body $b -TimeoutSec 60 -UseBasicParsing }
+catch { $r = $_.Exception.Response }
+"x-app-build : " + $r.Headers['x-app-build']    # คอมมิตของหน้าเว็บที่ Vercel ให้บริการอยู่
+"x-upstream  : " + $r.Headers['x-upstream']     # host ของ office-server ที่ deployment นี้ชี้ไป
+```
+
+| อาการ | แปลว่า | แก้ |
+|---|---|---|
+| `x-app-build` ไม่ตรงกับคอมมิตล่าสุดของ `main` | Vercel ยัง deploy ไม่เสร็จ | รอ แล้วเช็คซ้ำ |
+| `x-upstream` เป็นโฮสต์ที่เลิกใช้แล้ว | มี env `USAGE_API_BASE` ตั้งทับไว้ที่ Production | Vercel → Settings → Environment Variables → แก้หรือลบแถวนั้น → **Redeploy** (env มีผลตอน deploy เท่านั้น และถ้าตั้งไว้เฉพาะ Preview ตัว Production จะถอยไปใช้ค่าเริ่มต้นใน `lib/upstream.js` เงียบ ๆ) |
+| `x-upstream` ถูกแล้วแต่ยัง error | เครื่องปลายทางรันโค้ดเก่า หรือ **มีหลายเครื่องซ่อนอยู่หลังชื่อเดียวกัน** | ชั้น 3 ข้างล่าง |
+
+**ชั้น 3 — เครื่องปลายทางรันโค้ดชุดไหน** `/health` บอกไว้แล้ว (`code_sha` = คอมมิตที่โปรเซสนั้นโหลดมาตอนสตาร์ท,
+`code_mtime` ใช้แทนเมื่อโฟลเดอร์ไม่ใช่ git repo, `actions` = ชื่อคำสั่งทั้งหมดที่โค้ดชุดนั้นรู้จัก)
+
+```powershell
+Invoke-RestMethod http://localhost:8787/health | Select-Object code_sha, code_mtime, started_at
+```
+
+`code_sha` ไม่ตรงกับ `git -C <โฟลเดอร์โค้ด> rev-parse --short HEAD` = ยังไม่ได้รีสตาร์ท service หลัง `git pull`
+(หรือ service ชี้คนละโฟลเดอร์กับที่ pull — ดูของจริงที่
+`Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\NaraiUsageAPI\Parameters'` เพราะ NSSM
+เก็บ path ไว้ใน registry ไม่ใช่ใน `PathName` ของ service)
+
+### กับดัก: cloudflared สองตัวผูก tunnel เดียวกัน
+
+เกิดขึ้นจริงเมื่อ 21/09/2026 — อาการคือ **ใช้ได้บ้างไม่ได้บ้างแบบสุ่ม** ทั้งที่ทุกอย่างดูถูกหมด
+Cloudflare สลับส่งคำขอให้ connector ทีละตัว คำขอที่ไปโดนเครื่องเก่าจึงขึ้น "ไม่รู้จักคำสั่ง"
+ส่วนคำขอที่ไปโดนเครื่องใหม่ผ่านปกติ
+
+ยิงซ้ำ ๆ แล้วดูว่า `code_sha` ตรงกันทุกครั้งไหม — ตรงกันหมด = connector ตัวเดียว:
+
+```powershell
+foreach ($i in 1..6) {
+  $h = Invoke-RestMethod 'https://usage.khanoykorshabu.com/health' -TimeoutSec 20
+  "ครั้งที่ $i : code_sha=$($h.code_sha)  started=$($h.started_at)"
+}
+```
+
+ดูรายชื่อเครื่องที่ต่ออยู่ได้ที่ [one.dash.cloudflare.com](https://one.dash.cloudflare.com) → Networks → Tunnels →
+เลือก tunnel → แท็บ **Connectors** แก้โดยอัปเดตโค้ดเครื่องนั้นให้ตรงกัน (`git pull origin main` +
+`Restart-Service NaraiUsageAPI`) หรือปิด connector ที่ไม่ต้องการ (`Stop-Service Cloudflared` +
+`Set-Service Cloudflared -StartupType Disabled`)
 
 ## ตารางงาน/นับสต๊อกขึ้น "ชื่อผู้ใช้/รหัสผ่านไม่ถูกต้อง" ทั้งที่รหัสถูก
 
