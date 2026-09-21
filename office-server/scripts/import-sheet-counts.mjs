@@ -23,6 +23,13 @@
  *   --branch=crm  เฉพาะสาขาเดียว (ไม่ใส่ = ทุกสาขา)
  *   --apply       เขียนจริง (ไม่ใส่ = รายงานอย่างเดียว)
  *   --requests    รวมใบเบิก (ชีท 'ข้อมูลเบิก') ด้วย
+ *   --file=<id>   ชี้ไฟล์อื่น (ค่าเริ่มต้นคือไฟล์สต๊อกที่ Apps Script เขียนลง)
+ *   --gid=<gid>   ชี้แท็บยอดนับด้วยเลข gid แทนชื่อ — เอามาจาก #gid=... ท้าย URL ตอนคลิกแท็บนั้น
+ *   --tab=<ชื่อ>  ชี้แท็บยอดนับด้วยชื่อ (ค่าเริ่มต้น 'ข้อมูลนับสตอค')
+ *   --reqgid= / --reqtab=   อย่างเดียวกันสำหรับแท็บใบเบิก
+ *
+ * ชี้เป้าด้วย gid ดีกว่าชื่อ: ถ้าชื่อแท็บไม่ตรงเป๊ะ (ช่องว่างท้ายชื่อ/สะกดต่าง) gviz อาจคืนแท็บอื่น
+ * มาให้เงียบ ๆ แล้วรายงานจะดูเหมือนอ่านได้ปกติ ทั้งที่เป็นข้อมูลคนละชุด
  *
  * รันซ้ำได้ปลอดภัย — เติมเฉพาะแถวที่ยังไม่มี (เทียบด้วย สาขา+สินค้า+เวลา เหมือน unique key ของตาราง)
  */
@@ -47,8 +54,12 @@ const WITH_REQUESTS = args.includes('--requests');
 const DAYS = Number(argVal('days', '30')) || 30;
 const ONLY_BRANCH = String(argVal('branch', '')).toLowerCase().trim();
 
-// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs)
-const STOCK_SS = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
+// ไฟล์สต๊อก (ชุดเดียวกับ scripts/migrate-stock.mjs) — ทับด้วย --file= ได้
+const STOCK_SS = String(argVal('file', '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ')).trim();
+const COUNT_TAB = String(argVal('tab', 'ข้อมูลนับสตอค'));
+const COUNT_GID = String(argVal('gid', '')).trim();
+const REQ_TAB = String(argVal('reqtab', 'ข้อมูลเบิก'));
+const REQ_GID = String(argVal('reqgid', '')).trim();
 
 /* ── ตัวแปลงค่า: ต้องให้ผลตรงกับ scripts/migrate-stock.mjs เป๊ะ ── */
 const pad = (n) => String(n).padStart(2, '0');
@@ -78,13 +89,15 @@ function toSqlDateTime(v) {
   return `${y}-${pad(mo)}-${pad(d)} ${pad(Number(h) || 0)}:${pad(Number(mi) || 0)}:${pad(Number(sec) || 0)}`;
 }
 
-async function fetchRows(sheetName) {
-  const url = `https://docs.google.com/spreadsheets/d/${STOCK_SS}/gviz/tq?tqx=out:json&headers=0&sheet=${encodeURIComponent(sheetName)}`;
+async function fetchRows(sheetName, gid) {
+  // ชี้ด้วย gid ก่อนเสมอถ้ามี — ชื่อแท็บที่ไม่ตรงเป๊ะทำให้ได้แท็บอื่นมาโดยไม่มีอะไรฟ้อง
+  const target = gid ? `gid=${encodeURIComponent(gid)}` : `sheet=${encodeURIComponent(sheetName)}`;
+  const url = `https://docs.google.com/spreadsheets/d/${STOCK_SS}/gviz/tq?tqx=out:json&headers=0&${target}`;
   const res = await fetch(url, { redirect: 'follow' });
   const text = await res.text();
   const a = text.indexOf('{'), b = text.lastIndexOf('}');
   if (a < 0 || b < 0) {
-    throw new Error(`อ่านชีท '${sheetName}' ไม่ได้ — ตรวจว่าตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง`);
+    throw new Error(`อ่านชีท '${gid ? 'gid=' + gid : sheetName}' ไม่ได้ — ตรวจว่าตั้งลิงก์เป็น "ผู้ที่มีลิงก์ • ผู้อ่าน" แล้วหรือยัง`);
   }
   const json = JSON.parse(text.slice(a, b + 1));
   const cols = json.table.cols || [];
@@ -128,7 +141,9 @@ try {
 
   /* ─────────────── ยอดนับ ─────────────── */
   // ชีท 'ข้อมูลนับสตอค': A=วันที่ B=ผู้นับ C=สาขา D=รหัส E=ชื่อ F=หน่วย G=คงเหลือ
-  const sheetRows = await fetchRows('ข้อมูลนับสตอค');
+  console.log(`ไฟล์ ${STOCK_SS}`);
+  console.log(`แท็บยอดนับ: ${COUNT_GID ? 'gid=' + COUNT_GID : `'${COUNT_TAB}'`}`);
+  const sheetRows = await fetchRows(COUNT_TAB, COUNT_GID);
   const fromSheet = [];
   const seen = new Set();
   // ภาพรวมของชีททั้งไฟล์ — ไม่สนช่วงวันและไม่สน --branch
@@ -207,7 +222,7 @@ try {
   let missingReq = [];
   if (WITH_REQUESTS) {
     // ชีท 'ข้อมูลเบิก': A=เลขที่ B=เวลาบันทึก C=รหัส D=ชื่อ E=หน่วย F=จำนวน G=วันรับ H=ผู้เบิก I=สาขา
-    const reqRows = await fetchRows('ข้อมูลเบิก');
+    const reqRows = await fetchRows(REQ_TAB, REQ_GID);
     const list = [];
     const seenReq = new Set();
     for (const row of reqRows) {
