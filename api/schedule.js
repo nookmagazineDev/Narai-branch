@@ -64,6 +64,15 @@ const READ_ONLY = new Set([
   'getProductionReport',
 ]);
 
+/** host ของ office-server ที่ deployment นี้ชี้ไป — ค่าเสียรูปก็ต้องไม่ทำให้คำขอล้ม */
+const upstreamHost = () => {
+  try {
+    return new URL(USAGE_API_BASE).host;
+  } catch {
+    return 'invalid';
+  }
+};
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   // รุ่นที่ deploy อยู่ตอนนี้ — หน้าเว็บเอาไปเทียบกับรหัสรุ่นที่ฝังมากับไฟล์ของตัวเอง
@@ -71,6 +80,14 @@ export default async function handler(req, res) {
   // ใส่เป็น header ของ endpoint ที่หน้าเว็บเรียกอยู่แล้ว จะได้ไม่ต้องเพิ่มไฟล์ใน api/
   // (Vercel Hobby จำกัด serverless function ไว้ 12 ตัว ตอนนี้เต็มพอดี)
   res.setHeader('x-app-build', process.env.VERCEL_GIT_COMMIT_SHA || 'dev');
+  // ปลายทางที่ไฟล์นี้ส่งต่อไปจริง ๆ ของ deployment ที่กำลังให้บริการอยู่
+  //
+  // env USAGE_API_BASE ถูกอ่านตอน deploy การแก้ค่าในหน้า Settings จึงยังไม่มีผลจนกว่าจะ Redeploy
+  // และถ้าตั้งค่าไว้เฉพาะ Preview ตัว Production ก็ยังใช้ค่าเดิมต่อไปเงียบ ๆ — อาการที่ได้คือ
+  // หน้าเว็บรุ่นใหม่ยิงไป office-server เครื่องเก่า แล้วขึ้นว่า "ไม่รู้จักคำสั่ง ..." ทั้งที่แก้ env ไปแล้ว
+  // บอกเป็น header ไว้ตรงนี้ จะได้ตอบได้จากภายนอกโดยไม่ต้องเปิดหน้า Settings
+  // เอาเฉพาะ host ไม่ใส่ path/token
+  res.setHeader('x-upstream', upstreamHost());
   if (req.method !== 'POST') {
     return res.status(405).json({ status: 'error', message: 'รองรับเฉพาะ POST' });
   }
