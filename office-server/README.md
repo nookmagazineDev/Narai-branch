@@ -34,6 +34,12 @@
 เพิ่มผู้ใช้/รีเซ็ตรหัสด้วยมือ: `node scripts/hash-password.mjs "รหัสที่ต้องการ"`
 รายละเอียดทั้งหมดอยู่ใน [docs/hr-sql-migration.md](../docs/hr-sql-migration.md)
 
+**กล่องยูนิฟอร์ม** (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน) ต้องสร้างตาราง `dbo.UniformBranch` ครั้งเดียวก่อนใช้:
+```powershell
+node scripts/setup-uniform-db.mjs          # สร้าง + ไล่ตรวจให้ครบ (--check = ตรวจอย่างเดียว)
+```
+วิธีตั้งทั้งหมดพร้อมวิธีแก้ปัญหาที่เจอบ่อย: [docs/uniform-sql-migration.md](../docs/uniform-sql-migration.md)
+
 ## จุดเด่น
 - **Cache รายวัน**: ตอนสตาร์ทจะอุ่น cache ย้อนหลัง ~70 วัน (เบื้องหลัง ~3-4 นาที) หลังจากนั้น query เร็ว <10ms
 - ข้อมูล "วันนี้" รีเฟรชอัตโนมัติทุก 20 นาที

@@ -5,9 +5,13 @@
 
    รันไฟล์นี้ครั้งเดียวก่อนเปิดใช้ปุ่มยูนิฟอร์มในหน้ารายชื่อพนักงาน
 
-   วิธีรัน (บนเครื่องฐานข้อมูล):
-     sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-uniform.sql
-   หรือเปิดใน SQL Server Management Studio แล้วกด Execute
+   วิธีรัน (บนเครื่องฐานข้อมูล) — เลือกทางใดทางหนึ่ง:
+     ก) สคริปต์ที่สร้าง+ตรวจให้ครบในคำสั่งเดียว (แนะนำ ไม่ต้องมี sqlcmd)
+        cd office-server
+        node scripts/setup-uniform-db.mjs
+     ข) sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-uniform.sql
+     ค) เปิดใน SQL Server Management Studio แล้วกด Execute
+   ขั้นตอนทั้งหมดพร้อมวิธีแก้ปัญหาที่เจอบ่อย: docs/uniform-sql-migration.md
 
    1 แถว = 1 ไอเทมที่จ่ายให้พนักงาน 1 คน 1 ครั้ง
    (กดบันทึกครั้งเดียวที่มี 3 ไอเทม = 3 แถว issued_at เดียวกัน)
@@ -48,13 +52,15 @@ CREATE TABLE dbo.UniformBranch (
 GO
 
 /* เปิดกล่องของพนักงาน 1 คน = อ่านด้วย hr_code + สาขา เรียงจากใหม่ไปเก่า */
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UniformBranch_emp')
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformBranch') AND name = N'IX_UniformBranch_emp')
 CREATE INDEX IX_UniformBranch_emp
     ON dbo.UniformBranch (hr_code, branch, issued_at DESC);
 GO
 
 /* สรุปยอดรายสาขา/รายเดือน (ใครเบิกอะไรไปเท่าไหร่) */
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_UniformBranch_branch_date')
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformBranch') AND name = N'IX_UniformBranch_branch_date')
 CREATE INDEX IX_UniformBranch_branch_date
     ON dbo.UniformBranch (branch, issued_at DESC)
     INCLUDE (item_key, qty);
@@ -66,3 +72,6 @@ GO
    ตรวจได้ด้วย:
      SELECT * FROM dbo.UniformBranch;   -- ต้องไม่ error (ตอนนี้ยังว่าง)
 */
+
+PRINT N'สร้างตาราง dbo.UniformBranch เรียบร้อย (ตรวจซ้ำได้ด้วย node scripts/setup-uniform-db.mjs --check ที่โฟลเดอร์ office-server)';
+GO
