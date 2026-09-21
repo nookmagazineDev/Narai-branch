@@ -39,6 +39,10 @@ const READ_ONLY = new Set([
   'getMonthEndClosing',
   'getMonthEndRows',
   'getStockCountRows',
+  // ยูนิฟอร์มพนักงาน (ดู office-server/uniform.js)
+  'getUniformItems',
+  'getUniformSummary',
+  'getEmployeeUniform',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
   'getGoodsToReceive',
   'getStoreReceivingStatus',

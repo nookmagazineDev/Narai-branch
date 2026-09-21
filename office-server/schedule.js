@@ -19,6 +19,7 @@ import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-
 import { STOCK_ACTIONS } from './stock.js';
 import { STORE_WORK_ACTIONS } from './storework.js';
 import { KITCHEN_ACTIONS } from './kitchen.js';
+import { UNIFORM_ACTIONS } from './uniform.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
 } from './hr-session.js';
@@ -1032,6 +1033,11 @@ const ACTIONS = {
 
   // เมนูครัวกลาง (สูตร/สั่งผลิต/เบิกวัตถุดิบ/คงเหลือ/รายงาน) — เรียกจาก storefct เหมือนกัน
   ...KITCHEN_ACTIONS,
+
+  // ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน) — ดู office-server/uniform.js
+  // ปุ่ม "เบิกเข้าสาขา" ของกล่องนั้นไม่ได้อยู่ในชุดนี้ มันเรียก saveStock ของ stock.js
+  // เพื่อให้ใบเบิกลง dbo.stock_request ตารางเดียวกับใบเบิกของสต๊อก
+  ...UNIFORM_ACTIONS,
 };
 
 /* action ที่เรียกได้ทั้งที่ยังไม่ได้ล็อกอิน — มีตัวเดียวคือ login เอง
