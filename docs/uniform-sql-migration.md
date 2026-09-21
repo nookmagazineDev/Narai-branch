@@ -2,10 +2,12 @@
 
 ทำครั้งเดียวก่อนเปิดใช้ปุ่มรูปเสื้อ หลังจากนี้ไม่ต้องทำอะไรอีก
 
-**สรุปสั้นที่สุด** — บนเครื่องที่ออฟฟิศ (เครื่องที่รัน service `NaraiUsageAPI`):
+**สรุปสั้นที่สุด** — บนเครื่องที่ออฟฟิศ (เครื่องที่รัน service `NaraiUsageAPI`)
+โฟลเดอร์รากตามที่ติดตั้งไว้จริงคือ `D:\Narai-branch-main` (แตกจาก ZIP จึงลงท้าย `-main`)
+ถ้าของเครื่องคุณชื่ออื่น ให้เปลี่ยน path ในทุกคำสั่งตามนั้น:
 
 ```powershell
-cd D:\Narai-branch\office-server        # โฟลเดอร์ที่ service ใช้อยู่
+cd D:\Narai-branch-main\office-server        # โฟลเดอร์ที่ service ใช้อยู่
 git pull origin main                    # เอาสคริปต์ตัวใหม่มาก่อน
 node scripts/setup-uniform-db.mjs
 ```
@@ -60,6 +62,23 @@ node scripts/setup-uniform-db.mjs
 | SQL Server + ฐาน `InventoryNarai` และตาราง `stock_item`, `stock_request` | สคริปต์ในข้อ 3 บอกให้เองว่าขาดข้อไหน |
 | ตั้ง `HR_DB_USER` / `HR_DB_PASSWORD` ใน `office-server\.env` แล้ว | หน้านับสต๊อกใช้งานได้อยู่ = ตั้งแล้ว |
 | มีไอเทมรหัส `800000*` ในทะเบียนสินค้า | ดูข้อ 7 |
+| **โค้ด office-server ใหม่พอที่จะมี `uniform.js`** (ไม่มี = กดปุ่มแล้วขึ้นว่าไม่รู้จัก action) | `Test-Path D:\Narai-branch-main\office-server\uniform.js` |
+
+ข้อสุดท้ายได้ `False` → อัปเดตโค้ดก่อน แล้ว `Restart-Service NaraiUsageAPI`:
+
+```powershell
+cd D:\Narai-branch-main
+git pull origin main                 # โฟลเดอร์เป็น git repo อยู่แล้ว
+Restart-Service NaraiUsageAPI
+```
+
+ขึ้นว่า `not a git repository` (ได้โค้ดมาจาก ZIP) → เชื่อมเข้ากับ git ครั้งเดียวก่อน
+สคริปต์นี้ดึง main มาทับไฟล์โค้ด + `npm install` + รีสตาร์ท service ให้เอง และไม่แตะ `.env`:
+
+```powershell
+cd D:\Narai-branch-main\office-server
+powershell -ExecutionPolicy Bypass -File .\scripts\link-to-git.ps1 -Root D:\Narai-branch-main
+```
 
 ถ้าเป็นเครื่องใหม่ที่ยังไม่มีฐานข้อมูลอะไรเลย ให้รันตามลำดับนี้ก่อน:
 `docs/schema-hr.sql` (ฐาน `narai_hr`) → `docs/schema-stock.sql` (ฐาน `InventoryNarai`) → แล้วค่อยมาข้อ 3
@@ -72,9 +91,12 @@ node scripts/setup-uniform-db.mjs
 ### ทาง ก) สคริปต์ (แนะนำ — ไม่ต้องมี sqlcmd ไม่ต้องเปิด SSMS)
 
 ```powershell
-cd D:\Narai-branch\office-server
+cd D:\Narai-branch-main\office-server
 node scripts/setup-uniform-db.mjs
 ```
+
+ขึ้น `Cannot find module ...\scripts\setup-uniform-db.mjs` = โค้ดในเครื่องยังไม่มีสคริปต์ตัวนี้
+(ยังไม่ได้อัปเดตโค้ด — ดูข้อ 2) ไม่อยากอัปเดตโค้ดตอนนี้ก็ใช้ **ทาง ง)** ได้เลย ได้ตารางเหมือนกัน
 
 สคริปต์อ่านค่าเชื่อมต่อจาก `.env` ตัวเดียวกับที่ service ใช้ สร้างตารางจาก `docs/schema-uniform.sql`
 แล้วไล่ตรวจให้ครบ 8 ข้อ ผลที่ได้จะเป็นแบบนี้:
@@ -112,7 +134,7 @@ node scripts/setup-uniform-db.mjs
 ### ทาง ข) sqlcmd
 
 ```powershell
-sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i D:\Narai-branch\docs\schema-uniform.sql
+sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i D:\Narai-branch-main\docs\schema-uniform.sql
 ```
 
 ### ทาง ค) SQL Server Management Studio
@@ -120,7 +142,54 @@ sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i D:\Narai
 เปิด `docs\schema-uniform.sql` → เลือกฐานข้อมูล `InventoryNarai` ที่แถบบน → กด **Execute (F5)**
 ต้องขึ้นข้อความ `สร้างตาราง dbo.UniformBranch เรียบร้อย` ที่แท็บ Messages
 
-> ทาง ข) และ ค) สร้างตารางให้เหมือนกัน แต่ไม่ได้ตรวจสิทธิ์ของ login ที่เว็บใช้และไม่ได้ตรวจ
+### ทาง ง) ไม่มีไฟล์สคีมาในเครื่องเลย — วางคำสั่งลง PowerShell ตรง ๆ
+
+ใช้เมื่อโค้ดในเครื่องยังเก่ากว่าที่มี `docs\schema-uniform.sql` (เช็คด้วย
+`Test-Path D:\Narai-branch-main\docs\schema-uniform.sql`) และไม่อยากอัปเดตโค้ดตอนนี้
+ก้อนนี้เป็น ASCII ล้วน (ตัดคอมเมนต์ไทยออก เลี่ยงปัญหา codepage ของ sqlcmd) ได้ตารางเหมือนกันเป๊ะ
+
+```powershell
+$sql = @'
+IF OBJECT_ID(N'dbo.UniformBranch', N'U') IS NULL
+CREATE TABLE dbo.UniformBranch (
+    uniform_id  INT IDENTITY(1,1) NOT NULL,
+    branch      NVARCHAR(50)   NOT NULL,
+    hr_code     NVARCHAR(50)   NOT NULL,
+    emp_name    NVARCHAR(255)  NULL,
+    item_key    NVARCHAR(50)   NOT NULL,
+    item_code   NVARCHAR(50)   NOT NULL,
+    item_name   NVARCHAR(255)  NULL,
+    unit        NVARCHAR(50)   NULL,
+    size        NVARCHAR(20)   NULL,
+    qty         DECIMAL(18,2)  NOT NULL,
+    note        NVARCHAR(500)  NULL,
+    issued_at   DATETIME2(0)   NOT NULL,
+    saved_at    DATETIME2(0)   NOT NULL
+                CONSTRAINT DF_UniformBranch_saved_at DEFAULT (SYSDATETIME()),
+    saved_by    NVARCHAR(255)  NULL,
+    CONSTRAINT PK_UniformBranch PRIMARY KEY CLUSTERED (uniform_id)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformBranch') AND name = N'IX_UniformBranch_emp')
+CREATE INDEX IX_UniformBranch_emp ON dbo.UniformBranch (hr_code, branch, issued_at DESC);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformBranch') AND name = N'IX_UniformBranch_branch_date')
+CREATE INDEX IX_UniformBranch_branch_date ON dbo.UniformBranch (branch, issued_at DESC)
+    INCLUDE (item_key, qty);
+GO
+SELECT COUNT(*) AS columns_created FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.UniformBranch');
+GO
+'@
+Set-Content -Path "$env:TEMP\uniform.sql" -Value $sql -Encoding ASCII
+sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i "$env:TEMP\uniform.sql"
+```
+
+ต้องได้ `columns_created = 14` — ไม่ต้องให้สิทธิ์อะไรเพิ่มแก่ `narai_web` เพราะสิทธิ์ที่ให้ไว้
+ระดับฐานข้อมูล (`db_datareader` / `db_datawriter`) ครอบตารางใหม่ให้เองอยู่แล้ว
+
+> ทาง ข) ค) และ ง) สร้างตารางให้เหมือนกัน แต่ไม่ได้ตรวจสิทธิ์ของ login ที่เว็บใช้และไม่ได้ตรวจ
 > ทะเบียนไอเทม `800000*` ให้ — ทำเสร็จแล้วควรรัน `node scripts/setup-uniform-db.mjs --check` ปิดท้าย
 
 ---
@@ -165,7 +234,7 @@ SELECT TOP 10 uniform_id, branch, hr_code, emp_name, item_code, item_name, size,
 login ที่ตั้งไว้ใน `.env` อาจสร้างตารางได้อยู่แล้ว (ถ้าเป็น `sa` เอง หรือถูกใส่ไว้ใน `db_owner`)
 
 ```powershell
-cd D:\Narai-branch\office-server
+cd D:\Narai-branch-main\office-server
 Select-String -Path .env -Pattern 'HR_DB_USER'     # ดูว่า service ใช้ login อะไร
 node scripts/setup-uniform-db.mjs
 ```
@@ -181,12 +250,21 @@ node scripts/setup-uniform-db.mjs
 sqlcmd -S localhost\SQLEXPRESS -E -Q "SELECT SUSER_SNAME() AS me, IS_SRVROLEMEMBER('sysadmin') AS sysadmin"
 ```
 
+ไม่รู้ว่าต้องใส่ `-S` อะไร → ดูจากค่าที่ service ใช้อยู่ (ตรงกันเสมอ):
+
+```powershell
+Select-String -Path D:\Narai-branch-main\office-server\.env -Pattern 'HR_DB_HOST|HR_DB_INSTANCE|HR_DB_PORT'
+Get-Service MSSQL*        # ดูชื่ออินสแตนซ์ที่ติดตั้งไว้จริง
+```
+
+`HR_DB_INSTANCE=SQLEXPRESS` → `-S localhost\SQLEXPRESS` / ไม่ได้ตั้งไว้ → `-S localhost`
+
 `-E` = เข้าด้วยบัญชี Windows ที่ล็อกอินอยู่ (ไม่ต้องใส่รหัส) — ถ้าเป็น default instance ใช้ `-S localhost`
 ได้ `sysadmin = 1` → สร้างตารางได้เลย:
 
 ```powershell
-sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i D:\Narai-branch\docs\schema-uniform.sql
-cd D:\Narai-branch\office-server
+sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i D:\Narai-branch-main\docs\schema-uniform.sql
+cd D:\Narai-branch-main\office-server
 node scripts/setup-uniform-db.mjs --check
 ```
 
@@ -254,7 +332,7 @@ SELECT item_code, item_name, unit, status
 ได้ 0 แถว → เพิ่มไอเทมในชีท BOM แท็บ `item` (รหัสขึ้นต้น `800000`) แล้วซิงก์เข้า SQL:
 
 ```powershell
-cd D:\Narai-branch\office-server
+cd D:\Narai-branch-main\office-server
 node scripts/setup-uniform-db.mjs --sync-items
 ```
 
