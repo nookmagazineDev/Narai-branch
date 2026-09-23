@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
-import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2 } from 'lucide-react';
+import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PAID_LEAVE, UNPAID_LEAVE, leaveText } from '../utils/leaveCodes';
 import {
@@ -129,6 +129,15 @@ function isStopCell(data) {
   return !!(data.isStop || data.leave1 || data.leave2);
 }
 
+/* ชื่อก้อนข้อมูลที่โชว์ในแถบแจ้งโหลดไม่สำเร็จ (เรียงตามลำดับที่ผู้ใช้ต้องแก้ก่อน-หลัง) */
+const LOAD_ERROR_ORDER = ['branches', 'employees', 'week', 'stats'];
+const LOAD_ERROR_LABELS = {
+  branches: 'รายชื่อสาขา',
+  employees: 'รายชื่อพนักงาน',
+  week: 'กะงานของสัปดาห์นี้',
+  stats: 'เป้าขาย/ค่าแรงสูงสุด',
+};
+
 function formatNumber(num) {
   const v = parseFloat(num);
   if (isNaN(v)) return '0';
@@ -145,6 +154,22 @@ export default function ScheduleWeekly() {
   const [employees, setEmployees] = useState([]);
   const [weeklyTarget, setWeeklyTarget] = useState(0);
   const [weeklyMaxWage, setWeeklyMaxWage] = useState(0);
+
+  // โหลดไม่สำเร็จเพราะอะไร แยกตามก้อนข้อมูล — โชว์ค้างเป็นแถบบนหน้าแทน toast ที่หายเองในไม่กี่วินาที
+  // เดิมพลาด toast ไปแล้วหน้าจะดูเหมือน "ยังไม่มีใครลงกะ" ทั้งที่จริงคือโหลดไม่ขึ้น
+  const [loadErrors, setLoadErrors] = useState({});
+  const setLoadError = useCallback((key, message) => {
+    setLoadErrors((prev) => {
+      if ((prev[key] || '') === (message || '')) return prev;
+      const next = { ...prev };
+      if (message) next[key] = message; else delete next[key];
+      return next;
+    });
+  }, []);
+  // กด "ลองใหม่" = เพิ่มตัวเลขนี้ ทุก effect ที่โหลดข้อมูลผูกกับมันไว้จึงยิงใหม่พร้อมกัน
+  const [reloadKey, setReloadKey] = useState(0);
+  // เริ่มเป็น true สำหรับแอดมินเลย เพราะ effect ด้านล่างจะไปโหลดรายชื่อสาขาทันทีที่เปิดหน้า
+  const [loadingBranches, setLoadingBranches] = useState(isAll);
 
   const [weekStartDate, setWeekStartDate] = useState(getStartOfWeek(new Date()));
   const [scheduleData, setScheduleData] = useState({});
@@ -303,6 +328,14 @@ export default function ScheduleWeekly() {
     setWeekStartDate(newDate);
   };
 
+  // ลองโหลดทุกก้อนใหม่ — ช่องที่แก้ค้างไว้ไม่หาย เพราะถูกเก็บเป็นร่างในเครื่องทุกครั้งที่แก้
+  // และตอนโหลดสัปดาห์เสร็จจะเอาร่างกลับมาทับให้เหมือนเดิม (ดู applyDraftOver)
+  const retryLoad = () => {
+    if (isAll && branches.length === 0) setLoadingBranches(true);
+    setReloadKey((k) => k + 1);
+  };
+  const reloading = loading || loadingWeek || loadingBranches;
+
   const changeBranch = (branch) => {
     if (!confirmDiscard()) return;
     setSelectedBranch(branch);
@@ -321,13 +354,42 @@ export default function ScheduleWeekly() {
   });
 
   // โหลดรายชื่อสาขาสำหรับ user สิทธิ์ all (ใช้ในฟิลเตอร์เลือกสาขา)
+  //
+  // ดรอปดาวน์นี้เป็นทางเดียวที่แอดมินจะเลือกสาขาได้ ถ้าโหลดไม่ขึ้นคือทั้งหน้าใช้ไม่ได้เลย
+  // เดิมถามชีท (Apps Script) ทางเดียวและถามครั้งเดียวตอนเปิดหน้า — ชีทช้า/ติดลิมิตเมื่อไหร่
+  // ดรอปดาวน์ว่างค้างถาวร เหลือแค่ toast ที่หายไปเอง แอดมินจึงเห็นหน้าเปล่า "ดูไม่ได้"
+  // ตอนนี้ถาม office-server (dbo.hr_branch) ก่อน เพราะเป็นเครื่องเดียวกับที่ให้ข้อมูลส่วนที่เหลือ
+  // ของหน้านี้อยู่แล้ว ไม่ได้/ว่างค่อยถอยไปชีท และกด "ลองใหม่" ได้จากแถบแจ้งเตือน
   useEffect(() => {
-    if (isAll && branches.length === 0) {
-      apiCall('getBranches', {})
-        .then(res => setBranches(res.data || []))
-        .catch(err => toast.error(errMessage(err, 'โหลดรายชื่อสาขาไม่สำเร็จ')));
-    }
-  }, [isAll]);
+    if (!isAll || branches.length > 0) return;
+    let alive = true;
+    (async () => {
+      let sqlError = null;
+      try {
+        const res = await apiCall('getBranches', {}, { via: 'sql' });
+        if (Array.isArray(res.data) && res.data.length > 0) return res.data;
+      } catch (err) {
+        sqlError = err;
+        console.warn('อ่านรายชื่อสาขาจาก SQL ไม่สำเร็จ จะใช้ชีทแทน:', err?.message || err);
+      }
+      try {
+        const res = await apiCall('getBranches', {}, { via: 'sheet' });
+        return res.data || [];
+      } catch (err) {
+        throw sqlError || err;
+      }
+    })()
+      .then((list) => {
+        if (!alive) return;
+        setBranches(list);
+        setLoadError('branches', list.length ? '' : 'ไม่พบรายชื่อสาขาในระบบ');
+      })
+      .catch((err) => {
+        if (alive) setLoadError('branches', errMessage(err, 'โหลดรายชื่อสาขาไม่สำเร็จ'));
+      })
+      .finally(() => { if (alive) setLoadingBranches(false); });
+    return () => { alive = false; };
+  }, [isAll, branches.length, reloadKey, setLoadError]);
 
   // ---------------------------------------------------------------------------
   // แยกการโหลดเป็นสองก้อนตามสิ่งที่มันขึ้นอยู่กับจริงๆ
@@ -347,6 +409,8 @@ export default function ScheduleWeekly() {
       setEmployees([]);
       setWeeklyTarget(0);
       setWeeklyMaxWage(0);
+      setLoadError('employees', '');
+      setLoadError('stats', '');
       setLoading(false);
       return;
     }
@@ -367,31 +431,35 @@ export default function ScheduleWeekly() {
 
       if (empRes.status === 'fulfilled') {
         setEmployees(empRes.value.data || []);
+        setLoadError('employees', '');
       } else {
         setEmployees([]);
-        toast.error(errMessage(empRes.reason, 'ไม่สามารถโหลดข้อมูลพนักงานได้'));
+        setLoadError('employees', errMessage(empRes.reason, 'ไม่สามารถโหลดข้อมูลพนักงานได้'));
       }
 
       if (statsRes.status === 'fulfilled') {
         const d = statsRes.value.data || {};
         setWeeklyTarget((parseFloat(String(d.dailyTarget).replace(/,/g, '')) || 0) * 7);
         setWeeklyMaxWage((parseFloat(String(d.maxWage).replace(/,/g, '')) || 0) * 7);
+        setLoadError('stats', '');
       } else {
         setWeeklyTarget(0);
         setWeeklyMaxWage(0);
+        setLoadError('stats', errMessage(statsRes.reason, 'โหลดเป้าขาย/ค่าแรงสูงสุดไม่สำเร็จ'));
       }
 
       setLoading(false);
     });
 
     return () => { alive = false; };
-  }, [effectiveBranch]);
+  }, [effectiveBranch, reloadKey, setLoadError]);
 
   // ก้อนที่ 2 — กะของสัปดาห์ที่เลือก
   useEffect(() => {
     if (!effectiveBranch) {
       setScheduleData({});
       setDirtyKeys(new Set());
+      setLoadError('week', '');
       return;
     }
 
@@ -449,13 +517,14 @@ export default function ScheduleWeekly() {
         });
 
         applyDraftOver(newScheduleData);
+        setLoadError('week', '');
       })
       .catch((err) => {
         if (!alive) return;
         // โหลดประวัติไม่ได้ก็ยังต้องคืนร่างที่ค้างในเครื่องให้เห็น
         // (เคสที่เจอจริงคือฐานข้อมูลต่อไม่ได้ ทั้งอ่านและเขียนล้มพร้อมกัน)
         applyDraftOver({});
-        toast.error(errMessage(err, 'โหลดตารางของสัปดาห์นี้ไม่สำเร็จ'));
+        setLoadError('week', errMessage(err, 'โหลดตารางของสัปดาห์นี้ไม่สำเร็จ'));
       })
       .finally(() => {
         if (!alive) return;
@@ -478,7 +547,7 @@ export default function ScheduleWeekly() {
     }
 
     return () => { alive = false; };
-  }, [effectiveBranch, weekStartDate]);
+  }, [effectiveBranch, weekStartDate, reloadKey, setLoadError]);
 
   // -------------------------------------------------------------------------
   // ร่างในเครื่อง — กันข้อมูลหายตอนส่งขึ้นเซิร์ฟเวอร์ไม่ได้
@@ -1002,7 +1071,9 @@ export default function ScheduleWeekly() {
                 onChange={(e) => changeBranch(e.target.value)}
                 className="px-3 py-2 border border-gray-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-purple-400 outline-none text-gray-700 min-w-[160px]"
               >
-                <option value="">-- เลือกสาขา --</option>
+                <option value="">
+                  {loadingBranches ? 'กำลังโหลดสาขา...' : branches.length === 0 ? '-- ไม่มีรายชื่อสาขา --' : '-- เลือกสาขา --'}
+                </option>
                 {branches.map((br, idx) => (
                   <option key={idx} value={br.name}>{br.name}</option>
                 ))}
@@ -1093,6 +1164,29 @@ export default function ScheduleWeekly() {
         </div>
       )}
 
+      {/* แถบแจ้งโหลดไม่สำเร็จ — ค้างไว้จนกว่าจะโหลดผ่าน ผู้ใช้จะได้ไม่เข้าใจผิดว่าตารางว่างจริง */}
+      {Object.keys(loadErrors).length > 0 && (
+        <div role="alert" className="mb-4 flex flex-wrap items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 flex-shrink-0">
+          <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" />
+          <div className="min-w-0 flex-1 text-sm text-red-900">
+            <p className="font-semibold">โหลดข้อมูลไม่สำเร็จ — ข้อมูลที่เห็นบนหน้านี้อาจไม่ครบ</p>
+            <ul className="mt-1 space-y-0.5">
+              {LOAD_ERROR_ORDER.filter((k) => loadErrors[k]).map((k) => (
+                <li key={k}><span className="font-medium">{LOAD_ERROR_LABELS[k]}:</span> {loadErrors[k]}</li>
+              ))}
+            </ul>
+          </div>
+          <button
+            onClick={retryLoad}
+            disabled={reloading}
+            className="flex items-center gap-2 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />
+            {reloading ? 'กำลังโหลด...' : 'ลองใหม่'}
+          </button>
+        </div>
+      )}
+
       {/* Main Table Area */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 flex-1 overflow-hidden flex flex-col">
         {loading ? (
@@ -1103,11 +1197,17 @@ export default function ScheduleWeekly() {
         ) : (isAll && !selectedBranch) ? (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2">
             <Clock className="w-10 h-10 text-gray-300" />
-            <p>เลือกสาขาด้านบนเพื่อดูและแก้ไขตาราง</p>
+            <p>
+              {loadingBranches
+                ? 'กำลังโหลดรายชื่อสาขา...'
+                : loadErrors.branches
+                  ? 'โหลดรายชื่อสาขาไม่สำเร็จ — กด "ลองใหม่" ที่แถบด้านบน'
+                  : 'เลือกสาขาด้านบนเพื่อดูและแก้ไขตาราง'}
+            </p>
           </div>
         ) : employees.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-gray-500">
-            ไม่พบข้อมูลพนักงานที่ทำงานในสาขานี้
+            {loadErrors.employees ? 'โหลดรายชื่อพนักงานไม่สำเร็จ — กด "ลองใหม่" ที่แถบด้านบน' : 'ไม่พบข้อมูลพนักงานที่ทำงานในสาขานี้'}
           </div>
         ) : (
           <div id="weekly-schedule-table-container" className="overflow-auto flex-1 bg-white">
