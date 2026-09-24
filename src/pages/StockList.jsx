@@ -827,6 +827,11 @@ export default function StockList() {
     refreshingRef.current = true;
     setIsRefreshing(true);
     const startedAt = Date.now();
+    // ปฏิทินจำนวนหัวลูกค้า: ดึงใหม่เฉพาะคนที่แก้ไม่ได้ (สาขา) — ถ้าทำกับแอดมินด้วย
+    // ตัวเลขที่กำลังพิมพ์ค้างในปฏิทินจะถูกของจากเซิร์ฟเวอร์ทับ
+    // ยิงแยกไว้ก่อน ไม่ผูกกับ getStockItems — เดิมอยู่ท้าย try ถ้ารายการสินค้า (ของหนัก ลากประวัติ
+    // ทั้งสาขา) ดึงไม่ทันรอบนั้น จำนวนหัวที่แอดมินเพิ่งบันทึกก็ไม่ถึงหน้าสาขาไปด้วยทั้งที่ไม่เกี่ยวกัน
+    if (!canEditCovers) loadSpecialPcts(branch);
     try {
       const outletId = isAll
         ? (branches.find(b => b.name === branch)?.outletId || '')
@@ -840,9 +845,11 @@ export default function StockList() {
         // ค่าตั้งเบิกที่แอดมินแก้จากอีกเครื่อง — ต้องตามมาด้วย ไม่งั้น "คำนวณยอดเบิก" ใช้ค่าเก่า
         tryGetJson(`/api/stockcount?avgperhead=1&branch=${encodeURIComponent(branch)}`).catch(() => null),
       ]);
-      // จดลายนิ้วมือ ณ ตอนที่ดึงของหนักมา รอบเช็คถัดไปจะได้เทียบกับของจริง
-      if (pulseRes?.status === 'success') pulseRef.current = pulseSig(pulseRes.data);
       if (itemsRes?.status !== 'success') throw new Error(itemsRes?.message || 'ดึงข้อมูลใหม่ไม่สำเร็จ');
+      // จดลายนิ้วมือ ณ ตอนที่ดึงของหนักมา รอบเช็คถัดไปจะได้เทียบกับของจริง
+      // จดหลังดึงสำเร็จเท่านั้น — ถ้าจดก่อนแล้วรอบนี้ล้ม รอบเช็คถัดไปจะเห็นว่า "ไม่มีอะไรเปลี่ยน"
+      // แล้วไม่ดึงอีกเลย ของที่อีกเครื่องบันทึกจะค้างไม่ขึ้นจนกว่าจะมีการบันทึกครั้งใหม่
+      if (pulseRes?.status === 'success') pulseRef.current = pulseSig(pulseRes.data);
       const incomingMap = (incomingRes?.status === 'success') ? incomingRes.data : {};
 
       const avgOk = avgRes?.status === 'success';
@@ -872,9 +879,6 @@ export default function StockList() {
         });
       });
 
-      // ปฏิทินจำนวนหัวลูกค้า: ดึงใหม่เฉพาะคนที่แก้ไม่ได้ (สาขา) — ถ้าทำกับแอดมินด้วย
-      // ตัวเลขที่กำลังพิมพ์ค้างในปฏิทินจะถูกของจากเซิร์ฟเวอร์ทับ
-      if (!canEditCovers) loadSpecialPcts(branch);
 
       setLastSyncedAt(new Date());
       if (!silent) {
