@@ -801,6 +801,9 @@ export default function StockList() {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshingRef = useRef(false);
+  const refreshAgainRef = useRef(false);   // มีคนขอดึงระหว่างที่รอบก่อนยังไม่จบ
+  // refreshFromServer ตัวล่าสุด — รอบที่จดไว้ต้องใช้สาขา/state ปัจจุบัน ไม่ใช่ของตอนเริ่มรอบก่อน
+  const refreshRunRef = useRef(null);
   const pulseRef = useRef('');       // ลายนิ้วมือข้อมูลสาขาครั้งล่าสุดที่เห็น
   const lastFullAt = useRef(0);      // เวลาที่ดึงของหนักครั้งล่าสุด (ใช้ตอน stockPulse ใช้ไม่ได้)
 
@@ -809,7 +812,14 @@ export default function StockList() {
 
   const refreshFromServer = async ({ silent = true } = {}) => {
     const branch = effectiveBranch;
-    if (!branch || refreshingRef.current) return;
+    if (!branch) return;
+    // มีรอบอื่นดึงอยู่ (เช่นรอบอัตโนมัติทุก 60 วิ) — เดิมคืนค่าทิ้งเฉย ๆ ผลคือกดบันทึกเสร็จแล้ว
+    // รอบ "ดึงหลังบันทึก" หายไป หน้าจอค้างยอดนับล่าสุดชุดเก่าจากรอบที่ยิงไปก่อนกดบันทึก
+    // ดูเหมือนบันทึกไม่ติด — จดไว้ให้ดึงซ้ำอีกรอบทันทีที่รอบนั้นจบ
+    if (refreshingRef.current) {
+      refreshAgainRef.current = true;
+      return;
+    }
     refreshingRef.current = true;
     setIsRefreshing(true);
     try {
@@ -868,6 +878,10 @@ export default function StockList() {
     } finally {
       refreshingRef.current = false;
       setIsRefreshing(false);
+      if (refreshAgainRef.current) {
+        refreshAgainRef.current = false;
+        refreshRunRef.current?.({ silent: true });
+      }
     }
   };
 
@@ -898,7 +912,10 @@ export default function StockList() {
      60 วินาทีพอสำหรับงานนับ (คนเดินนับของช้ากว่านั้นมาก) และเบาพอที่จะไม่กวนเซิร์ฟเวอร์ออฟฟิศ
      — เก็บฟังก์ชันไว้ใน ref เพื่อไม่ต้องตั้ง interval ใหม่ทุกครั้งที่ re-render */
   const refreshRef = useRef(null);
-  useEffect(() => { refreshRef.current = checkForChanges; });
+  useEffect(() => {
+    refreshRef.current = checkForChanges;
+    refreshRunRef.current = refreshFromServer;
+  });
 
   const conflictCount = useMemo(() => items.filter(i => i.conflict).length, [items]);
 
@@ -1861,12 +1878,22 @@ export default function StockList() {
         // ขณะที่ api/insert_order.js รับ GET แค่ ?units=1 กับ ?peek= นอกนั้นตอบ 405 เสมอ
         // จึงไม่เคยสร้างใบเบิกได้จริงสักครั้ง มีแต่ทำให้ขึ้น toast แดงหลอกทุกครั้งที่กดบันทึก
 
+        // ล้างเฉพาะช่องที่ส่งไปและลงแล้วจริง โดยเทียบกับ "ค่าที่ส่งไป" ไม่ใช่ items ตอนเริ่มกด
+        // เดิมใช้ items.map(...) จาก closure ตอนกดปุ่ม — ระหว่างรอเซิร์ฟเวอร์ (นานได้เกือบนาที)
+        // ถ้าผู้ใช้นับต่อแถวอื่น หรือแก้แถวที่ส่งไปแล้ว ค่าเหล่านั้นถูกทับด้วยสำเนาเก่าแล้วล้างทิ้ง
+        // ทั้งที่ไม่เคยถูกส่งขึ้นเซิร์ฟเวอร์ (ร่างในเครื่องก็ถูกลบตามไปด้วย) = "กดบันทึกแล้วข้อมูลหาย"
         const skippedIds = new Set(skipped.map(x => String(x.code)));
-        setItems(items.map(item => (
-          skippedIds.has(String(item.productId))
-            ? item                                                      // ยังไม่ได้ลง เก็บยอดไว้กดซ้ำ
-            : { ...item, remaining: '', requested: '', conflict: undefined }
-        )));
+        const sentById = new Map(itemsToSave.map(it => [String(it.productId), it]));
+        const same = (a, b) => String(a ?? '') === String(b ?? '');
+        setItems(prev => prev.map(item => {
+          const id = String(item.productId);
+          const sent = sentById.get(id);
+          if (!sent || skippedIds.has(id)) return item;                 // ไม่ได้ส่ง/ยังไม่ได้ลง เก็บยอดไว้
+          if (!same(item.remaining, sent.remaining) || !same(item.requested, sent.requested)) {
+            return item;                                                // แก้ระหว่างรอ = ยังไม่ได้บันทึกค่าใหม่
+          }
+          return { ...item, remaining: '', requested: '', conflict: undefined };
+        }));
         if (skipped.length === 0) {
           setRequestDate('');
           setRequesterName('');
