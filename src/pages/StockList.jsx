@@ -802,6 +802,10 @@ export default function StockList() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshingRef = useRef(false);
   const refreshAgainRef = useRef(false);   // มีคนขอดึงระหว่างที่รอบก่อนยังไม่จบ
+  // productId -> เวลาที่การเขียนค่าตั้งเบิกครั้งล่าสุดจบ (Infinity = กำลังเขียนอยู่)
+  // ใช้ตัดสินว่าค่าตั้งเบิกที่รอบดึงข้อมูลได้มา "เก่ากว่า" ที่แอดมินเพิ่งบันทึกหรือเปล่า
+  const calcWriteDoneAt = useRef(new Map());
+  const calcWritePending = useRef(new Map());   // productId -> จำนวนคำขอที่ยังต่อคิว/กำลังเขียน
   // refreshFromServer ตัวล่าสุด — รอบที่จดไว้ต้องใช้สาขา/state ปัจจุบัน ไม่ใช่ของตอนเริ่มรอบก่อน
   const refreshRunRef = useRef(null);
   const pulseRef = useRef('');       // ลายนิ้วมือข้อมูลสาขาครั้งล่าสุดที่เห็น
@@ -822,6 +826,7 @@ export default function StockList() {
     }
     refreshingRef.current = true;
     setIsRefreshing(true);
+    const startedAt = Date.now();
     try {
       const outletId = isAll
         ? (branches.find(b => b.name === branch)?.outletId || '')
@@ -852,6 +857,11 @@ export default function StockList() {
         // อ่านค่าตั้งเบิกไม่ได้รอบนี้ = คงของเดิมไว้ ดีกว่าล้างค่าที่ใช้คำนวณทิ้ง
         if (!avgOk) return merged.items;
         return merged.items.map(it => {
+          // แอดมินบันทึก/สลับโหมดสินค้าตัวนี้ระหว่างที่รอบนี้ดึงอยู่ (หรือยังเขียนไม่จบ) —
+          // ค่าที่รอบนี้อ่านมาอาจเป็นของก่อนบันทึก ถ้าเอามาทับ ตัวเลขที่เพิ่งกรอกจะเด้งกลับเป็นค่าเก่า
+          // ดูเหมือนบันทึกไม่ติด (ทั้งที่ลงฐานข้อมูลแล้ว) — คงค่าในหน้าจอไว้ รอบถัดไปค่อยตามของจริง
+          const doneAt = calcWriteDoneAt.current.get(String(it.productId));
+          if (doneAt !== undefined && doneAt >= startedAt) return it;
           const nid = String(it.productId).replace(/^0+/, '').toLowerCase();
           return {
             ...it,
@@ -1965,8 +1975,22 @@ export default function StockList() {
   // ของโหมดเดิม → คลิกสลับโหมด) apiCall ยิงพร้อมกันได้ถึง 3 คำขอ ถ้าคำขอสลับโหมดไปถึงก่อน
   // คำขอบันทึกตัวเลขจะเขียนทับ calc_mode กลับเป็นโหมดเดิม เหมือนติ๊กแล้วเด้งกลับเอง
   const calcWriteQueue = useRef(Promise.resolve());
-  const queueCalcWrite = (task) => {
-    const next = calcWriteQueue.current.then(task, task);
+  const queueCalcWrite = (pid, task) => {
+    const key = String(pid);
+    const pending = calcWritePending.current;
+    pending.set(key, (pending.get(key) || 0) + 1);
+    calcWriteDoneAt.current.set(key, Infinity);
+    const tracked = async () => {
+      try {
+        return await task();
+      } finally {
+        // ยังมีคำขอของสินค้าตัวนี้ต่อคิวอยู่ = ยังไม่จบจริง คง Infinity ไว้
+        const left = (pending.get(key) || 1) - 1;
+        if (left > 0) pending.set(key, left);
+        else { pending.delete(key); calcWriteDoneAt.current.set(key, Date.now()); }
+      }
+    };
+    const next = calcWriteQueue.current.then(tracked, tracked);
     calcWriteQueue.current = next.catch(() => {});
     return next;
   };
@@ -1987,7 +2011,7 @@ export default function StockList() {
       if (current === undefined) { clearDraft(); return; }   // ไม่มีค่าอยู่แล้ว ไม่ต้องยิง
       if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
       setSavingAvg(s2 => ({ ...s2, [pid]: true }));
-      await queueCalcWrite(async () => {
+      await queueCalcWrite(pid, async () => {
         try {
           const res = await apiCall('saveAvgPerHead', {
             branch: String(effectiveBranch).toLowerCase(),
@@ -2016,7 +2040,7 @@ export default function StockList() {
     if (!effectiveBranch) { toast.error('กรุณาเลือกสาขาก่อน'); return; }
 
     setSavingAvg(s => ({ ...s, [pid]: true }));
-    await queueCalcWrite(async () => {
+    await queueCalcWrite(pid, async () => {
       try {
         const res = await apiCall('saveAvgPerHead', {
           branch: String(effectiveBranch).toLowerCase(),
@@ -2052,7 +2076,7 @@ export default function StockList() {
     const nextMode = isParMode(item) ? 'avg' : 'par';
 
     setSavingAvg(s => ({ ...s, [pid]: true }));
-    return queueCalcWrite(async () => {
+    return queueCalcWrite(pid, async () => {
       setAvgDraft(d => { const n = { ...d }; delete n[pid]; return n; });
       try {
         const res = await apiCall('saveAvgPerHead', {
