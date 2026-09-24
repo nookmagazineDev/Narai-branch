@@ -57,7 +57,13 @@ Restart-Service NaraiUsageAPI        # รีสตาร์ท (หลังแ
 Stop-Service NaraiUsageAPI           # หยุด
 ```
 
-**อัปเดตโค้ดบนเครื่องที่รันอยู่**: ถ้าโฟลเดอร์เป็น git repo อยู่แล้ว สั่ง `git pull origin main` แล้ว `Restart-Service NaraiUsageAPI`
+**อัปเดตโค้ดบนเครื่องที่รันอยู่ (คลิกเดียว)**: คลิกขวา `office-server\update-office-server.bat` → **Run as administrator**
+ทำให้ครบ: `git pull` → `npm install` ถ้ามีเปลี่ยน → อัปเดตโครงสร้างฐานข้อมูล (รันไฟล์ใน `office-server\sql\`
+ด้วย login จาก `.env` ไม่ต้องพิมพ์รหัส sa) → รีสตาร์ต `NaraiUsageAPI` → เช็ค `/health` ขั้นไหนพังจะหยุดก่อนรีสตาร์ต
+(service ตัวเดิมทำงานต่อ) · ไฟล์ใน `sql\` ต้องรันซ้ำได้เสมอ เพราะรันทุกไฟล์ทุกครั้งที่อัปเดต
+ถ้า login ใน `.env` ไม่มีสิทธิ์แก้โครงสร้างตาราง ขั้นฐานข้อมูลจะบอก — ให้คนที่มีรหัส sa เปิดไฟล์นั้นใน SSMS แล้ว Execute แทน
+
+แบบสั่งเอง: `git pull origin main` แล้ว `node scripts\run-migrations.mjs` (ในโฟลเดอร์ office-server) แล้ว `Restart-Service NaraiUsageAPI`
 ถ้าได้โค้ดมาจากไฟล์ ZIP (โฟลเดอร์ชื่อลงท้าย `-main` ไม่มี `.git`) ให้เชื่อมเข้ากับ git ก่อนครั้งเดียว แล้วคราวหน้าจะ `git pull` ได้เลย:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\link-to-git.ps1            # หรือระบุเอง -Root D:\Narai-branch-main
