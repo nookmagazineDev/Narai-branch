@@ -107,10 +107,13 @@ async function getEmployeeUniform(body, session) {
     { hr_code: { type: sql.NVarChar(50), value: hrCode }, ...inBranch.params }
   );
 
+  const requests = await getEmployeeRequests(branch, body.empName);
+
   return {
     branch,
     hrCode,
     count: rows.length,
+    requests,
     data: rows.map((r) => ({
       id: Number(r.uniform_id),
       code: str(r.item_code),
@@ -125,6 +128,40 @@ async function getEmployeeUniform(body, session) {
       savedBy: str(r.saved_by),
     })),
   };
+}
+
+/* ===================== ใบเบิกเข้าสาขาที่ขอในนามพนักงานคนนี้ =====================
+   ปุ่ม "เบิกเข้าสาขา" ลง dbo.stock_request ผ่าน saveStock (ดูหัวไฟล์) ซึ่งไม่มีคอลัมน์รหัส HR
+   มีแต่ requester = ชื่อพนักงานที่หน้าเว็บส่งมาเป็น requesterName จึงจับคู่ด้วยชื่อ
+   และกรองเฉพาะรหัส 800000* กันใบเบิกของสต๊อกปกติที่บังเอิญใส่ชื่อคนเดียวกันปนเข้ามา
+   ชื่อพนักงานเปลี่ยนทีหลัง = ใบเบิกเก่าที่ลงชื่อเดิมจะไม่ขึ้นในกล่องของชื่อใหม่ */
+async function getEmployeeRequests(branch, empName) {
+  const name = str(empName);
+  if (!name) return [];
+  const inBranch = branchIn(branch, 'rb');
+  const rows = await queryRead(
+    `SELECT doc_no, item_code, item_name, unit, qty, request_date,
+            CONVERT(NVARCHAR(19), saved_at, 120) AS saved_text
+       FROM dbo.stock_request
+      WHERE requester = @requester
+        AND item_code LIKE @prefix + '%'
+        AND branch IN (${inBranch.list})
+      ORDER BY saved_at DESC, request_id DESC`,
+    {
+      requester: { type: sql.NVarChar(255), value: name },
+      prefix: { type: sql.NVarChar(20), value: UNIFORM_CODE_PREFIX },
+      ...inBranch.params,
+    }
+  );
+  return rows.map((r) => ({
+    docNo: str(r.doc_no),
+    code: str(r.item_code),
+    name: str(r.item_name),
+    unit: str(r.unit),
+    qty: Number(r.qty),
+    requestDate: str(r.request_date),
+    savedAt: thaiDateTime(r.saved_text),
+  }));
 }
 
 /* ===================== สรุปว่าใครมีกี่ไอเทม (ไว้ติดตัวเลขบนปุ่ม) =====================
@@ -152,7 +189,25 @@ async function getUniformSummary(body, session) {
       lastIssued: thaiDateTime(r.last_text),
     };
   }
-  return { branch, count: rows.length, data };
+
+  // ยอดที่ขอเบิกเข้าสาขาในนามแต่ละคน — ใบเบิกไม่มีรหัส HR จึงคีย์ด้วยชื่อ (ดู getEmployeeRequests)
+  const inReq = branchIn(branch, 'rb');
+  const reqRows = await queryRead(
+    `SELECT requester, COUNT(DISTINCT doc_no) AS docs, SUM(qty) AS total_qty
+       FROM dbo.stock_request
+      WHERE requester IS NOT NULL
+        AND item_code LIKE @prefix + '%'
+        AND branch IN (${inReq.list})
+      GROUP BY requester`,
+    { prefix: { type: sql.NVarChar(20), value: UNIFORM_CODE_PREFIX }, ...inReq.params }
+  );
+  const requested = {};
+  for (const r of reqRows) {
+    const name = str(r.requester);
+    if (name) requested[name] = { docs: Number(r.docs), qty: Number(r.total_qty) || 0 };
+  }
+
+  return { branch, count: rows.length, data, requested };
 }
 
 /* ===================== บันทึกการจ่าย =====================

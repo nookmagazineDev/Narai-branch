@@ -60,6 +60,9 @@ export default function EmployeeList() {
   const [uniformWantDate, setUniformWantDate] = useState('');
   const [uniformBusy, setUniformBusy] = useState('');          // '' | 'save' | 'order'
   const [uniformSummary, setUniformSummary] = useState({});    // hrCode -> { rows, qty }
+  // ใบเบิกเข้าสาขาที่ขอในนามพนักงาน — ใบเบิกไม่มีรหัส HR จึงคีย์ด้วยชื่อ (ดู office-server/uniform.js)
+  const [uniformRequests, setUniformRequests] = useState([]);
+  const [uniformRequested, setUniformRequested] = useState({}); // ชื่อพนักงาน -> { docs, qty }
 
   /** สาขาของพนักงานแถวนั้น — สาขาทั่วไปไม่มีคอลัมน์สาขาให้ดู ใช้สาขาที่ล็อกอินแทน */
   const branchOfEmp = (emp) => String(emp?.branch || user?.branch || '').toLowerCase().trim();
@@ -70,14 +73,17 @@ export default function EmployeeList() {
   useEffect(() => {
     let cancelled = false;
     const b = String(summaryBranch || '').toLowerCase().trim();
-    if (!b || b === 'all') { setUniformSummary({}); return undefined; }
+    if (!b || b === 'all') { setUniformSummary({}); setUniformRequested({}); return undefined; }
     (async () => {
       try {
         const res = await apiCall('getUniformSummary', { branch: b });
-        if (!cancelled && res?.status === 'success') setUniformSummary(res.data?.data || {});
+        if (!cancelled && res?.status === 'success') {
+          setUniformSummary(res.data?.data || {});
+          setUniformRequested(res.data?.requested || {});
+        }
       } catch {
         // ตัวเลขบนปุ่มเป็นของประกอบ ล้มแล้วไม่ต้องรบกวนผู้ใช้ — กดเข้าไปในกล่องยังเห็นประวัติจริง
-        if (!cancelled) setUniformSummary({});
+        if (!cancelled) { setUniformSummary({}); setUniformRequested({}); }
       }
     })();
     return () => { cancelled = true; };
@@ -99,18 +105,21 @@ export default function EmployeeList() {
     setUniformWantDate(today);
     setUniformError('');
     setUniformHistory([]);
+    setUniformRequests([]);
     resetUniformForm();
     setUniformLoading(true);
     try {
       // ทะเบียนไอเทมไม่เปลี่ยนระหว่างวัน โหลดรอบแรกรอบเดียวแล้วใช้ซ้ำทั้งหน้า
       const [items, history] = await Promise.all([
         uniformCatalog ? Promise.resolve(null) : apiCall('getUniformItems', {}),
-        apiCall('getEmployeeUniform', { branch, hrCode: emp.hrCode }),
+        apiCall('getEmployeeUniform', { branch, hrCode: emp.hrCode, empName: emp.fullName }),
       ]);
       if (items && items.status === 'success') setUniformCatalog(items.data?.data || []);
       else if (items) throw new Error(items.message || 'โหลดรายการยูนิฟอร์มไม่สำเร็จ');
-      if (history?.status === 'success') setUniformHistory(history.data?.data || []);
-      else throw new Error(history?.message || 'โหลดประวัติไม่สำเร็จ');
+      if (history?.status === 'success') {
+        setUniformHistory(history.data?.data || []);
+        setUniformRequests(history.data?.requests || []);
+      } else throw new Error(history?.message || 'โหลดประวัติไม่สำเร็จ');
     } catch (err) {
       setUniformError(err?.message || 'โหลดข้อมูลไม่สำเร็จ');
     } finally {
@@ -169,8 +178,13 @@ export default function EmployeeList() {
       if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกไม่สำเร็จ');
       toast.success(res.message || 'บันทึกเรียบร้อยแล้ว');
       resetUniformForm();
-      const again = await apiCall('getEmployeeUniform', { branch: uniformTarget.branch, hrCode: uniformTarget.hrCode });
-      if (again?.status === 'success') setUniformHistory(again.data?.data || []);
+      const again = await apiCall('getEmployeeUniform', {
+        branch: uniformTarget.branch, hrCode: uniformTarget.hrCode, empName: uniformTarget.fullName,
+      });
+      if (again?.status === 'success') {
+        setUniformHistory(again.data?.data || []);
+        setUniformRequests(again.data?.requests || []);
+      }
       // ตัวเลขบนปุ่มต้องขยับตามทันที ไม่ต้องรอรีเฟรชหน้า
       setUniformSummary((prev) => {
         const cur = prev[uniformTarget.hrCode] || { rows: 0, qty: 0 };
@@ -209,6 +223,19 @@ export default function EmployeeList() {
       if (res?.status !== 'success') throw new Error(res?.message || 'สร้างใบเบิกไม่สำเร็จ');
       const docNo = res.data?.requisitionNo;
       toast.success(docNo ? `สร้างใบเบิกเลขที่ ${docNo} แล้ว` : (res.message || 'สร้างใบเบิกแล้ว'));
+      const name = String(uniformTarget.fullName || '').trim();
+      const orderedQty = uniformRows.reduce((sum, r) => sum + r.qty, 0);
+      setUniformRequested((prev) => {
+        const cur = prev[name] || { docs: 0, qty: 0 };
+        return { ...prev, [name]: { docs: cur.docs + 1, qty: cur.qty + orderedQty } };
+      });
+      // ใบเบิกที่เพิ่งสร้างต้องขึ้นในรายการทันที — ล้มก็ไม่เป็นไร ใบเบิกสร้างสำเร็จไปแล้ว
+      try {
+        const again = await apiCall('getEmployeeUniform', {
+          branch: uniformTarget.branch, hrCode: uniformTarget.hrCode, empName: uniformTarget.fullName,
+        });
+        if (again?.status === 'success') setUniformRequests(again.data?.requests || []);
+      } catch { /* ไม่ต้องทำอะไร */ }
     } catch (err) {
       toast.error(err?.message || 'สร้างใบเบิกไม่สำเร็จ');
     } finally {
@@ -760,6 +787,14 @@ export default function EmployeeList() {
                               {uniformSummary[emp.hrCode].rows}
                             </span>
                           )}
+                          {uniformRequested[String(emp.fullName || '').trim()]?.qty > 0 && (
+                            <span
+                              title="จำนวนที่ขอเบิกเข้าสาขาในนามพนักงานคนนี้"
+                              className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-amber-500 text-white rounded-full text-[10px] font-bold"
+                            >
+                              เบิก {uniformRequested[String(emp.fullName || '').trim()].qty}
+                            </span>
+                          )}
                         </button>
                         <label className={`cursor-pointer inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>
                           {uploadingHr === emp.hrCode ? (
@@ -1056,6 +1091,38 @@ export default function EmployeeList() {
                               className="p-1.5 bg-red-50 text-red-600 border border-red-100 rounded-lg hover:bg-red-100"
                             ><Trash2 className="w-3.5 h-3.5" /></button>
                           </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+                  <span className="text-sm font-bold text-amber-800">ขอเบิกเข้าสาขาไว้</span>
+                  {uniformRequests.length > 0 && (
+                    <span className="text-xs font-semibold text-amber-700">
+                      รวม {uniformRequests.reduce((sum, r) => sum + (Number(r.qty) || 0), 0)} ชิ้น
+                    </span>
+                  )}
+                  {uniformLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+                  <span className="ml-auto text-xs text-gray-400">จากใบเบิก (stock_request)</span>
+                </div>
+                {uniformRequests.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-gray-400">
+                    {uniformLoading ? 'กำลังโหลด...' : 'ยังไม่เคยขอเบิกยูนิฟอร์มในนามพนักงานคนนี้'}
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <tbody>
+                      {uniformRequests.map((r) => (
+                        <tr key={`${r.docNo}-${r.code}`} className="border-b border-gray-50 last:border-0">
+                          <td className="px-4 py-2 text-xs text-gray-500 tabular-nums w-28">{r.savedAt}</td>
+                          <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{r.code}</td>
+                          <td className="px-2 py-2 text-sm text-gray-700">{r.name}</td>
+                          <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 w-16">{r.qty}</td>
+                          <td className="px-4 py-2 text-xs text-gray-400 w-32 truncate" title={`ต้องการรับ ${r.requestDate || '-'}`}>{r.docNo}</td>
                         </tr>
                       ))}
                     </tbody>
