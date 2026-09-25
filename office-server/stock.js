@@ -1103,10 +1103,11 @@ async function saveWaste(body, session) {
 }
 
 /* สั่งซิงก์ทะเบียนสินค้าจากชีทเดี๋ยวนี้ โดยไม่ต้องรอรอบอัตโนมัติ (ดู item-sync.js)
-   ใช้ตอนจัดซื้อเพิ่งเพิ่มของแล้วสาขาต้องการใช้ทันที — จำกัดสิทธิ์ all เพราะเขียนทับทะเบียนทั้งชุด */
+   ใช้ตอนจัดซื้อเพิ่งเพิ่มของแล้วสาขาต้องการใช้ทันที — จำกัดสิทธิ์ all
+   ค่าเริ่มต้นเพิ่มเฉพาะของใหม่ตาม ITEM_SYNC_MODE · ส่ง { mode: 'full' } มาเมื่อตั้งใจทับทั้งชุดตามชีท */
 async function syncItemRegistry(body, session) {
   if (!session?.isAll) throw forbidden('ซิงก์ทะเบียนสินค้าได้เฉพาะผู้ใช้สิทธิ์ all');
-  return syncItemsFromSheet();
+  return syncItemsFromSheet(body?.mode ? { mode: body.mode } : undefined);
 }
 
 export const STOCK_ACTIONS = {

@@ -17,6 +17,14 @@
 //
 // เขียนเฉพาะแถวที่ค่าต่างจากของเดิมจริง ๆ รอบที่ชีทไม่มีการแก้เลยจึงไม่มีคำสั่งเขียนสักคำสั่ง
 // (ซิงก์ทุกชั่วโมงกับทะเบียนสองพันกว่ารายการ ถ้าเขียนทับทั้งชุดทุกรอบจะกินทั้ง log และ I/O เปล่า ๆ)
+//
+// ⚠️ โหมด — env ITEM_SYNC_MODE = add (ค่าเริ่มต้น) | full
+//   add  = เพิ่มเฉพาะสินค้าที่ยังไม่มีใน dbo.stock_item (พร้อมสาขาของมัน) ไม่แตะแถวที่มีอยู่แล้วเลย
+//   full = แบบเดิม: ทับชื่อ/ราคา/สถานะ/สาขา ฯลฯ ของทุกแถวให้ตรงกับชีท
+// ตั้งแต่หน้า QC/RD > วัตถุดิบ (naraipizzeria, QCRD_SOURCE=sql) เขียนลง stock_item / stock_item_branch
+// ตรง ๆ ชีทก็ไม่ใช่ต้นทางอีกต่อไป — ชีทค้างค่าเก่า ถ้าซิงก์แบบ full ทุกชั่วโมงจะเอาค่าเก่าทับของที่
+// เพิ่งแก้จากหน้าเว็บ (อาการ "กดบันทึกสาขาแล้ว ชั่วโมงถัดมาเด้งกลับไปค่าเดิม") จึงเปลี่ยนค่าเริ่มต้นเป็น add
+// ของใหม่ที่จัดซื้อเพิ่มในชีทยังขึ้นเองเหมือนเดิม ใช้ full เฉพาะตอนตั้งใจกู้ทะเบียนทั้งชุดจากชีทเท่านั้น
 
 import { sql, stockDb } from './hr-db.js';
 
@@ -37,6 +45,10 @@ const normCode = (v) => str(v).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCa
 
 /** ราคาเทียบกันด้วยข้อความทศนิยม 4 ตำแหน่ง ให้ตรงกับ DECIMAL(18,4) ที่เก็บจริง (ค่าว่าง = '') */
 const priceKey = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toFixed(4));
+
+/** โหมดซิงก์จาก env — ค่าอื่นที่ไม่ใช่ 'full' ถือเป็น 'add' (พิมพ์ผิดต้องไม่กลายเป็นการเขียนทับ) */
+export const syncMode = (v = process.env.ITEM_SYNC_MODE) =>
+  (String(v || '').trim().toLowerCase() === 'full' ? 'full' : 'add');
 
 /** แถวดิบของชีททะเบียนสินค้า (ตัดหัวตารางแล้ว) — ส่งออกให้ scripts/check-item.mjs ใช้ตรวจสอบด้วย */
 export async function fetchSheetRows() {
@@ -141,12 +153,15 @@ function branchStatement(it) {
 }
 
 /**
- * ดึงชีทแล้วอัปเดตตารางให้ตรงกัน — คืนสรุปว่าแตะอะไรไปบ้าง
+ * ดึงชีทแล้วอัปเดตตาราง — คืนสรุปว่าแตะอะไรไปบ้าง
+ *
+ * mode 'add' (ค่าเริ่มต้น) เพิ่มเฉพาะสินค้าใหม่ · 'full' ทับทุกแถวให้ตรงกับชีท (ดูหัวไฟล์)
  *
  * ของที่ถูกลบออกจากชีทจะไม่ถูกลบตาม (เหมือน migrate-stock.mjs) เพราะยังมีประวัติการนับ/ใบเบิก
  * อ้างถึงอยู่ ฝ่ายจัดซื้อเลิกใช้สินค้าตัวไหนให้ตั้งสถานะเป็น 'ปิดการใช้งาน' ซึ่งฝั่งอ่านกรองออกให้แล้ว
  */
-export async function syncItemsFromSheet() {
+export async function syncItemsFromSheet({ mode = syncMode() } = {}) {
+  const full = syncMode(mode) === 'full';
   const rows = await fetchSheetRows();
   const { items, skipped, duplicates } = parseItems(rows);
   if (items.length === 0) throw new Error('ชีททะเบียนสินค้าไม่มีข้อมูล — ยกเลิกการซิงก์');
@@ -201,10 +216,12 @@ export async function syncItemsFromSheet() {
     return now.size === next.size && [...next].every((b) => now.has(b));
   };
 
-  const changedItems = items.filter((it) => !unchangedItem(it));
+  // โหมด add: แถวที่มีในตารางแล้วเป็นของหน้า QC/RD — ไม่เทียบ ไม่เขียน (ทั้งตัวสินค้าและสาขา)
+  const inScope = full ? items : items.filter((it) => !currentByKey.has(it.key));
+  const changedItems = inScope.filter((it) => !unchangedItem(it));
   // สินค้าที่ชีทไม่ได้ระบุสาขา (คอลัมน์ J ว่าง) ไม่แตะแถวสาขาเดิม — ช่องที่บังเอิญว่างชั่วคราว
   // ไม่ควรถอนสินค้าออกจากทุกสาขาพร้อมกัน (เหมือน migrate-stock.mjs)
-  const changedBranches = items.filter((it) => it.branches.length > 0 && !unchangedBranches(it));
+  const changedBranches = inScope.filter((it) => it.branches.length > 0 && !unchangedBranches(it));
 
   const added = changedItems.filter((it) => !currentByKey.has(it.key)).length;
 
@@ -226,6 +243,7 @@ export async function syncItemsFromSheet() {
   }
 
   return {
+    mode: full ? 'full' : 'add',
     sheetRows: rows.length,
     total: items.length,
     added,
@@ -233,7 +251,8 @@ export async function syncItemsFromSheet() {
     branchUpdated: changedBranches.length,
     skipped,
     duplicates,
-    message: `ซิงก์ทะเบียนสินค้าแล้ว ${items.length} รายการ (เพิ่ม ${added}, แก้ ${changedItems.length - added}, สาขา ${changedBranches.length})`,
+    message: `ซิงก์ทะเบียนสินค้า${full ? ' (full — ทับตามชีท)' : ' (เพิ่มเฉพาะของใหม่)'} ${items.length} รายการ `
+      + `(เพิ่ม ${added}, แก้ ${changedItems.length - added}, สาขา ${changedBranches.length})`,
   };
 }
 
