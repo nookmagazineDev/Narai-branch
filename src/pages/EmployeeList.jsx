@@ -5,6 +5,7 @@ import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
+import UniformGuide from '../components/UniformGuide';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -39,7 +40,7 @@ export default function EmployeeList() {
 
   /* ================== ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในคอลัมน์จัดการ) ==================
      กล่องเดียวทำสองงานที่ลงคนละที่โดยตั้งใจ
-       "จ่ายให้พนักงาน" -> saveEmployeeUniform -> dbo.UniformBranch (ใครได้อะไรไป)
+       "บันทึกข้อมูล"   -> saveEmployeeUniform -> dbo.UniformBranch (ใครได้อะไรไป)
        "เบิกเข้าสาขา"   -> saveStock ตัวเดิมของหน้านับสต๊อก -> dbo.stock_request
      ปุ่มเบิกต้องเป็น saveStock เท่านั้น ไม่ใช่ action ใหม่ ไม่งั้นใบเบิกของยูนิฟอร์มจะไม่โผล่
      ในใบเบิกค้าง/หน้าสั่งของ และทีมโกดังต้องเปิดดูสองที่
@@ -971,7 +972,7 @@ export default function EmployeeList() {
         </div>
       )}
 
-      {/* ยูนิฟอร์มพนักงาน — จ่ายให้พนักงาน (UniformBranch) หรือเบิกเข้าสาขา (stock_request) */}
+      {/* ยูนิฟอร์มพนักงาน — บันทึกข้อมูลการจ่าย (UniformBranch) หรือเบิกเข้าสาขา (stock_request) */}
       {uniformTarget && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
@@ -991,6 +992,8 @@ export default function EmployeeList() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <UniformGuide />
+
               {uniformError && (
                 <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{uniformError}</div>
               )}
@@ -1206,7 +1209,7 @@ export default function EmployeeList() {
                 className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 disabled:opacity-50"
               >
                 {uniformBusy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                จ่ายให้พนักงาน
+                บันทึกข้อมูล
               </button>
             </div>
           </div>
