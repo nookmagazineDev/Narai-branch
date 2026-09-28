@@ -49,7 +49,7 @@ export default function EmployeeList() {
      กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้
      คอลัมน์ size ใน UniformBranch ยังอยู่ (รับค่าว่าง) เผื่อข้อมูลเก่าและการคีย์ตรงในฐาน      */
   const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
-  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 800000* (โหลดครั้งเดียวใช้ซ้ำ)
+  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000* (โหลดครั้งเดียวใช้ซ้ำ)
   const [uniformHistory, setUniformHistory] = useState([]);
   const [uniformLoading, setUniformLoading] = useState(false);
   const [uniformError, setUniformError] = useState('');
@@ -134,7 +134,7 @@ export default function EmployeeList() {
     resetUniformForm();
   };
 
-  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 800000 มาให้แล้ว
+  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 80000 มาให้แล้ว
      ตรงนี้จึงเหลือแค่กรองตามคำค้น ไม่ต้องกรองรหัสซ้ำอีก */
   const uniformMatches = (() => {
     const q = uniformQuery.trim().toLowerCase();
@@ -1015,7 +1015,7 @@ export default function EmployeeList() {
                     {uniformQuery.trim() && !uniformPicked && (
                       <div className="absolute left-0 right-0 top-[70px] z-10 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
                         <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[11px] text-gray-400">
-                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 800000 · พบ {uniformMatches.length} รายการ
+                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 80000 · พบ {uniformMatches.length} รายการ
                         </div>
                         {uniformMatches.length === 0 ? (
                           <div className="px-3 py-3 text-xs text-gray-400">ไม่พบไอเทมที่ตรงกับคำค้น</div>

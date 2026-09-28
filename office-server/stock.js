@@ -51,6 +51,13 @@ const thaiDateTime = (v) => {
   return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
 };
 
+/**
+ * ยูนิฟอร์ม (รหัสขึ้นต้น 80000) เป็นของกลางที่ทุกสาขาเบิกได้ — ขึ้นในหน้านับสต๊อก/ขอเบิก/ราคา/ปิดยอด
+ * ของทุกสาขาเสมอ ไม่ต้องไปติ๊กสาขาทีละตัวที่หน้า QC/RD วัตถุดิบ (กติกาเดียวกับ office-server/uniform.js)
+ * ค่าคงที่ฝังใน SQL ตรง ๆ ได้เพราะไม่ได้มาจากผู้ใช้
+ */
+const UNIFORM_ITEM_PREFIX = '80000';
+
 const badRequest = (msg) => Object.assign(new Error(msg), { badRequest: true });
 const forbidden = (msg) => Object.assign(new Error(msg), { forbidden: true });
 
@@ -117,8 +124,9 @@ async function getStockItems(body, session) {
       `SELECT i.item_key, i.item_code, i.pos_item_id, i.item_name, i.unit, i.price,
               i.status, i.store_cat, i.plan_only
          FROM dbo.stock_item i
-         JOIN dbo.stock_item_branch b ON b.item_key = i.item_key
-        WHERE b.branch = @itemBranch
+        WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
+                        WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
+               OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
           AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
         ORDER BY i.sort_order, i.item_code`,
       { itemBranch: { type: sql.NVarChar(50), value: itemBranch } }
@@ -233,8 +241,9 @@ async function getItemPrices(body, session) {
   const rows = await queryRead(
     `SELECT i.item_key, i.item_code, i.item_name, i.unit, i.price
        FROM dbo.stock_item i
-       JOIN dbo.stock_item_branch b ON b.item_key = i.item_key
-      WHERE b.branch = @itemBranch
+      WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
+                      WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
+             OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
         AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
       ORDER BY i.sort_order, i.item_code`,
     { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
@@ -887,8 +896,10 @@ async function getClosingItems(body, session) {
   const rows = await queryRead(
     `SELECT i.item_code, i.item_name, i.unit, i.price
        FROM dbo.stock_item i
-       JOIN dbo.stock_item_branch b ON b.item_key = i.item_key
-      WHERE b.branch = @itemBranch AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
+      WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
+                      WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
+             OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
+        AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
       ORDER BY i.sort_order, i.item_code`,
     { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
   );
