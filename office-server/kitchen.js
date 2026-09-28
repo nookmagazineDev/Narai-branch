@@ -866,7 +866,7 @@ async function getMaterialIssues(body) {
   const rows = await runSql(
     `SELECT mi.issue_id, mi.doc_no, mi.issue_date, mi.order_id, o.doc_no AS order_doc_no,
             o.product_name AS order_product_name,
-            mi.item_key, mi.item_code, mi.item_name, mi.qty, mi.unit,
+            mi.item_key, mi.item_code, mi.item_name, mi.qty, mi.unit, mi.unit_price, mi.loss_qty,
             mi.note, mi.recorder, mi.recorded_at
        FROM dbo.kitchen_material_issue mi
        LEFT JOIN dbo.kitchen_production_order o ON o.order_id = mi.order_id
@@ -880,7 +880,13 @@ async function getMaterialIssues(body) {
   return { issues: rows };
 }
 
-/** บันทึกใบเบิกวัตถุดิบหนึ่งใบ (หลายรายการ) */
+/**
+ * บันทึกใบเบิกวัตถุดิบหนึ่งใบ (หลายรายการ)
+ *
+ * lossQty = ส่วนของ qty ที่เป็นของสูญเสีย (หน่วยสต๊อก) ไม่ได้บวกเพิ่มจาก qty
+ * unit_price เติมที่นี่จาก stock_item.price ณ ตอนเบิก ไม่รับจากหน้าเว็บ — ต้นทุนในรายงาน
+ * คิดจากราคานี้ ราคาในชีทเปลี่ยนทีหลังก็ไม่ย้อนไปเปลี่ยนต้นทุนของที่ผลิตไปแล้ว
+ */
 async function saveMaterialIssue(body, session) {
   const issueDate = ymd(body?.issueDate) || bangkokNow().date;
   const orderId = Number(body?.orderId);
@@ -893,13 +899,21 @@ async function saveMaterialIssue(body, session) {
     const key = normCode(it?.itemKey || it?.code);
     const qty = num(it?.qty);
     if (!key || qty <= 0) continue;
+    // ติดลบไม่ได้ และเกินยอดเบิกไม่ได้ (ของเสียเป็นส่วนหนึ่งของที่เบิก)
+    const lossQty = Math.min(Math.max(num(it?.lossQty), 0), qty);
     // UNIQUE (doc_no, item_key) ทำให้วัตถุดิบตัวเดียวกันใส่สองบรรทัดในใบเดียวไม่ได้ — รวมยอดให้
-    if (seen.has(key)) { seen.get(key).qty += qty; continue; }
+    if (seen.has(key)) {
+      const cur = seen.get(key);
+      cur.qty += qty;
+      cur.lossQty += lossQty;
+      continue;
+    }
     const row = {
       key,
       code: str(it?.code || it?.itemCode) || key,
       name: str(it?.name || it?.itemName).slice(0, 255),
       qty,
+      lossQty,
       unit: orNull(it?.unit),
       note: orNull(it?.note),
     };
@@ -913,9 +927,12 @@ async function saveMaterialIssue(body, session) {
     for (const it of items) {
       await run(
         `INSERT INTO dbo.kitchen_material_issue
-           (doc_no, issue_date, order_id, item_key, item_code, item_name, qty, unit, note, recorder)
+           (doc_no, issue_date, order_id, item_key, item_code, item_name, qty, unit,
+            unit_price, loss_qty, note, recorder)
          VALUES (@doc_no, CONVERT(DATE, @issue_date, 23), @order_id, @item_key, @item_code,
-                 @item_name, @qty, @unit, @note, @recorder);`,
+                 @item_name, @qty, @unit,
+                 (SELECT CASE WHEN price > 0 THEN price END FROM dbo.stock_item WHERE item_key = @item_key),
+                 @loss_qty, @note, @recorder);`,
         {
           doc_no: { type: sql.NVarChar(50), value: docNo },
           issue_date: { type: sql.NVarChar(10), value: issueDate },
@@ -925,6 +942,7 @@ async function saveMaterialIssue(body, session) {
           item_name: { type: sql.NVarChar(255), value: it.name },
           qty: { type: sql.Decimal(18, 3), value: it.qty },
           unit: { type: sql.NVarChar(50), value: it.unit },
+          loss_qty: { type: sql.Decimal(18, 3), value: it.lossQty > 0 ? it.lossQty : null },
           note: { type: sql.NVarChar(500), value: it.note },
           recorder: { type: sql.NVarChar(255), value: recorder },
         }
@@ -1224,6 +1242,14 @@ async function deleteProductionRun(body) {
 /**
  * รายงานการผลิต — รายการดิบของช่วงวันที่ พร้อมยอดรวมต่อสินค้า
  * ส่งกลับทั้งสองชุดในครั้งเดียว เพราะหน้าเดียวใช้ทั้งคู่ และรวมฝั่ง SQL เร็วกว่าให้เบราว์เซอร์รวมเอง
+ *
+ * ต้นทุนวัตถุดิบ: รวมใบเบิกทุกใบของคำสั่งผลิต (qty × unit_price ที่เก็บไว้ตอนเบิก รวมของสูญเสีย)
+ * แล้วแบ่งให้แต่ละครั้งที่บันทึกผลิตตามสัดส่วนจำนวนที่ผลิตได้ — ครั้งไหนของคำสั่งเดียวกัน
+ * ก็ได้ต้นทุนต่อหน่วยเท่ากัน และรวมทุกครั้งแล้วเท่ากับต้นทุนของคำสั่งพอดี
+ * ไม่ได้เก็บต้นทุนไว้ที่ตารางบันทึกการผลิต เพราะเบิกเพิ่มหลังบันทึกผลิตได้ ต้องคิดตอนเปิดรายงาน
+ *   cost          ต้นทุนวัตถุดิบของครั้งนั้น (ใช้ + สูญเสีย) · NULL = คำสั่งไม่มีใบเบิก หรือไม่มีราคาเลยสักบรรทัด
+ *   loss_cost     ส่วนที่มาจากของสูญเสีย
+ *   no_price_count  บรรทัดใบเบิกของคำสั่งที่ไม่มีราคา (ไม่ได้รวมในต้นทุน — ต้นทุนต่ำกว่าจริง)
  */
 async function getProductionReport(body) {
   const from = ymd(body?.dateFrom);
@@ -1235,27 +1261,54 @@ async function getProductionReport(body) {
     to: { type: sql.NVarChar(10), value: to },
   };
 
+  // ใช้ร่วมกันทั้งรายการดิบและยอดรวม ให้สองตารางคิดต้นทุนแบบเดียวกันเสมอ
+  const costedRuns = `
+    SELECT p.run_id, p.order_id, o.doc_no AS order_doc_no, o.order_qty,
+           p.produce_date, p.product_key, p.product_code, p.product_name,
+           p.qty_produced, p.qty_waste, p.unit, p.note, p.recorder, p.recorded_at,
+           c.issue_lines, c.no_price_count,
+           CAST(c.cost * p.qty_produced / NULLIF(t.total_produced, 0) AS DECIMAL(18,2)) AS cost,
+           CAST(c.loss_cost * p.qty_produced / NULLIF(t.total_produced, 0) AS DECIMAL(18,2)) AS loss_cost
+      FROM dbo.kitchen_production_run p
+      LEFT JOIN dbo.kitchen_production_order o ON o.order_id = p.order_id
+      OUTER APPLY (
+        SELECT COUNT(*) AS issue_lines,
+               SUM(CASE WHEN mi.unit_price IS NULL THEN 1 ELSE 0 END) AS no_price_count,
+               CAST(SUM(mi.qty * mi.unit_price) AS DECIMAL(18,4)) AS cost,
+               CAST(SUM(COALESCE(mi.loss_qty, 0) * mi.unit_price) AS DECIMAL(18,4)) AS loss_cost
+          FROM dbo.kitchen_material_issue mi
+         WHERE mi.order_id = p.order_id
+      ) c
+      OUTER APPLY (
+        SELECT SUM(r.qty_produced) AS total_produced
+          FROM dbo.kitchen_production_run r
+         WHERE r.order_id = p.order_id
+      ) t
+     WHERE p.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)`;
+
   const runs = await runSql(
-    `SELECT p.run_id, p.order_id, o.doc_no AS order_doc_no, o.order_qty,
-            p.produce_date, p.product_key, p.product_code, p.product_name,
-            p.qty_produced, p.qty_waste, p.unit, p.note, p.recorder, p.recorded_at
-       FROM dbo.kitchen_production_run p
-       LEFT JOIN dbo.kitchen_production_order o ON o.order_id = p.order_id
-      WHERE p.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
+    `${costedRuns}
       ORDER BY p.produce_date DESC, p.recorded_at DESC;`,
     params
   );
 
+  // costed_qty = จำนวนที่ผลิตเฉพาะครั้งที่มีต้นทุน — ตัวหารของต้นทุนเฉลี่ยต่อหน่วย
+  // (ครั้งที่ไม่มีใบเบิกไม่ได้ต้นทุนเป็น 0 จริง ถ้าเอามาหารด้วยจะดึงค่าเฉลี่ยต่ำลงผิด ๆ)
   const summary = await runSql(
-    `SELECT p.product_key, MAX(p.product_code) AS product_code, MAX(p.product_name) AS product_name,
-            MAX(p.unit) AS unit,
-            SUM(p.qty_produced) AS total_produced,
-            SUM(p.qty_waste) AS total_waste,
-            COUNT(*) AS run_count
-       FROM dbo.kitchen_production_run p
-      WHERE p.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
-      GROUP BY p.product_key
-      ORDER BY SUM(p.qty_produced) DESC;`,
+    `WITH r AS (${costedRuns})
+     SELECT r.product_key, MAX(r.product_code) AS product_code, MAX(r.product_name) AS product_name,
+            MAX(r.unit) AS unit,
+            SUM(r.qty_produced) AS total_produced,
+            SUM(r.qty_waste) AS total_waste,
+            COUNT(*) AS run_count,
+            SUM(r.cost) AS total_cost,
+            SUM(r.loss_cost) AS total_loss_cost,
+            SUM(CASE WHEN r.cost IS NOT NULL THEN r.qty_produced END) AS costed_qty,
+            SUM(CASE WHEN r.cost IS NULL THEN 1 ELSE 0 END) AS uncosted_runs,
+            SUM(CASE WHEN r.no_price_count > 0 THEN 1 ELSE 0 END) AS partial_runs
+       FROM r
+      GROUP BY r.product_key
+      ORDER BY SUM(r.qty_produced) DESC;`,
     params
   );
 

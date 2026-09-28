@@ -55,7 +55,7 @@
 | `kitchen_production_plan` | แผนประจำรอบ (รายวัน/รายสัปดาห์) — เลิกใช้จากหน้าเว็บแล้ว ข้อมูลเดิมยังอยู่ |
 | `kitchen_production_order` | คำสั่งผลิต |
 | `kitchen_production_run` | บันทึกการผลิตจริง ทีละครั้ง |
-| `kitchen_material_issue` | ใบเบิกวัตถุดิบออกไปใช้ผลิต |
+| `kitchen_material_issue` | ใบเบิกวัตถุดิบออกไปใช้ผลิต — `unit_price` ราคา ณ ตอนเบิก (เติมจาก `stock_item.price` ใน `saveMaterialIssue`) และ `loss_qty` ส่วนที่เป็นของสูญเสีย (เพิ่มด้วย `office-server/sql/kitchen-003-issue-cost.sql`) · `getProductionReport` คิดต้นทุนการผลิตจากสองคอลัมน์นี้ |
 | `kitchen_material_receipt` | ใบรับวัตถุดิบเข้าครัว |
 
 ## จุดที่ต้องระวังเวลาแก้ไฟล์นี้
