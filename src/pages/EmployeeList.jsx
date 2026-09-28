@@ -206,7 +206,7 @@ export default function EmployeeList() {
       ส่งเฉพาะ requested ไม่ส่ง remaining — saveStock จะไม่บันทึกเป็นการนับสต๊อก */
   const handleUniformOrder = async () => {
     if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
-    if (!uniformWantDate) { toast.error('ระบุวันที่ต้องการรับของ'); return; }
+    if (!uniformWantDate) { toast.error('ระบุวันที่เบิก'); return; }
     setUniformBusy('order');
     try {
       const res = await apiCall('saveStock', {
@@ -1170,7 +1170,7 @@ export default function EmployeeList() {
 
             <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-end gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">วันที่จ่ายของ</label>
+                <label className="block text-xs text-gray-500 mb-1">วันที่รับของ</label>
                 <input
                   type="date"
                   value={uniformIssuedDate}
@@ -1179,7 +1179,7 @@ export default function EmployeeList() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">วันที่ต้องการรับของ (สำหรับเบิก)</label>
+                <label className="block text-xs text-gray-500 mb-1">วันที่เบิก</label>
                 <input
                   type="date"
                   value={uniformWantDate}
