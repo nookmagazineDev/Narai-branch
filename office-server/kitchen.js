@@ -353,19 +353,25 @@ async function deleteProductionPlan(body) {
    แผนที่ออกคำสั่งไปแล้ว (ใบยังไม่ถูกยกเลิก) แก้/ลบไม่ได้ ต้องไปแก้ที่คำสั่งผลิตแทน
 ========================================================================== */
 
-// ยังไม่ได้รัน sql/kitchen-002 = ตารางยังไม่มี (SQL Server error 208) — บอกวิธีแก้แทนข้อความดิบ
+// ยังไม่ได้รัน sql/kitchen-002 = ตารางยังไม่มี (SQL Server error 208)
+// ยังไม่ได้รัน sql/kitchen-004 = ยังไม่มีคอลัมน์ plan_day_id ที่คำสั่งผลิต (error 207) — บอกวิธีแก้แทนข้อความดิบ
 const planDayMissing = (err) => {
   if (err?.number === 208 || /Invalid object name '(dbo\.)?kitchen_production_plan_day'/i.test(String(err?.message))) {
     return badRequest('ยังไม่มีตารางแผนผลิตรายวัน — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
   }
+  if (/Invalid column name 'plan_day_id'/i.test(String(err?.message))) {
+    return badRequest('ฐานข้อมูลยังไม่รองรับแผนหลายงานต่อเมนูต่อวัน — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
+  }
   return err;
 };
 
-/** ใบสั่งผลิตที่ออกจากแผนของวัน/เมนูนั้น และยังไม่ถูกยกเลิก */
+/**
+ * ใบสั่งผลิตที่ออกจากแผนแถวนั้น และยังไม่ถูกยกเลิก
+ * ผูกด้วย plan_day_id (sql/kitchen-004) — เมนูเดิมวันเดิมมีได้หลายแผน แต่ละแผนมีคำสั่งของตัวเอง
+ */
 const ACTIVE_PLAN_ORDER = `EXISTS (
   SELECT 1 FROM dbo.kitchen_production_order o
-   WHERE o.produce_date = d.plan_date AND o.product_key = d.product_key
-     AND o.source = N'plan' AND o.status <> N'ยกเลิก')`;
+   WHERE o.plan_day_id = d.plan_day_id AND o.status <> N'ยกเลิก')`;
 
 async function getDatedPlans(body) {
   const from = ymd(body?.dateFrom);
@@ -379,9 +385,9 @@ async function getDatedPlans(body) {
               o.order_id, o.doc_no AS order_doc_no, o.status AS order_status
          FROM dbo.kitchen_production_plan_day d
          LEFT JOIN dbo.kitchen_production_order o
-           ON o.produce_date = d.plan_date AND o.product_key = d.product_key AND o.source = N'plan'
+           ON o.plan_day_id = d.plan_day_id
         WHERE d.plan_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
-        ORDER BY d.plan_date, d.product_code;`,
+        ORDER BY d.plan_date, d.product_code, d.plan_day_id;`,
       {
         from: { type: sql.NVarChar(10), value: from },
         to: { type: sql.NVarChar(10), value: to },
@@ -395,7 +401,7 @@ async function getDatedPlans(body) {
 
 /**
  * ตั้งแผนเมนูหนึ่งตัวให้หลายวันทีเดียว (หรือแก้แผนเดียวด้วย planId)
- * วันที่มีเมนูนี้อยู่แล้ว = แทนที่จำนวนเดิม · วันที่ออกคำสั่งผลิตจากแผนไปแล้ว = ข้าม
+ * เพิ่มเป็นงานใหม่เสมอ — วันที่มีเมนูนี้อยู่แล้ว (สั่งผลิตไปแล้วหรือยังก็ตาม) ได้อีกแถวแยกกัน ไม่แทนที่ของเดิม
  */
 async function saveDatedPlans(body, session) {
   const planId = Number(body?.planId);
@@ -438,26 +444,12 @@ async function saveDatedPlans(body, session) {
   try {
     return await withTransaction(async (run) => {
       let saved = 0;
-      const skipped = [];
       for (const date of dates) {
-        const res = await run(
-          `IF EXISTS (SELECT 1 FROM dbo.kitchen_production_order
-                       WHERE produce_date = CONVERT(DATE, @plan_date, 23) AND product_key = @product_key
-                         AND source = N'plan' AND status <> N'ยกเลิก')
-             SELECT CAST(1 AS BIT) AS ordered;
-           ELSE
-           BEGIN
-             MERGE dbo.kitchen_production_plan_day AS t
-             USING (SELECT CONVERT(DATE, @plan_date, 23) AS plan_date, @product_key AS product_key) AS s
-                ON t.plan_date = s.plan_date AND t.product_key = s.product_key
-             WHEN MATCHED THEN UPDATE SET
-               product_code = @product_code, product_name = @product_name, planned_qty = @planned_qty,
-               unit = @unit, note = @note, recorder = @recorder, updated_at = SYSDATETIME()
-             WHEN NOT MATCHED THEN INSERT
-               (plan_date, product_key, product_code, product_name, planned_qty, unit, note, recorder)
-               VALUES (s.plan_date, @product_key, @product_code, @product_name, @planned_qty, @unit, @note, @recorder);
-             SELECT CAST(0 AS BIT) AS ordered;
-           END`,
+        await run(
+          `INSERT INTO dbo.kitchen_production_plan_day
+             (plan_date, product_key, product_code, product_name, planned_qty, unit, note, recorder)
+           VALUES (CONVERT(DATE, @plan_date, 23), @product_key, @product_code, @product_name,
+                   @planned_qty, @unit, @note, @recorder);`,
           {
             plan_date: { type: sql.NVarChar(10), value: date },
             product_key: { type: sql.NVarChar(50), value: productKey },
@@ -469,14 +461,13 @@ async function saveDatedPlans(body, session) {
             recorder: { type: sql.NVarChar(255), value: recorder },
           }
         );
-        if (res?.recordset?.[0]?.ordered) skipped.push(date); else saved++;
+        saved++;
       }
       return {
         saved,
-        skipped: skipped.length,
-        skippedDates: skipped,
-        message: `บันทึกแผน "${productName || productKey}" ${saved} วัน`
-          + (skipped.length ? ` · ข้าม ${skipped.length} วันที่สั่งผลิตไปแล้ว` : ''),
+        skipped: 0,
+        skippedDates: [],
+        message: `บันทึกแผน "${productName || productKey}" ${saved} วัน`,
       };
     });
   } catch (err) {
@@ -756,7 +747,7 @@ async function createOrdersFromPlan(body, session) {
     return { created: 0, skipped: 0, message: 'ไม่มีแผนผลิตในวันนี้' };
   }
 
-  return ordersFromPlanRows(plans, produceDate, recorder);
+  return ordersFromPlanRows(plans, produceDate, recorder).catch((err) => { throw planDayMissing(err); });
 }
 
 /**
@@ -784,10 +775,13 @@ async function createOrderFromPlanDay(body, session) {
   }
   if (plans.length === 0) throw badRequest('ไม่พบแผนผลิตนี้แล้ว (อาจถูกลบไป)');
 
-  return ordersFromPlanRows(plans, plans[0].plan_date, recorder);
+  return ordersFromPlanRows(plans, plans[0].plan_date, recorder).catch((err) => { throw planDayMissing(err); });
 }
 
-/** แถวแผนของวันเดียวกัน → คำสั่งผลิต source = 'plan' (มีใบที่ยังไม่ยกเลิกอยู่แล้ว = ข้าม, ใบที่ยกเลิก = เปิดใหม่) */
+/**
+ * แถวแผนของวันเดียวกัน → คำสั่งผลิต source = 'plan' ผูกด้วย plan_day_id หนึ่งแผนต่อหนึ่งใบ
+ * (มีใบที่ยังไม่ยกเลิกอยู่แล้ว = ข้าม, ใบที่ยกเลิก = เปิดใหม่) เมนูเดิมวันเดิมหลายแผน = หลายใบ
+ */
 function ordersFromPlanRows(plans, produceDate, recorder) {
   return withTransaction(async (run) => {
     let created = 0;
@@ -795,12 +789,8 @@ function ordersFromPlanRows(plans, produceDate, recorder) {
     for (const p of plans) {
       const existing = await run(
         `SELECT order_id, status FROM dbo.kitchen_production_order
-          WHERE produce_date = CONVERT(DATE, @produce_date, 23)
-            AND product_key = @product_key AND source = N'plan';`,
-        {
-          produce_date: { type: sql.NVarChar(10), value: produceDate },
-          product_key: { type: sql.NVarChar(50), value: p.product_key },
-        }
+          WHERE plan_day_id = @plan_day_id;`,
+        { plan_day_id: { type: sql.Int, value: p.plan_day_id } }
       );
       const found = existing?.recordset?.[0];
       if (found && found.status !== 'ยกเลิก') { skipped++; continue; }
@@ -827,10 +817,11 @@ function ordersFromPlanRows(plans, produceDate, recorder) {
       await run(
         `INSERT INTO dbo.kitchen_production_order
            (doc_no, produce_date, product_key, product_code, product_name,
-            order_qty, unit, status, source, note, recorder)
+            order_qty, unit, status, source, plan_day_id, note, recorder)
          VALUES (@doc_no, CONVERT(DATE, @produce_date, 23), @product_key, @product_code, @product_name,
-                 @order_qty, @unit, N'รอผลิต', N'plan', @note, @recorder);`,
+                 @order_qty, @unit, N'รอผลิต', N'plan', @plan_day_id, @note, @recorder);`,
         {
+          plan_day_id: { type: sql.Int, value: p.plan_day_id },
           doc_no: { type: sql.NVarChar(50), value: docNo },
           produce_date: { type: sql.NVarChar(10), value: produceDate },
           product_key: { type: sql.NVarChar(50), value: p.product_key },
