@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
 import UniformGuide from '../components/UniformGuide';
+import { uniformSpecImage } from '../utils/uniformSpecs';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -55,6 +56,7 @@ export default function EmployeeList() {
   const [uniformError, setUniformError] = useState('');
   const [uniformQuery, setUniformQuery] = useState('');
   const [uniformPicked, setUniformPicked] = useState(null);
+  const [uniformSpec, setUniformSpec] = useState(null);         // ไอเทมที่เปิดดูรูปสเปคอยู่
   const [uniformQty, setUniformQty] = useState('1');
   const [uniformRows, setUniformRows] = useState([]);
   const [uniformIssuedDate, setUniformIssuedDate] = useState('');
@@ -1056,6 +1058,21 @@ export default function EmployeeList() {
                     </div>
                   </div>
 
+                  {/* ปุ่มดูสเปคขึ้นเฉพาะหลังเลือกไอเทมแล้ว และรูปโหลดตอนกดเปิดเท่านั้น
+                      ไม่แสดงรูป/ปุ่มในรายการค้นหา กันเน็ตสาขาโหลดรูปทีละหลายรูปโดยไม่ได้ดู */}
+                  {uniformPicked && (uniformSpecImage(uniformPicked.code) ? (
+                    <button
+                      onClick={() => setUniformSpec({ ...uniformPicked, image: uniformSpecImage(uniformPicked.code) })}
+                      className="inline-flex items-center gap-2 px-4 h-[38px] border border-sky-400 bg-sky-50 text-sky-700 rounded-xl text-sm font-semibold hover:bg-sky-100"
+                    >
+                      <ImageIcon className="w-4 h-4" /> ดูรายละเอียด
+                    </button>
+                  ) : (
+                    <span className="inline-flex items-center px-4 h-[38px] border border-gray-200 bg-gray-50 text-gray-400 rounded-xl text-sm">
+                      ไม่มีรูปสเปค
+                    </span>
+                  ))}
+
                   <button
                     onClick={addUniformRow}
                     className="inline-flex items-center gap-2 px-4 h-[38px] bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700"
@@ -1211,6 +1228,30 @@ export default function EmployeeList() {
                 {uniformBusy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 บันทึกข้อมูล
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* รูปสเปคยูนิฟอร์ม — เปิดจากปุ่ม "ดูรายละเอียด" หลังเลือกไอเทม ดูอย่างเดียว (ซ้อนบนกล่องยูนิฟอร์ม) */}
+      {uniformSpec && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => setUniformSpec(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
+              <span className="text-sm font-bold text-violet-700 tabular-nums">{uniformSpec.code}</span>
+              <span className="flex-1 min-w-0 text-sm font-bold text-gray-800 truncate">{uniformSpec.name}</span>
+              <button onClick={() => setUniformSpec(null)} aria-label="ปิด" className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-50 p-3">
+              <img src={uniformSpec.image} alt={`สเปค ${uniformSpec.name}`} className="w-full h-auto rounded-lg border border-gray-200 bg-white" />
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end">
+              <button
+                onClick={() => setUniformSpec(null)}
+                className="px-4 py-2 bg-white text-gray-600 border border-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-100"
+              >ปิด</button>
             </div>
           </div>
         </div>
