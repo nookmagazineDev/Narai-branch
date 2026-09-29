@@ -1096,6 +1096,8 @@ async function getKitchenBalance(body) {
                ROW_NUMBER() OVER (PARTITION BY c.item_key ORDER BY c.counted_at DESC) AS rn
           FROM dbo.stock_count c
          WHERE c.branch = @branch
+           -- ดูย้อนหลัง: ยอดนับที่ใหม่กว่าวันที่ดูไม่ใช่ตัวตั้ง (เดิมไม่กรอง คงเหลือย้อนหลังจึงเอายอดนับอนาคตมาใช้)
+           AND (@as_of IS NULL OR CAST(c.counted_at AS DATE) <= CONVERT(DATE, @as_of, 23))
      ),
      lc AS (SELECT item_key, remaining, count_date FROM last_count WHERE rn = 1),
      scope AS (
@@ -1146,6 +1148,91 @@ async function getKitchenBalance(body) {
     }
   );
   return { branch, asOf, items: rows };
+}
+
+/**
+ * สต๊อกการ์ดของวัตถุดิบหนึ่งตัว — ยอดยกมา + ทุกความเคลื่อนไหวในช่วงวันที่ (หน้าวัตถุดิบคงเหลือของ storefct)
+ *
+ * ยอดยกมา = คงเหลือ ณ สิ้นวันก่อน dateFrom กติกาเดียวกับ getKitchenBalance ทุกอย่าง
+ * (ยอดนับล่าสุดที่ไม่เกินวันนั้น + รับเข้า − เบิกใช้ + ผลิตได้ หลังวันนับ)
+ * หน้าเว็บเดินยอดรายวันต่อเอง: วันที่มียอดนับ → คงเหลือสิ้นวัน = ยอดนับล่าสุดของวันนั้น
+ * (รายการวันเดียวกับวันนับไม่ถูกรวม — ตรงกับ getKitchenBalance) ไม่งั้น + เข้า − ออก
+ */
+async function getKitchenStockCard(body) {
+  const itemKey = normCode(body?.itemKey || body?.itemCode);
+  const from = ymd(body?.dateFrom);
+  const to = ymd(body?.dateTo);
+  if (!itemKey) throw badRequest('ไม่ระบุวัตถุดิบ');
+  if (!from || !to || from > to) throw badRequest('ช่วงวันที่ไม่ถูกต้อง');
+  const branch = kitchenBranch();
+  const params = {
+    item_key: { type: sql.NVarChar(50), value: itemKey },
+    branch: { type: sql.NVarChar(50), value: branch },
+    from: { type: sql.NVarChar(10), value: from },
+    to: { type: sql.NVarChar(10), value: to },
+  };
+
+  const opening = await runSql(
+    `DECLARE @open DATE = DATEADD(DAY, -1, CONVERT(DATE, @from, 23));
+     WITH lc AS (
+       SELECT TOP 1 c.remaining, CAST(c.counted_at AS DATE) AS count_date
+         FROM dbo.stock_count c
+        WHERE c.branch = @branch AND c.item_key = @item_key AND CAST(c.counted_at AS DATE) <= @open
+        ORDER BY c.counted_at DESC
+     )
+     SELECT CONVERT(NVARCHAR(10), @open, 23) AS open_date,
+            (SELECT remaining FROM lc) AS counted_qty,
+            (SELECT CONVERT(NVARCHAR(10), count_date, 23) FROM lc) AS count_date,
+            COALESCE((SELECT remaining FROM lc), 0)
+            + COALESCE((SELECT SUM(m.qty) FROM dbo.kitchen_material_receipt m
+                         WHERE m.item_key = @item_key AND m.receive_date <= @open
+                           AND m.receive_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0)
+            + COALESCE((SELECT SUM(r.qty_received) FROM dbo.store_receiving r
+                         WHERE r.item_key = @item_key AND r.branch = @branch AND r.receive_date <= @open
+                           AND r.receive_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0)
+            - COALESCE((SELECT SUM(m.qty) FROM dbo.kitchen_material_issue m
+                         WHERE m.item_key = @item_key AND m.issue_date <= @open
+                           AND m.issue_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0)
+            + COALESCE((SELECT SUM(p.qty_produced) FROM dbo.kitchen_production_run p
+                         WHERE p.product_key = @item_key AND p.produce_date <= @open
+                           AND p.produce_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0) AS balance;`,
+    params
+  );
+
+  const range = (col) => `${col} BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)`;
+  const events = await runSql(
+    `SELECT 'count' AS kind, CONVERT(NVARCHAR(10), CAST(c.counted_at AS DATE), 23) AS date,
+            CONVERT(NVARCHAR(19), c.counted_at, 120) AS at, N'' AS doc_no, c.counter_name AS ref,
+            c.remaining AS qty, NULL AS loss_qty
+       FROM dbo.stock_count c
+      WHERE c.branch = @branch AND c.item_key = @item_key AND ${range('CAST(c.counted_at AS DATE)')}
+     UNION ALL
+     SELECT 'receipt', CONVERT(NVARCHAR(10), m.receive_date, 23), CONVERT(NVARCHAR(19), m.recorded_at, 120),
+            m.doc_no, COALESCE(m.source_name, N''), m.qty, NULL
+       FROM dbo.kitchen_material_receipt m
+      WHERE m.item_key = @item_key AND ${range('m.receive_date')}
+     UNION ALL
+     SELECT 'store', CONVERT(NVARCHAR(10), r.receive_date, 23), CONVERT(NVARCHAR(19), r.recorded_at, 120),
+            r.doc_no, N'ใบเบิกคลังกลาง', r.qty_received, NULL
+       FROM dbo.store_receiving r
+      WHERE r.item_key = @item_key AND r.branch = @branch AND ${range('r.receive_date')}
+     UNION ALL
+     SELECT 'issue', CONVERT(NVARCHAR(10), m.issue_date, 23), CONVERT(NVARCHAR(19), m.recorded_at, 120),
+            m.doc_no, COALESCE(o.doc_no, N''), m.qty, m.loss_qty
+       FROM dbo.kitchen_material_issue m
+       LEFT JOIN dbo.kitchen_production_order o ON o.order_id = m.order_id
+      WHERE m.item_key = @item_key AND ${range('m.issue_date')}
+     UNION ALL
+     SELECT 'produce', CONVERT(NVARCHAR(10), p.produce_date, 23), CONVERT(NVARCHAR(19), p.recorded_at, 120),
+            COALESCE(o.doc_no, N''), N'', p.qty_produced, p.qty_waste
+       FROM dbo.kitchen_production_run p
+       LEFT JOIN dbo.kitchen_production_order o ON o.order_id = p.order_id
+      WHERE p.product_key = @item_key AND ${range('p.produce_date')}
+     ORDER BY date, at;`,
+    params
+  );
+
+  return { itemKey, branch, dateFrom: from, dateTo: to, opening: opening[0] || null, events };
 }
 
 /**
@@ -1492,6 +1579,7 @@ export const KITCHEN_ACTIONS = {
   saveMaterialReceipt,
   getKitchenBalance,
   getKitchenCountHistory,
+  getKitchenStockCard,
   saveKitchenCount,
   saveProductionRun,
   deleteProductionRun,
@@ -1512,5 +1600,6 @@ export const KITCHEN_READ_ONLY = [
   'getMaterialReceipts',
   'getKitchenBalance',
   'getKitchenCountHistory',
+  'getKitchenStockCard',
   'getProductionReport',
 ];
