@@ -136,7 +136,7 @@ export default function EmployeeList() {
     resetUniformForm();
   };
 
-  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 80000 มาให้แล้ว
+  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 80000 / 8001 มาให้แล้ว
      ตรงนี้จึงเหลือแค่กรองตามคำค้น ไม่ต้องกรองรหัสซ้ำอีก */
   const uniformMatches = (() => {
     const q = uniformQuery.trim().toLowerCase();
@@ -1017,7 +1017,7 @@ export default function EmployeeList() {
                     {uniformQuery.trim() && !uniformPicked && (
                       <div className="absolute left-0 right-0 top-[70px] z-10 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
                         <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[11px] text-gray-400">
-                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 80000 · พบ {uniformMatches.length} รายการ
+                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 80000 และ 8001 · พบ {uniformMatches.length} รายการ
                         </div>
                         {uniformMatches.length === 0 ? (
                           <div className="px-3 py-3 text-xs text-gray-400">ไม่พบไอเทมที่ตรงกับคำค้น</div>
