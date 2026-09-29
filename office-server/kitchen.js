@@ -747,6 +747,39 @@ async function createOrdersFromPlan(body, session) {
     return { created: 0, skipped: 0, message: 'ไม่มีแผนผลิตในวันนี้' };
   }
 
+  return ordersFromPlanRows(plans, produceDate, recorder);
+}
+
+/**
+ * สร้างคำสั่งผลิตจากแผนรายการเดียว (ปุ่มสั่งผลิตในแถวแผนของหน้าแพลนผลิต)
+ *
+ * แยกเป็น action ใหม่ ไม่ใช่เติม planId ให้ createOrdersFromPlan — office-server รุ่นเก่าที่ยังไม่อัปเดต
+ * จะมองข้าม planId แล้วสร้างคำสั่งให้ทุกแผนของวันนั้น ส่วน action ใหม่ รุ่นเก่าตอบ "ไม่รู้จัก" เฉย ๆ
+ */
+async function createOrderFromPlanDay(body, session) {
+  const planId = Number(body?.planId);
+  if (!Number.isFinite(planId) || planId <= 0) throw badRequest('ไม่ระบุแผนผลิต');
+  const recorder = recorderOf(body, session);
+
+  let plans;
+  try {
+    plans = await runSql(
+      `SELECT plan_day_id, CONVERT(NVARCHAR(10), plan_date, 23) AS plan_date,
+              product_key, product_code, product_name, planned_qty, unit, note
+         FROM dbo.kitchen_production_plan_day
+        WHERE plan_day_id = @plan_id;`,
+      { plan_id: { type: sql.BigInt, value: planId } }
+    );
+  } catch (err) {
+    throw planDayMissing(err);
+  }
+  if (plans.length === 0) throw badRequest('ไม่พบแผนผลิตนี้แล้ว (อาจถูกลบไป)');
+
+  return ordersFromPlanRows(plans, plans[0].plan_date, recorder);
+}
+
+/** แถวแผนของวันเดียวกัน → คำสั่งผลิต source = 'plan' (มีใบที่ยังไม่ยกเลิกอยู่แล้ว = ข้าม, ใบที่ยกเลิก = เปิดใหม่) */
+function ordersFromPlanRows(plans, produceDate, recorder) {
   return withTransaction(async (run) => {
     let created = 0;
     let skipped = 0;
@@ -1334,6 +1367,7 @@ export const KITCHEN_ACTIONS = {
   getBranchDemand,
   createOrdersFromDemand,
   createOrdersFromPlan,
+  createOrderFromPlanDay,
   getOrderMaterials,
   getMaterialIssues,
   saveMaterialIssue,
