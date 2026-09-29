@@ -1148,6 +1148,97 @@ async function getKitchenBalance(body) {
   return { branch, asOf, items: rows };
 }
 
+/**
+ * แก้ยอดคงเหลือของวัตถุดิบหนึ่งตัว = บันทึกเป็น "ยอดนับ" ของสาขาครัว (KITCHEN_BRANCH)
+ *
+ * คงเหลือคำนวณสดจากยอดนับล่าสุด (getKitchenBalance) การแก้จึงคือการเพิ่มยอดนับใหม่ ไม่ใช่ทับตัวเลข
+ * ลง dbo.stock_count + ยอดยกมา dbo.stock_balance กติกาเดียวกับหน้านับสต๊อกของสาขา (stock.js)
+ * หน้านับสต๊อกของ Narai-branch สาขาครัวจึงเห็นยอดนี้ด้วย และมีประวัติว่าใครแก้เมื่อไหร่
+ *
+ * countDate = ยอด ณ สิ้นวันไหน — วันนี้ = เวลาตอนกด · วันก่อน = 23:59:59 ของวันนั้น
+ * เส้นแบ่งของคงเหลือเป็น "หลังวันที่นับ" (ใบรับ/ใบเบิกไม่มีเวลา) รายการวันเดียวกับวันนับจึงไม่ถูกรวม
+ * ยอดยกมาอัปเดตเฉพาะเมื่อยอดนี้เป็นยอดล่าสุดของสินค้านั้นจริง ย้อนวันไม่ไปทับยอดใหม่กว่า
+ */
+async function saveKitchenCount(body, session) {
+  const itemKey = normCode(body?.itemKey || body?.itemCode);
+  if (!itemKey) throw badRequest('ไม่ระบุวัตถุดิบ');
+  const raw = body?.remaining;
+  const remaining = num(raw);
+  if (raw === '' || raw === null || raw === undefined || !Number.isFinite(Number(raw)) || remaining < 0) {
+    throw badRequest('ยอดคงเหลือต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป');
+  }
+  const now = bangkokNow();
+  const countDate = ymd(body?.countDate) || now.date;
+  if (countDate > now.date) throw badRequest('ย้อนได้อย่างเดียว ตั้งยอดของวันข้างหน้าไม่ได้');
+  const countedAt = countDate === now.date ? `${now.date} ${now.time}` : `${countDate} 23:59:59`;
+  const branch = kitchenBranch().toLowerCase();
+  const recorder = recorderOf(body, session);
+
+  return withTransaction(async (run) => {
+    const item = await run(
+      `SELECT item_code, item_name, unit FROM dbo.stock_item WHERE item_key = @item_key;`,
+      { item_key: { type: sql.NVarChar(50), value: itemKey } }
+    );
+    const it = item?.recordset?.[0] || {};
+    const itemCode = str(it.item_code) || str(body?.itemCode) || itemKey;
+    const itemName = str(it.item_name) || str(body?.itemName) || null;
+    const unit = str(it.unit) || str(body?.unit) || null;
+
+    const ins = await run(
+      `DECLARE @inserted INT = 0;
+       IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
+                       WHERE branch = @branch AND item_key = @item_key
+                         AND counted_at = CONVERT(DATETIME2(0), @counted_at, 120))
+       BEGIN
+         INSERT INTO dbo.stock_count (counted_at, branch, item_key, item_code, item_name, unit, remaining, counter_name)
+         VALUES (CONVERT(DATETIME2(0), @counted_at, 120), @branch, @item_key, @item_code, @item_name, @unit, @remaining, @counter_name);
+         SET @inserted = 1;
+       END
+       SELECT @inserted AS inserted;`,
+      {
+        counted_at: { type: sql.NVarChar(19), value: countedAt },
+        branch: { type: sql.NVarChar(50), value: branch },
+        item_key: { type: sql.NVarChar(50), value: itemKey },
+        item_code: { type: sql.NVarChar(50), value: itemCode },
+        item_name: { type: sql.NVarChar(255), value: itemName },
+        unit: { type: sql.NVarChar(50), value: unit },
+        remaining: { type: sql.Decimal(18, 3), value: remaining },
+        counter_name: { type: sql.NVarChar(255), value: recorder },
+      }
+    );
+    if (!Number(ins?.recordset?.[0]?.inserted)) {
+      throw badRequest('มียอดนับของวัตถุดิบนี้ในเวลาเดียวกันอยู่แล้ว (อาจกดซ้ำ) — รีเฟรชแล้วตรวจยอดอีกครั้ง');
+    }
+
+    await run(
+      `IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
+                       WHERE branch = @branch AND item_key = @item_key
+                         AND counted_at > CONVERT(DATETIME2(0), @counted_at, 120))
+       MERGE dbo.stock_balance AS t
+       USING (SELECT @branch AS branch, @item_key AS item_key) AS s
+         ON t.branch = s.branch AND t.item_key = s.item_key
+       WHEN MATCHED THEN UPDATE SET
+         item_code = @item_code, item_name = @item_name, balance = @balance,
+         updated_at = CONVERT(DATETIME2(0), @counted_at, 120)
+       WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, balance, updated_at)
+         VALUES (@branch, @item_key, @item_code, @item_name, @balance, CONVERT(DATETIME2(0), @counted_at, 120));`,
+      {
+        branch: { type: sql.NVarChar(50), value: branch },
+        item_key: { type: sql.NVarChar(50), value: itemKey },
+        item_code: { type: sql.NVarChar(50), value: itemCode },
+        item_name: { type: sql.NVarChar(255), value: itemName },
+        balance: { type: sql.Decimal(18, 3), value: remaining },
+        counted_at: { type: sql.NVarChar(19), value: countedAt },
+      }
+    );
+
+    return {
+      itemKey, branch, countedAt, remaining,
+      message: `บันทึกยอดคงเหลือ "${itemName || itemCode}" = ${remaining} ${unit || ''} (ยอด ณ ${countDate === now.date ? 'ตอนนี้' : `สิ้นวัน ${countDate}`})`.trim(),
+    };
+  });
+}
+
 
 /* ==========================================================================
    บันทึกการผลิต + รายงาน
@@ -1374,6 +1465,7 @@ export const KITCHEN_ACTIONS = {
   getMaterialReceipts,
   saveMaterialReceipt,
   getKitchenBalance,
+  saveKitchenCount,
   saveProductionRun,
   deleteProductionRun,
   getProductionReport,
