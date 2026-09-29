@@ -516,9 +516,18 @@ async function getProductionOrders(body) {
             o.order_qty, o.produced_qty, o.unit, o.status, o.source, o.plan_id,
             o.note, o.recorder, o.created_at, o.updated_at,
             CASE WHEN r.recipe_id IS NULL THEN 0 ELSE 1 END AS has_recipe,
-            (SELECT COUNT(*) FROM dbo.kitchen_material_issue mi WHERE mi.order_id = o.order_id) AS issue_count
+            c.issue_count, c.no_price_count, c.material_cost
        FROM dbo.kitchen_production_order o
        LEFT JOIN dbo.kitchen_recipe r ON r.product_key = o.product_key
+       -- ต้นทุนวัตถุดิบจริงของคำสั่ง = ใบเบิกทุกใบ (qty รวมของสูญเสียแล้ว) × unit_price ที่เก็บไว้ตอนเบิก
+       -- คิดแบบเดียวกับ getProductionReport · NULL = ยังไม่มีใบเบิก หรือไม่มีราคาเลยสักบรรทัด
+       OUTER APPLY (
+         SELECT COUNT(*) AS issue_count,
+                SUM(CASE WHEN mi.unit_price IS NULL THEN 1 ELSE 0 END) AS no_price_count,
+                CAST(SUM(mi.qty * mi.unit_price) AS DECIMAL(18,2)) AS material_cost
+           FROM dbo.kitchen_material_issue mi
+          WHERE mi.order_id = o.order_id
+       ) c
       WHERE o.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
         AND (@status IS NULL OR o.status = @status)
       ORDER BY o.produce_date DESC, o.doc_no;`,
