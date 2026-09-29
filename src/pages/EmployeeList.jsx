@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
 import UniformGuide from '../components/UniformGuide';
+import { uniformSpecImage } from '../utils/uniformSpecs';
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -55,6 +56,7 @@ export default function EmployeeList() {
   const [uniformError, setUniformError] = useState('');
   const [uniformQuery, setUniformQuery] = useState('');
   const [uniformPicked, setUniformPicked] = useState(null);
+  const [uniformSpec, setUniformSpec] = useState(null);         // ไอเทมที่เปิดดูรูปสเปคอยู่
   const [uniformQty, setUniformQty] = useState('1');
   const [uniformRows, setUniformRows] = useState([]);
   const [uniformIssuedDate, setUniformIssuedDate] = useState('');
@@ -1019,17 +1021,31 @@ export default function EmployeeList() {
                         </div>
                         {uniformMatches.length === 0 ? (
                           <div className="px-3 py-3 text-xs text-gray-400">ไม่พบไอเทมที่ตรงกับคำค้น</div>
-                        ) : uniformMatches.map((m) => (
-                          <button
-                            key={m.code}
-                            onClick={() => { setUniformPicked(m); setUniformQuery(m.name); }}
-                            className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-violet-50 border-b border-gray-50 last:border-0"
-                          >
-                            <span className="text-xs font-bold text-violet-700 tabular-nums">{m.code}</span>
-                            <span className="flex-1 text-sm text-gray-700 truncate">{m.name}</span>
-                            <span className="text-[11px] text-gray-400">{m.unit}</span>
-                          </button>
-                        ))}
+                        ) : uniformMatches.map((m) => {
+                          const spec = uniformSpecImage(m.code);
+                          return (
+                            <div key={m.code} className="flex items-center gap-2 pr-2 hover:bg-violet-50 border-b border-gray-50 last:border-0">
+                              <button
+                                onClick={() => { setUniformPicked(m); setUniformQuery(m.name); }}
+                                className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2 text-left"
+                              >
+                                <span className="text-xs font-bold text-violet-700 tabular-nums">{m.code}</span>
+                                <span className="flex-1 text-sm text-gray-700 truncate">{m.name}</span>
+                                <span className="text-[11px] text-gray-400">{m.unit}</span>
+                              </button>
+                              {spec ? (
+                                <button
+                                  onClick={() => setUniformSpec({ ...m, image: spec })}
+                                  className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 border border-sky-400 bg-sky-50 text-sky-700 rounded-lg text-xs font-bold hover:bg-sky-100"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5" /> ดูรายละเอียด
+                                </button>
+                              ) : (
+                                <span className="shrink-0 px-2.5 py-1 border border-gray-200 bg-gray-50 text-gray-400 rounded-lg text-xs">ไม่มีรูป</span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1211,6 +1227,34 @@ export default function EmployeeList() {
                 {uniformBusy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 บันทึกข้อมูล
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* รูปสเปคยูนิฟอร์ม — เปิดจากปุ่ม "ดูรายละเอียด" ในรายการค้นหา (ซ้อนบนกล่องยูนิฟอร์ม) */}
+      {uniformSpec && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => setUniformSpec(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
+              <span className="text-sm font-bold text-violet-700 tabular-nums">{uniformSpec.code}</span>
+              <span className="flex-1 min-w-0 text-sm font-bold text-gray-800 truncate">{uniformSpec.name}</span>
+              <button onClick={() => setUniformSpec(null)} aria-label="ปิด" className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto bg-gray-50 p-3">
+              <img src={uniformSpec.image} alt={`สเปค ${uniformSpec.name}`} className="w-full h-auto rounded-lg border border-gray-200 bg-white" />
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                onClick={() => setUniformSpec(null)}
+                className="px-4 py-2 bg-white text-gray-600 border border-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-100"
+              >ปิด</button>
+              <button
+                onClick={() => { setUniformPicked(uniformSpec); setUniformQuery(uniformSpec.name); setUniformSpec(null); }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700"
+              ><Plus className="w-4 h-4" /> เลือกไอเทมนี้</button>
             </div>
           </div>
         </div>
