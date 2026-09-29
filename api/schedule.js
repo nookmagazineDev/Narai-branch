@@ -61,6 +61,7 @@ const READ_ONLY = new Set([
   'getOrderMaterials',
   'getMaterialIssues',
   'getKitchenBalance',
+  'getKitchenCountHistory',
   'getProductionReport',
 ]);
 
