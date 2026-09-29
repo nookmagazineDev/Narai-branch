@@ -1149,6 +1149,32 @@ async function getKitchenBalance(body) {
 }
 
 /**
+ * ประวัติยอดนับของวัตถุดิบหนึ่งตัวในสาขาครัว — ทั้งที่แก้จากหน้าวัตถุดิบคงเหลือของ storefct
+ * (saveKitchenCount) และที่นับจากหน้านับสต๊อกของสาขา เรียงใหม่สุดก่อน
+ * ไม่มีใครลบหรือทับแถวเก่า ประวัติจึงครบทุกครั้งที่บันทึก
+ */
+async function getKitchenCountHistory(body) {
+  const itemKey = normCode(body?.itemKey || body?.itemCode);
+  if (!itemKey) throw badRequest('ไม่ระบุวัตถุดิบ');
+  const limit = Math.min(Math.max(Number(body?.limit) || 30, 1), 200);
+  const rows = await runSql(
+    `SELECT TOP (@limit) c.count_id,
+            CONVERT(NVARCHAR(19), c.counted_at, 120) AS counted_at,
+            c.remaining, c.unit, c.counter_name,
+            CONVERT(NVARCHAR(19), c.created_at, 120) AS created_at
+       FROM dbo.stock_count c
+      WHERE c.branch = @branch AND c.item_key = @item_key
+      ORDER BY c.counted_at DESC, c.count_id DESC;`,
+    {
+      limit: { type: sql.Int, value: limit },
+      branch: { type: sql.NVarChar(50), value: kitchenBranch().toLowerCase() },
+      item_key: { type: sql.NVarChar(50), value: itemKey },
+    }
+  );
+  return { itemKey, branch: kitchenBranch().toLowerCase(), history: rows };
+}
+
+/**
  * แก้ยอดคงเหลือของวัตถุดิบหนึ่งตัว = บันทึกเป็น "ยอดนับ" ของสาขาครัว (KITCHEN_BRANCH)
  *
  * คงเหลือคำนวณสดจากยอดนับล่าสุด (getKitchenBalance) การแก้จึงคือการเพิ่มยอดนับใหม่ ไม่ใช่ทับตัวเลข
@@ -1465,6 +1491,7 @@ export const KITCHEN_ACTIONS = {
   getMaterialReceipts,
   saveMaterialReceipt,
   getKitchenBalance,
+  getKitchenCountHistory,
   saveKitchenCount,
   saveProductionRun,
   deleteProductionRun,
@@ -1484,5 +1511,6 @@ export const KITCHEN_READ_ONLY = [
   'getMaterialIssues',
   'getMaterialReceipts',
   'getKitchenBalance',
+  'getKitchenCountHistory',
   'getProductionReport',
 ];
