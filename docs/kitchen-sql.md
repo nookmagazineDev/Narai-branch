@@ -51,7 +51,7 @@
 | ตาราง | เก็บอะไร |
 |---|---|
 | `kitchen_recipe` + `kitchen_recipe_item` | สูตร: ผลิตหนึ่งชุดได้เท่าไหร่ ใช้วัตถุดิบอะไรบ้าง |
-| `kitchen_production_plan_day` | แผนผลิตรายวันจากปฏิทิน "แพลนผลิต" — หนึ่งแถวต่อเมนูต่อวัน (สร้างด้วย `office-server/sql/kitchen-002-plan-by-date.sql`) |
+| `kitchen_production_plan_day` | แผนผลิตรายวันจากปฏิทิน "แพลนผลิต" — หนึ่งแถวต่องาน เมนูเดิมวันเดิมมีได้หลายแถว (สร้างด้วย `office-server/sql/kitchen-002-plan-by-date.sql` · ปลด unique ด้วย `kitchen-004-plan-day-multi.sql`) คำสั่งผลิตผูกด้วย `kitchen_production_order.plan_day_id` |
 | `kitchen_production_plan` | แผนประจำรอบ (รายวัน/รายสัปดาห์) — เลิกใช้จากหน้าเว็บแล้ว ข้อมูลเดิมยังอยู่ |
 | `kitchen_production_order` | คำสั่งผลิต |
 | `kitchen_production_run` | บันทึกการผลิตจริง ทีละครั้ง |
