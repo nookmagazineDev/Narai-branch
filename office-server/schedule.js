@@ -19,6 +19,7 @@ import { queryRead, withTransaction, describeDbError, isConfigured } from './hr-
 import { STOCK_ACTIONS } from './stock.js';
 import { STORE_WORK_ACTIONS } from './storework.js';
 import { KITCHEN_ACTIONS } from './kitchen.js';
+import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
@@ -1033,6 +1034,9 @@ const ACTIONS = {
 
   // เมนูครัวกลาง (สูตร/สั่งผลิต/เบิกวัตถุดิบ/คงเหลือ/รายงาน) — เรียกจาก storefct เหมือนกัน
   ...KITCHEN_ACTIONS,
+
+  // ผู้ใช้ของแอป storefct (ล็อกอิน/สิทธิ์รายหน้า) — บัญชีแยกจาก hr_user ดู storefct-auth.js
+  ...STOREFCT_AUTH_ACTIONS,
 
   // ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน) — ดู office-server/uniform.js
   // ปุ่ม "เบิกเข้าสาขา" ของกล่องนั้นไม่ได้อยู่ในชุดนี้ มันเรียก saveStock ของ stock.js
