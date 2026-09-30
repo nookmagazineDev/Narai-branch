@@ -50,7 +50,7 @@ export default function EmployeeList() {
      กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้
      คอลัมน์ size ใน UniformBranch ยังอยู่ (รับค่าว่าง) เผื่อข้อมูลเก่าและการคีย์ตรงในฐาน      */
   const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
-  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000* (โหลดครั้งเดียวใช้ซ้ำ)
+  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000*/80001*/8001* (โหลดครั้งเดียวใช้ซ้ำ)
   const [uniformHistory, setUniformHistory] = useState([]);
   const [uniformLoading, setUniformLoading] = useState(false);
   const [uniformError, setUniformError] = useState('');
