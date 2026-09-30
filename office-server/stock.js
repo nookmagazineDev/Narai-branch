@@ -52,11 +52,14 @@ const thaiDateTime = (v) => {
 };
 
 /**
- * ยูนิฟอร์ม (รหัสขึ้นต้น 80000) เป็นของกลางที่ทุกสาขาเบิกได้ — ขึ้นในหน้านับสต๊อก/ขอเบิก/ราคา/ปิดยอด
+ * ยูนิฟอร์ม (รหัสขึ้นต้น 80000, 80001, 8001) เป็นของกลางที่ทุกสาขาเบิกได้ — ขึ้นในหน้านับสต๊อก/ขอเบิก/ราคา/ปิดยอด
  * ของทุกสาขาเสมอ ไม่ต้องไปติ๊กสาขาทีละตัวที่หน้า QC/RD วัตถุดิบ (กติกาเดียวกับ office-server/uniform.js)
  * ค่าคงที่ฝังใน SQL ตรง ๆ ได้เพราะไม่ได้มาจากผู้ใช้
  */
-const UNIFORM_ITEM_PREFIX = '80000';
+const UNIFORM_ITEM_PREFIXES = ['80000', '80001', '8001'];
+
+/** `i.item_code LIKE N'80000%' OR ...` — ต้องครอบ prefix ชุดเดียวกับ UNIFORM_CODE_PREFIXES ใน uniform.js */
+const UNIFORM_ITEM_SQL = UNIFORM_ITEM_PREFIXES.map((p) => `i.item_code LIKE N'${p}%'`).join(' OR ');
 
 const badRequest = (msg) => Object.assign(new Error(msg), { badRequest: true });
 const forbidden = (msg) => Object.assign(new Error(msg), { forbidden: true });
@@ -126,7 +129,7 @@ async function getStockItems(body, session) {
          FROM dbo.stock_item i
         WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
                         WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
-               OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
+               OR ${UNIFORM_ITEM_SQL})
           AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
         ORDER BY i.sort_order, i.item_code`,
       { itemBranch: { type: sql.NVarChar(50), value: itemBranch } }
@@ -243,7 +246,7 @@ async function getItemPrices(body, session) {
        FROM dbo.stock_item i
       WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
                       WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
-             OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
+             OR ${UNIFORM_ITEM_SQL})
         AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
       ORDER BY i.sort_order, i.item_code`,
     { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
@@ -898,7 +901,7 @@ async function getClosingItems(body, session) {
        FROM dbo.stock_item i
       WHERE (EXISTS (SELECT 1 FROM dbo.stock_item_branch b
                       WHERE b.item_key = i.item_key AND b.branch = @itemBranch)
-             OR i.item_code LIKE N'${UNIFORM_ITEM_PREFIX}%')
+             OR ${UNIFORM_ITEM_SQL})
         AND ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
       ORDER BY i.sort_order, i.item_code`,
     { itemBranch: { type: sql.NVarChar(50), value: itemBranchOf(branch) } }
