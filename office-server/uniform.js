@@ -56,25 +56,39 @@ function branchIn(branch, prefix = 'ba') {
 }
 
 /* ===================== รายการไอเทมยูนิฟอร์ม =====================
-   เฉพาะรหัสที่ขึ้นต้นด้วย 80000 — กรองที่ SQL ไม่ใช่ส่งสินค้าทั้งทะเบียน (หลักพันรายการ)
+   เฉพาะรหัสที่ขึ้นต้นด้วย 80000, 80001 (โปโล 8000100-8000118) หรือ 8001 (เอี๊ยม 800107) — กรองที่ SQL ไม่ใช่ส่งสินค้าทั้งทะเบียน (หลักพันรายการ)
    ไปให้เบราว์เซอร์กรองเอง ช่องค้นหาในกล่องจึงขึ้นทันทีและไม่กินเน็ตสาขา
 
    ไม่กรองตามสาขา (ไม่ join stock_item_branch) ต่างจาก getStockItems โดยตั้งใจ:
    ยูนิฟอร์มเป็นของกลางที่ทุกสาขาเบิกได้ ถ้ากรองตามทะเบียนสินค้าของสาขา สาขาที่ยังไม่เคย
    ผูกไอเทมพวกนี้ไว้จะค้นไม่เจออะไรเลยทั้งที่เบิกได้ */
-const UNIFORM_CODE_PREFIX = '80000';
+const UNIFORM_CODE_PREFIXES = ['80000', '80001', '8001'];
+
+/** เงื่อนไข `(col LIKE '80000%' OR ...)` + พารามิเตอร์ ใช้ทุกคำสั่งที่กรองรหัสยูนิฟอร์ม */
+function uniformCodeFilter(col = 'item_code') {
+  const params = {};
+  const cond = UNIFORM_CODE_PREFIXES
+    .map((prefix, i) => {
+      params[`up${i}`] = { type: sql.NVarChar(20), value: prefix };
+      return `${col} LIKE @up${i} + '%'`;
+    })
+    .join(' OR ');
+  return { cond: `(${cond})`, params };
+}
 
 async function getUniformItems() {
+  const codeFilter = uniformCodeFilter();
   const rows = await queryRead(
     `SELECT item_key, item_code, item_name, unit, request_unit, pos_item_id
        FROM dbo.stock_item
-      WHERE item_code LIKE @prefix + '%'
+      WHERE ${codeFilter.cond}
         AND ISNULL(status, N'') <> N'ปิดการใช้งาน'
       ORDER BY item_code`,
-    { prefix: { type: sql.NVarChar(20), value: UNIFORM_CODE_PREFIX } }
+    codeFilter.params
   );
   return {
-    prefix: UNIFORM_CODE_PREFIX,
+    prefix: UNIFORM_CODE_PREFIXES[0],
+    prefixes: UNIFORM_CODE_PREFIXES,
     count: rows.length,
     data: rows.map((r) => ({
       itemKey: str(r.item_key),
@@ -139,17 +153,18 @@ async function getEmployeeRequests(branch, empName) {
   const name = str(empName);
   if (!name) return [];
   const inBranch = branchIn(branch, 'rb');
+  const codeFilter = uniformCodeFilter();
   const rows = await queryRead(
     `SELECT doc_no, item_code, item_name, unit, qty, request_date,
             CONVERT(NVARCHAR(19), saved_at, 120) AS saved_text
        FROM dbo.stock_request
       WHERE requester = @requester
-        AND item_code LIKE @prefix + '%'
+        AND ${codeFilter.cond}
         AND branch IN (${inBranch.list})
       ORDER BY saved_at DESC, request_id DESC`,
     {
       requester: { type: sql.NVarChar(255), value: name },
-      prefix: { type: sql.NVarChar(20), value: UNIFORM_CODE_PREFIX },
+      ...codeFilter.params,
       ...inBranch.params,
     }
   );
@@ -192,14 +207,15 @@ async function getUniformSummary(body, session) {
 
   // ยอดที่ขอเบิกเข้าสาขาในนามแต่ละคน — ใบเบิกไม่มีรหัส HR จึงคีย์ด้วยชื่อ (ดู getEmployeeRequests)
   const inReq = branchIn(branch, 'rb');
+  const reqFilter = uniformCodeFilter();
   const reqRows = await queryRead(
     `SELECT requester, COUNT(DISTINCT doc_no) AS docs, SUM(qty) AS total_qty
        FROM dbo.stock_request
       WHERE requester IS NOT NULL
-        AND item_code LIKE @prefix + '%'
+        AND ${reqFilter.cond}
         AND branch IN (${inReq.list})
       GROUP BY requester`,
-    { prefix: { type: sql.NVarChar(20), value: UNIFORM_CODE_PREFIX }, ...inReq.params }
+    { ...reqFilter.params, ...inReq.params }
   );
   const requested = {};
   for (const r of reqRows) {
