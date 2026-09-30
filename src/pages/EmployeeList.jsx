@@ -543,7 +543,7 @@ export default function EmployeeList() {
   const anniversaryEmployees = getAnniversaryEmployees();
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="max-w-[1600px] mx-auto">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 md:p-8 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -726,7 +726,7 @@ export default function EmployeeList() {
                         {emp.type || '-'}
                       </span>
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{emp.position || '-'}</td>
+                    <td className="px-2 py-2 text-sm text-gray-500 min-w-[7rem] max-w-[11rem]">{emp.position || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{formatDate(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{calculateDuration(emp.startDate)}</td>
                     {/* เลขที่ LOGA (คอลัมน์ BR) — แสดงเลข + ปุ่มแก้ไข, กดแก้ไขถึงจะกรอกได้ (เฉพาะพนักงานที่ยังทำงาน) */}
@@ -769,20 +769,22 @@ export default function EmployeeList() {
                           <span className="font-mono text-gray-900 min-w-[3.5rem]">{emp.loga || '-'}</span>
                           <button
                             onClick={() => setEditingLoga(emp.hrCode)}
-                            className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-600 border border-purple-200 rounded-lg text-xs font-medium hover:bg-purple-100"
+                            className="p-1.5 bg-purple-50 text-purple-600 border border-purple-200 rounded-lg hover:bg-purple-100"
                             title="แก้ไขเลขที่ LOGA"
+                            aria-label="แก้ไขเลขที่ LOGA"
                           >
-                            <Pencil className="w-3 h-3" /> แก้ไข
+                            <Pencil className="w-3 h-3" />
                           </button>
                         </div>
                       )}
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
-                      <div className="flex items-center justify-center gap-2">
+                    {/* ปุ่มจัดการตัดขึ้นบรรทัดใหม่ในความกว้างคงที่ ตารางจะได้ไม่ล้นจอจนปุ่มหลุดขอบขวา */}
+                    <td className="px-2 py-2 text-sm">
+                      <div className="flex flex-wrap items-center justify-start gap-1.5 w-[200px]">
                         <button
                           onClick={() => openUniformModal(emp)}
                           title="ยูนิฟอร์มพนักงาน"
-                          className="inline-flex items-center gap-1 px-3 py-1 bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 rounded-md text-xs font-semibold transition-colors"
+                          className="inline-flex items-center gap-1 px-2 py-1 whitespace-nowrap bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200 rounded-md text-xs font-semibold transition-colors"
                         >
                           <Shirt className="w-3.5 h-3.5" /> ยูนิฟอร์ม
                           {uniformSummary[emp.hrCode]?.rows > 0 && (
@@ -799,7 +801,7 @@ export default function EmployeeList() {
                             </span>
                           )}
                         </button>
-                        <label className={`cursor-pointer inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>
+                        <label className={`cursor-pointer inline-flex items-center gap-1 px-2 py-1 whitespace-nowrap rounded-md text-xs font-medium border transition-colors ${uploadingHr === emp.hrCode ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-purple-50 text-purple-600 hover:bg-purple-100 border-purple-200'}`}>
                           {uploadingHr === emp.hrCode ? (
                             <><Loader2 className="w-3 h-3 animate-spin" /> กำลังอัป...</>
                           ) : (
@@ -822,7 +824,7 @@ export default function EmployeeList() {
                         {emp.status !== 'ลาออก' && (
                           <button
                             onClick={() => openResignModal(emp.hrCode, emp.fullName)}
-                            className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
+                            className="px-2 py-1 whitespace-nowrap bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-md text-xs font-medium transition-colors"
                           >
                             แจ้งลาออก
                           </button>
