@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet, Search, Fingerprint } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { isStaleBuild } from '../services/api';
 
 export default function DashboardLayout() {
@@ -20,8 +20,13 @@ export default function DashboardLayout() {
     }
   });
 
-  const setTopStats = (stats) => {
-    setTopStatsState(stats);
+  // ต้องเป็นฟังก์ชันตัวเดิมทุกครั้งที่เรนเดอร์ — หน้าแดชบอร์ดใส่ setTopStats ไว้ใน deps ของ useEffect
+  // ถ้าสร้างใหม่ทุกรอบ: แดชบอร์ดตั้งค่า → layout เรนเดอร์ใหม่ → ได้ฟังก์ชันใหม่ → แดชบอร์ดตั้งค่าอีก วนไม่จบ
+  // ลูปนี้ทำให้ React ไม่ว่างพอจะสลับหน้า (การนำทางของ router เป็น transition ที่ถูกแซงตลอด)
+  // อาการคือกดเมนูแล้วหน้าไม่เปลี่ยน ต้องกดรีเฟรชเอง
+  const setTopStats = useCallback((stats) => {
+    // ค่าเหมือนเดิม → ไม่ต้องเรนเดอร์ใหม่
+    setTopStatsState(prev => (JSON.stringify(prev) === JSON.stringify(stats) ? prev : stats));
     try {
       if (stats) {
         sessionStorage.setItem('dashboard_top_stats', JSON.stringify(stats));
@@ -29,7 +34,8 @@ export default function DashboardLayout() {
         sessionStorage.removeItem('dashboard_top_stats');
       }
     } catch (e) {}
-  };
+  }, []);
+  const outletContext = useMemo(() => ({ setTopStats }), [setTopStats]);
 
   /* ไฟล์ที่เบราว์เซอร์ถืออยู่เก่ากว่าที่ deploy จริง — ต้องบอก ไม่ใช่ปล่อยให้ทำงานต่อเงียบ ๆ
      เครื่องสาขาเปิดหน้าค้างไว้ข้ามวันเป็นเรื่องปกติ และไฟล์ชุดเก่าเคยทำให้บันทึกสต๊อกลงชีทเก่า
@@ -274,7 +280,7 @@ export default function DashboardLayout() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-auto p-4 md:p-8">
-          <Outlet context={{ setTopStats }} />
+          <Outlet context={outletContext} />
         </div>
       </main>
     </div>
