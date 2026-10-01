@@ -1131,8 +1131,19 @@ async function getKitchenBalance(body) {
         UNION SELECT item_key FROM dbo.kitchen_material_receipt
         -- วัตถุดิบที่เคยนับที่สาขาครัว (นำเข้ายอดนับจาก Excel / แก้ยอด) = วัตถุดิบของครัวด้วย แม้ยังไม่อยู่ในสูตรหรือใบเบิก
         UNION SELECT item_key FROM dbo.stock_count WHERE branch = @branch
+     ),
+     -- ชื่อ/หน่วยจากยอดนับล่าสุดของครัว — ใช้แทนเมื่อรหัสยังไม่มีใน stock_item (นำเข้าจากไฟล์นับของครัว)
+     kc AS (
+        SELECT item_key, item_code, item_name, unit,
+               ROW_NUMBER() OVER (PARTITION BY item_key ORDER BY counted_at DESC) AS rn
+          FROM dbo.stock_count
+         WHERE branch = @branch
      )
-     SELECT i.item_key, i.item_code, i.item_name, i.unit,
+     SELECT s.item_key,
+            COALESCE(i.item_code, kc.item_code) AS item_code,
+            COALESCE(i.item_name, kc.item_name) AS item_name,
+            COALESCE(i.unit, kc.unit) AS unit,
+            CASE WHEN i.item_key IS NULL THEN 0 ELSE 1 END AS in_registry,
             COALESCE(lc.remaining, 0) AS counted_qty,
             lc.count_date,
             COALESCE(mr.qty, 0) + COALESCE(rc.qty, 0) AS received_qty,
@@ -1140,34 +1151,37 @@ async function getKitchenBalance(body) {
             COALESCE(pr.qty, 0) AS produced_qty,
             COALESCE(lc.remaining, 0) + COALESCE(mr.qty, 0) + COALESCE(rc.qty, 0)
               - COALESCE(iss.qty, 0) + COALESCE(pr.qty, 0) AS balance
-       FROM dbo.stock_item i
-       JOIN scope s ON s.item_key = i.item_key
-       LEFT JOIN lc ON lc.item_key = i.item_key
+       FROM scope s
+       LEFT JOIN dbo.stock_item i ON i.item_key = s.item_key
+       LEFT JOIN kc ON kc.item_key = s.item_key AND kc.rn = 1
+       LEFT JOIN lc ON lc.item_key = s.item_key
        OUTER APPLY (
          SELECT SUM(r.qty_received) AS qty FROM dbo.store_receiving r
-          WHERE r.item_key = i.item_key AND r.branch = @branch
+          WHERE r.item_key = s.item_key AND r.branch = @branch
             AND r.receive_date > COALESCE(lc.count_date, '19000101')
             AND (@as_of IS NULL OR r.receive_date <= CONVERT(DATE, @as_of, 23))
        ) rc
        OUTER APPLY (
          SELECT SUM(m.qty) AS qty FROM dbo.kitchen_material_receipt m
-          WHERE m.item_key = i.item_key
+          WHERE m.item_key = s.item_key
             AND m.receive_date > COALESCE(lc.count_date, '19000101')
             AND (@as_of IS NULL OR m.receive_date <= CONVERT(DATE, @as_of, 23))
        ) mr
        OUTER APPLY (
          SELECT SUM(m.qty) AS qty FROM dbo.kitchen_material_issue m
-          WHERE m.item_key = i.item_key
+          WHERE m.item_key = s.item_key
             AND m.issue_date > COALESCE(lc.count_date, '19000101')
             AND (@as_of IS NULL OR m.issue_date <= CONVERT(DATE, @as_of, 23))
        ) iss
        OUTER APPLY (
          SELECT SUM(p.qty_produced) AS qty FROM dbo.kitchen_production_run p
-          WHERE p.product_key = i.item_key
+          WHERE p.product_key = s.item_key
             AND p.produce_date > COALESCE(lc.count_date, '19000101')
             AND (@as_of IS NULL OR p.produce_date <= CONVERT(DATE, @as_of, 23))
        ) pr
-      ORDER BY i.item_name;`,
+      -- ไม่มีในทะเบียนสินค้าและไม่เคยนับที่ครัว (เช่นรหัสเมนูในสูตรเก่า) = ไม่ใช่วัตถุดิบที่แสดงได้ ตัดออกเหมือนเดิม
+      WHERE i.item_key IS NOT NULL OR kc.item_key IS NOT NULL
+      ORDER BY COALESCE(i.item_name, kc.item_name);`,
     {
       branch: { type: sql.NVarChar(50), value: branch },
       as_of: { type: sql.NVarChar(10), value: asOf },
@@ -1392,7 +1406,8 @@ async function saveKitchenCount(body, session) {
  *
  * items: [{ itemCode, remaining }] · countDate = ยอด ณ สิ้นวันไหน (กติกาเดียวกับ saveKitchenCount)
  * ทั้งหมดอยู่ใน transaction เดียว — พลาดตัวไหน ไม่มีอะไรถูกบันทึก
- * นำเข้าไฟล์เดิมซ้ำวันเดิม = ทับยอดนับเวลาเดียวกัน (ไม่เกิดแถวซ้ำ) · รหัสที่ไม่มีใน stock_item ข้ามและแจ้งกลับ
+ * นำเข้าไฟล์เดิมซ้ำวันเดิม = ทับยอดนับเวลาเดียวกัน (ไม่เกิดแถวซ้ำ)
+ * รหัสที่ไม่มีใน stock_item นำเข้าด้วยชื่อ/หน่วยจากไฟล์ (แจ้งกลับใน unregistered) — ไม่มีชื่อด้วยถึงข้าม (skipped)
  * วัตถุดิบที่นับแล้วจะขึ้นในหน้าวัตถุดิบคงเหลือ (getKitchenBalance นับ stock_count ของสาขาครัวเป็น scope)
  */
 async function saveKitchenCounts(body, session) {
@@ -1410,7 +1425,10 @@ async function saveKitchenCounts(body, session) {
     if (raw === '' || raw === null || raw === undefined || !Number.isFinite(Number(raw)) || Number(raw) < 0) {
       throw badRequest(`ยอดของรหัส ${str(it?.itemCode) || itemKey} ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป`);
     }
-    seen.set(itemKey, { itemKey, code: str(it?.itemCode), remaining: num(raw) }); // รหัสซ้ำในไฟล์ = ใช้แถวหลังสุด
+    seen.set(itemKey, {
+      itemKey, code: str(it?.itemCode), remaining: num(raw),
+      name: str(it?.itemName).slice(0, 255), unit: str(it?.unit).slice(0, 50),
+    }); // รหัสซ้ำในไฟล์ = ใช้แถวหลังสุด
   }
   const list = [...seen.values()];
   if (list.length === 0) throw badRequest('ไม่มีรายการให้นำเข้า');
@@ -1423,16 +1441,20 @@ async function saveKitchenCounts(body, session) {
     let saved = 0;
     let replaced = 0;
     const skipped = [];
+    const unregistered = [];
     for (const it of list) {
       const item = await run(
         `SELECT item_code, item_name, unit FROM dbo.stock_item WHERE item_key = @item_key;`,
         { item_key: { type: sql.NVarChar(50), value: it.itemKey } }
       );
+      // รหัสที่ยังไม่มีใน stock_item = วัตถุดิบเฉพาะของครัว ยังนำเข้าได้ ใช้ชื่อ/หน่วยจากไฟล์
+      // (getKitchenBalance แสดงด้วยชื่อจากยอดนับ) — ไม่มีชื่อในไฟล์เลยถึงข้าม
       const row = item?.recordset?.[0];
-      if (!row) { skipped.push(it.code || it.itemKey); continue; }
-      const itemCode = str(row.item_code) || it.code || it.itemKey;
-      const itemName = str(row.item_name) || null;
-      const unit = str(row.unit) || null;
+      if (!row && !it.name) { skipped.push(it.code || it.itemKey); continue; }
+      if (!row) unregistered.push(it.code || it.itemKey);
+      const itemCode = str(row?.item_code) || it.code || it.itemKey;
+      const itemName = str(row?.item_name) || it.name || null;
+      const unit = str(row?.unit) || it.unit || null;
 
       const res = await run(
         `DECLARE @replaced INT = 0;
@@ -1466,9 +1488,10 @@ async function saveKitchenCounts(body, session) {
       saved++;
     }
     return {
-      branch, countedAt, saved, replaced, skipped,
+      branch, countedAt, saved, replaced, skipped, unregistered,
       message: `นำเข้ายอดนับ ณ ${countDate === now.date ? 'ตอนนี้' : `สิ้นวัน ${countDate}`} แล้ว ${saved} รายการ`
         + (replaced ? ` (ทับยอดเดิมของเวลาเดียวกัน ${replaced})` : '')
+        + (unregistered.length ? ` · ${unregistered.length} รายการยังไม่มีในทะเบียนสินค้า (ใช้ชื่อจากไฟล์)` : '')
         + (skipped.length ? ` · ข้าม ${skipped.length} รหัสที่ไม่มีในทะเบียนสินค้า` : ''),
     };
   });
