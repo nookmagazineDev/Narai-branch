@@ -55,6 +55,23 @@ function bangkokNow() {
 const kitchenBranch = () => str(process.env.KITCHEN_BRANCH) || 'kitchen';
 
 /**
+ * รหัสสาขาที่ติ๊กไว้ใน "สาขาที่ใช้" ของ QC/RD > วัตถุดิบ (naraipizzeria) = วัตถุดิบของครัวกลาง
+ * dbo.stock_item_branch เก็บรหัสสาขาตัวพิมพ์เล็ก · ครัวกลางใน QC/RD คือ FCT
+ * รวม KITCHEN_BRANCH ไว้ด้วย เผื่อสองค่านี้ตั้งตรงกันอยู่แล้วหรือวันหนึ่งเปลี่ยนรหัส (ตั้งทับได้ที่ env KITCHEN_ITEM_BRANCH)
+ */
+const kitchenItemBranches = () => [...new Set([
+  (str(process.env.KITCHEN_ITEM_BRANCH) || 'fct').toLowerCase(),
+  kitchenBranch().toLowerCase(),
+])];
+const itemBranchParams = () => {
+  const [b1, b2 = b1] = kitchenItemBranches();
+  return {
+    item_branch1: { type: sql.NVarChar(50), value: b1 },
+    item_branch2: { type: sql.NVarChar(50), value: b2 },
+  };
+};
+
+/**
  * เลขที่เอกสารถัดไปของวันนั้น เช่น PRD-20260917-003
  *
  * นับต่อจากเลขสูงสุดของวันเดียวกัน ไม่ได้ใช้ SEQUENCE เพราะอยากให้เลขรีเซ็ตทุกวันและอ่านออก
@@ -91,12 +108,16 @@ const recorderOf = (body, session) =>
  */
 async function getKitchenItems(body) {
   const includeInactive = body?.includeInactive === true;
+  // is_kitchen = ติ๊กสาขา FCT ไว้ใน QC/RD > วัตถุดิบ — หน้าเว็บใช้เรียงวัตถุดิบของครัวขึ้นก่อน
   const rows = await runSql(
-    `SELECT item_key, item_code, item_name, unit, request_unit, store_cat, price
-       FROM dbo.stock_item
-      WHERE (@all = 1 OR status IS NULL OR status <> N'ปิดการใช้งาน')
-      ORDER BY item_name;`,
-    { all: { type: sql.Bit, value: includeInactive } }
+    `SELECT i.item_key, i.item_code, i.item_name, i.unit, i.request_unit, i.store_cat, i.price,
+            CASE WHEN EXISTS (SELECT 1 FROM dbo.stock_item_branch b
+                               WHERE b.item_key = i.item_key AND b.branch IN (@item_branch1, @item_branch2))
+                 THEN 1 ELSE 0 END AS is_kitchen
+       FROM dbo.stock_item i
+      WHERE (@all = 1 OR i.status IS NULL OR i.status <> N'ปิดการใช้งาน')
+      ORDER BY i.item_name;`,
+    { all: { type: sql.Bit, value: includeInactive }, ...itemBranchParams() }
   );
   return { items: rows };
 }
@@ -1131,6 +1152,8 @@ async function getKitchenBalance(body) {
         UNION SELECT item_key FROM dbo.kitchen_material_receipt
         -- วัตถุดิบที่เคยนับที่สาขาครัว (นำเข้ายอดนับจาก Excel / แก้ยอด) = วัตถุดิบของครัวด้วย แม้ยังไม่อยู่ในสูตรหรือใบเบิก
         UNION SELECT item_key FROM dbo.stock_count WHERE branch = @branch
+        -- วัตถุดิบที่ติ๊กสาขา FCT ไว้ใน QC/RD > วัตถุดิบ (naraipizzeria) = รายการของครัว แม้ยังไม่เคยนับ/เบิก
+        UNION SELECT item_key FROM dbo.stock_item_branch WHERE branch IN (@item_branch1, @item_branch2)
      ),
      -- ชื่อ/หน่วยจากยอดนับล่าสุดของครัว — ใช้แทนเมื่อรหัสยังไม่มีใน stock_item (นำเข้าจากไฟล์นับของครัว)
      kc AS (
@@ -1144,6 +1167,9 @@ async function getKitchenBalance(body) {
             COALESCE(i.item_name, kc.item_name) AS item_name,
             COALESCE(i.unit, kc.unit) AS unit,
             CASE WHEN i.item_key IS NULL THEN 0 ELSE 1 END AS in_registry,
+            CASE WHEN EXISTS (SELECT 1 FROM dbo.stock_item_branch b
+                               WHERE b.item_key = s.item_key AND b.branch IN (@item_branch1, @item_branch2))
+                 THEN 1 ELSE 0 END AS is_kitchen,
             COALESCE(lc.remaining, 0) AS counted_qty,
             lc.count_date,
             COALESCE(mr.qty, 0) + COALESCE(rc.qty, 0) AS received_qty,
@@ -1185,9 +1211,10 @@ async function getKitchenBalance(body) {
     {
       branch: { type: sql.NVarChar(50), value: branch },
       as_of: { type: sql.NVarChar(10), value: asOf },
+      ...itemBranchParams(),
     }
   );
-  return { branch, asOf, items: rows };
+  return { branch, asOf, itemBranches: kitchenItemBranches(), items: rows };
 }
 
 /**
