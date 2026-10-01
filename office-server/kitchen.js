@@ -1577,6 +1577,72 @@ async function getProductionReport(body) {
 }
 
 
+
+/* ==========================================================================
+   เปิด/ปิดเมนูในหน้าครัวกลาง — หน้า "เมนูครัวกลาง" ของ storefct
+   ตาราง dbo.kitchen_menu_setting (office-server/sql/kitchen-005-menu-setting.sql)
+   เก็บเฉพาะเมนูที่เคยกดเปิด/ปิด · ไม่มีแถว = แสดงตามปกติ
+========================================================================== */
+
+const menuSettingMissing = (err) => (
+  err?.number === 208 || /Invalid object name '(dbo\.)?kitchen_menu_setting'/i.test(String(err?.message))
+    ? badRequest('ยังไม่มีตารางตั้งค่าเมนูครัว — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน')
+    : err);
+
+async function getKitchenMenuSettings() {
+  try {
+    const rows = await runSql(
+      `SELECT product_key, product_name, is_hidden, recorder, updated_at
+         FROM dbo.kitchen_menu_setting
+        WHERE is_hidden = 1;`
+    );
+    return { hidden: rows.map((r) => r.product_key), settings: rows };
+  } catch (err) {
+    // ยังไม่ได้รัน sql/kitchen-005 = ยังไม่มีเมนูที่ถูกปิด หน้าอื่นใช้ได้ตามเดิม
+    if (menuSettingMissing(err) !== err) return { hidden: [], settings: [], missingTable: true };
+    throw err;
+  }
+}
+
+/** ปิด/เปิดเมนูทีละหลายตัวได้ — items: [{ productKey, productName, hidden }] */
+async function setKitchenMenuHidden(body, session) {
+  const list = (Array.isArray(body?.items) ? body.items : [body])
+    .map((it) => ({ key: normCode(it?.productKey || it?.productCode), name: str(it?.productName).slice(0, 255), hidden: Boolean(it?.hidden) }))
+    .filter((it) => it.key);
+  if (list.length === 0) throw badRequest('ไม่ระบุเมนู');
+  if (list.length > 2000) throw badRequest('ตั้งค่าได้ครั้งละไม่เกิน 2000 เมนู');
+  const recorder = recorderOf(body, session);
+  try {
+    return await withTransaction(async (run) => {
+      for (const it of list) {
+        await run(
+          `MERGE dbo.kitchen_menu_setting AS t
+           USING (SELECT @product_key AS product_key) AS s ON t.product_key = s.product_key
+           WHEN MATCHED THEN UPDATE SET is_hidden = @is_hidden, product_name = COALESCE(@product_name, t.product_name),
+                                        recorder = @recorder, updated_at = SYSDATETIME()
+           WHEN NOT MATCHED THEN INSERT (product_key, product_name, is_hidden, recorder)
+                                 VALUES (@product_key, @product_name, @is_hidden, @recorder);`,
+          {
+            product_key: { type: sql.NVarChar(50), value: it.key },
+            product_name: { type: sql.NVarChar(255), value: orNull(it.name) },
+            is_hidden: { type: sql.Bit, value: it.hidden },
+            recorder: { type: sql.NVarChar(255), value: recorder },
+          }
+        );
+      }
+      const off = list.filter((it) => it.hidden).length;
+      return {
+        saved: list.length,
+        message: list.length === 1
+          ? `${list[0].hidden ? 'ปิด' : 'เปิด'}เมนู "${list[0].name || list[0].key}" แล้ว`
+          : `บันทึกแล้ว ${list.length} เมนู (ปิด ${off} · เปิด ${list.length - off})`,
+      };
+    });
+  } catch (err) {
+    throw menuSettingMissing(err);
+  }
+}
+
 export const KITCHEN_ACTIONS = {
   getKitchenItems,
   getKitchenRecipes,
@@ -1608,6 +1674,8 @@ export const KITCHEN_ACTIONS = {
   saveProductionRun,
   deleteProductionRun,
   getProductionReport,
+  getKitchenMenuSettings,
+  setKitchenMenuHidden,
 };
 
 /** action ที่อ่านอย่างเดียว — ปลอดภัยที่จะลองใหม่เมื่อเน็ตสะดุด (ดู READ_ONLY ใน api/schedule.js) */
