@@ -204,6 +204,9 @@ export default function ScheduleWeekly() {
   ];
   const otOpts = ['0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '4.5', '5'];
   const hrLeaveOpts = ['0', '1', '2', '3', '4', '5', '6', '7', '8'];
+  // ใช้ชั่วโมงสะสม: ทีละครึ่งชั่วโมงเหมือนช่องชั่วโมงสะสม (สะสมได้ .5 ก็ต้องใช้ได้ .5) ถึง 8 ชม. เท่าเดิม
+  // แยกจาก hrLeaveOpts เพราะลารายชั่วโมงถูก parseInt ในสูตรค่าแรง (calculateCellWage) จึงต้องเป็นจำนวนเต็มต่อไป
+  const useAccumOpts = Array.from({ length: 17 }, (_, i) => String(i / 2));
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1436,7 +1439,7 @@ export default function ScheduleWeekly() {
                       onChange={(e) => setCellData({...cellData, useAccum: e.target.value})}
                     >
                       <option value="">-</option>
-                      {hrLeaveOpts.map(h => <option key={h} value={h}>{h}</option>)}
+                      {useAccumOpts.map(h => <option key={h} value={h}>{h}</option>)}
                     </select>
                   </div>
                 </div>
