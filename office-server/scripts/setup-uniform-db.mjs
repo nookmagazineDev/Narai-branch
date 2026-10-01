@@ -9,7 +9,7 @@
  *   3) คอลัมน์ครบตามที่ uniform.js อ้างถึง
  *   4) มีอินเด็กซ์ทั้งสองตัว (เปิดกล่องของพนักงาน + สรุปรายสาขาถึงจะไม่ช้า)
  *   5) login ที่เว็บใช้มีสิทธิ์ SELECT / INSERT / DELETE บนตารางนี้
- *   6) มีไอเทมรหัส 800000* ใน dbo.stock_item (ไม่มี = ช่องค้นหาในกล่องจะว่างเปล่า)
+ *   6) มีไอเทมรหัส 80000* / 80001* / 8001* ใน dbo.stock_item (ไม่มี = ช่องค้นหาในกล่องจะว่างเปล่า)
  *   7) มีตาราง dbo.stock_request (ปุ่ม "เบิกเข้าสาขา" ลงตารางเดียวกับใบเบิกของสต๊อก)
  *   8) ตอนนี้มีข้อมูลอยู่กี่แถว
  *
@@ -20,7 +20,7 @@
  *
  * ตัวเลือก
  *   --check              อ่านอย่างเดียว ไม่สร้าง/ไม่แก้อะไรในฐานข้อมูล
- *   --sync-items         ซิงก์ทะเบียนสินค้าจากชีท BOM ก่อนตรวจ (ใส่เมื่อไอเทม 800000* ยังไม่ขึ้น)
+ *   --sync-items         ซิงก์ทะเบียนสินค้าจากชีท BOM ก่อนตรวจ (ใส่เมื่อไอเทมยูนิฟอร์มยังไม่ขึ้น)
  *   --user= --password=  ใช้ login อื่นแทนค่าใน .env (ใส่ตอนที่ login ของเว็บสร้างตารางไม่ได้)
  *   --db=InventoryNarai  ฐานข้อมูลปลายทาง (ไม่ใส่ = STOCK_DB_NAME ใน .env หรือ InventoryNarai)
  *   --file=<path>        ไฟล์สคีมาที่จะรัน (ไม่ใส่ = docs/schema-uniform.sql ของ repo นี้)
@@ -54,6 +54,11 @@ const argVal = (name, fallback) => {
 const CHECK_ONLY = args.includes('--check');
 const SYNC_ITEMS = args.includes('--sync-items');
 const SQL_FILE = path.resolve(here, argVal('file', path.join('..', '..', 'docs', 'schema-uniform.sql')));
+
+/* รหัสขึ้นต้นของไอเทมยูนิฟอร์ม (ใช้ในข้อ 6) — ต้องตรงกับ UNIFORM_CODE_PREFIXES ใน uniform.js
+   และ UNIFORM_ITEM_PREFIXES ใน stock.js เพิ่ม/ลดที่ไหนต้องแก้ให้ครบทั้งสามที่ */
+const UNIFORM_PREFIXES = ['80000', '80001', '8001'];
+const UNIFORM_LABEL = UNIFORM_PREFIXES.map((p) => `${p}*`).join('/');
 
 /* ทับค่า login/ฐานข้อมูลก่อน import hr-db.js — ไฟล์นั้นอ่าน env ตอนเรียกใช้ จึงทับทีนี่ได้
    ประโยชน์คือรันด้วย sa ได้ครั้งเดียวโดยไม่ต้องไปแก้ .env ที่ service ใช้อยู่ */
@@ -108,7 +113,7 @@ async function main() {
 
   /* ---------- 0. ซิงก์ทะเบียนสินค้า (เฉพาะเมื่อสั่ง) ----------
      ตัวเดียวกับรอบอัตโนมัติทุกชั่วโมงของ service และ action syncItemRegistry ในหน้าเว็บ
-     ใส่ไว้ที่นี่เพราะไอเทม 800000* ที่จัดซื้อเพิ่งเพิ่มในชีท จะยังไม่ขึ้นในกล่องจนกว่าจะซิงก์ */
+     ใส่ไว้ที่นี่เพราะไอเทมยูนิฟอร์มที่จัดซื้อเพิ่งเพิ่มในชีท จะยังไม่ขึ้นในกล่องจนกว่าจะซิงก์ */
   if (SYNC_ITEMS) {
     if (CHECK_ONLY) {
       console.log('0) --sync-items ใช้กับ --check ไม่ได้ (อันหนึ่งเขียน อันหนึ่งอ่านอย่างเดียว) — ข้ามการซิงก์');
@@ -212,26 +217,33 @@ async function main() {
     console.log('      ตรวจของ service ซ้ำด้วย: node scripts/setup-uniform-db.mjs --check');
   }
 
-  /* ---------- 6. ทะเบียนไอเทม 800000* ----------
+  /* ---------- 6. ทะเบียนไอเทมยูนิฟอร์ม ----------
      กล่องยูนิฟอร์มไม่ได้มีทะเบียนไอเทมของตัวเอง อ่านจาก dbo.stock_item ที่ซิงก์มาจากชีท BOM
-     ถ้าไม่มีรหัสขึ้นต้น 800000 เลย ตารางจะพร้อมแต่ช่องค้นหาในกล่องจะว่าง (คนใช้จะแจ้งว่า "หาไม่เจอ") */
+     ถ้าไม่มีรหัสขึ้นต้นตาม UNIFORM_PREFIXES เลย ตารางจะพร้อมแต่ช่องค้นหาในกล่องจะว่าง (คนใช้จะแจ้งว่า "หาไม่เจอ") */
   const hasStockItem = Boolean(
     (await stockDb.queryRead(`SELECT OBJECT_ID(N'dbo.stock_item', N'U') AS id`))[0]?.id
   );
   if (!hasStockItem) {
-    console.log(`6) ไอเทมยูนิฟอร์ม 800000*    ${yes(false)} ไม่มีตาราง dbo.stock_item`);
+    console.log(`6) ไอเทมยูนิฟอร์ม            ${yes(false)} ไม่มีตาราง dbo.stock_item`);
     fail('รัน docs/schema-stock.sql ก่อน (กล่องยูนิฟอร์มอ่านทะเบียนไอเทมจากตารางนั้น)');
   } else {
+    const params = {};
+    const cond = UNIFORM_PREFIXES
+      .map((prefix, i) => {
+        params[`up${i}`] = { type: sql.NVarChar(20), value: prefix };
+        return `item_code LIKE @up${i} + '%'`;
+      })
+      .join(' OR ');
     const items = await stockDb.queryRead(
       `SELECT COUNT(*) AS n
          FROM dbo.stock_item
-        WHERE item_code LIKE @prefix + '%' AND ISNULL(status, N'') <> N'ปิดการใช้งาน'`,
-      { prefix: { type: sql.NVarChar(20), value: '800000' } }
+        WHERE (${cond}) AND ISNULL(status, N'') <> N'ปิดการใช้งาน'`,
+      params
     );
     const n = Number(items[0]?.n || 0);
-    console.log(`6) ไอเทมยูนิฟอร์ม 800000*    ${yes(n > 0)} ${n} รายการใน dbo.stock_item`);
+    console.log(`6) ไอเทมยูนิฟอร์ม            ${yes(n > 0)} ${n} รายการใน dbo.stock_item (รหัส ${UNIFORM_LABEL})`);
     if (n === 0) {
-      fail('ยังไม่มีไอเทมรหัส 800000* — เพิ่มในชีท BOM แท็บ item ก่อน แล้วสั่งซิงก์ด้วย --sync-items');
+      fail(`ยังไม่มีไอเทมรหัส ${UNIFORM_LABEL} — เพิ่มในชีท BOM แท็บ item ก่อน แล้วสั่งซิงก์ด้วย --sync-items`);
     }
   }
 

@@ -37,7 +37,7 @@ CREATE TABLE dbo.UniformBranch (
     hr_code     NVARCHAR(50)   NOT NULL,      -- รหัส HR ของพนักงาน
     emp_name    NVARCHAR(255)  NULL,          -- ชื่อพนักงาน ณ วันที่บันทึก
     item_key    NVARCHAR(50)   NOT NULL,      -- รหัสไอเทมที่ normalize แล้ว
-    item_code   NVARCHAR(50)   NOT NULL,      -- รหัสไอเทมตามที่แสดง (ขึ้นต้น 800000)
+    item_code   NVARCHAR(50)   NOT NULL,      -- รหัสไอเทมตามที่แสดง (ขึ้นต้น 80000 / 80001 / 8001)
     item_name   NVARCHAR(255)  NULL,          -- ชื่อไอเทม ณ วันที่บันทึก
     unit        NVARCHAR(50)   NULL,          -- หน่วย (ตัว / ผืน / ใบ)
     size        NVARCHAR(20)   NULL,          -- ไซซ์เสื้อ S / M / L / XL / 2XL / 3XL หรือ NULL
