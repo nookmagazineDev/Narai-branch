@@ -8,11 +8,12 @@
 // เพราะการตั้งค่าปุ่มเข้า/ออกของแต่ละเครื่องไม่เหมือนกัน (แสดง punch_state ไว้ในตารางรายการดิบแทน)
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered } from 'lucide-react';
+import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered, AlertTriangle, CheckCircle2, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 import { fetchAttendance } from '../services/dashboardApi';
-import { hhmm, summarizeDaily, attachSchedule } from '../utils/attendance';
+import { hhmm, summarizeDaily, attachSchedule, scanAlerts, fmtDiff } from '../utils/attendance';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -38,6 +39,27 @@ const lateCell = (v) => {
   return <span className="font-mono font-semibold text-rose-600">{v}</span>;
 };
 const num2 = (v) => (v != null ? v.toFixed(2) : '-');
+const fmtStamp = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const SIDE_LABEL = { in: 'เข้างาน', out: 'ออกงาน' };
+
+/** เวลาสแกนในตาราง + ป้ายแจ้งเตือนถ้าช่องนี้ต่างจากตารางงานเกิน 2 ชม. */
+const scanCell = (t, cls, alert, resolved) => {
+  if (!t) return <Dash />;
+  if (alert && !resolved) {
+    return (
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 ring-1 ring-amber-300 font-mono font-semibold text-amber-800"
+        title={`ต่างจากตารางงาน ${fmtDiff(alert.diffMin)}`}>
+        <AlertTriangle className="w-3.5 h-3.5" />{t}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={`font-mono ${cls}`}>{t}</span>
+      {alert && resolved && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" title="แก้ไขแล้ว" />}
+    </span>
+  );
+};
 
 export default function Attendance() {
   const { user } = useAuth();
@@ -57,6 +79,10 @@ export default function Attendance() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(''); // '' = ทุกวันในช่วงที่โหลดมา
   const [view, setView] = useState('daily'); // 'daily' = สรุปรายวัน | 'raw' = รายการสแกนทั้งหมด
+  const navigate = useNavigate();
+  // แจ้งเตือนที่กด "แก้ไขแล้ว" — key ของ scanAlerts() -> { by, at }
+  const [resolvedMap, setResolvedMap] = useState({});
+  const [showResolved, setShowResolved] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -128,6 +154,18 @@ export default function Attendance() {
 
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
 
+  // แจ้งเตือนคิดจากข้อมูลทั้งช่วงที่โหลดมา ไม่ตามช่องค้นหา/ตัวกรองวันที่ — ค้นชื่ออยู่ต้องไม่ทำให้แจ้งเตือนหาย
+  const alerts = useMemo(() => scanAlerts(attachSchedule(summarizeDaily(rows || []), schedRows)), [rows, schedRows]);
+  const pending = alerts.filter((a) => !resolvedMap[a.key]);
+  const resolved = alerts.filter((a) => resolvedMap[a.key]);
+  const alertOf = useMemo(() => new Map(alerts.map((a) => [a.key, a])), [alerts]);
+
+  const markResolved = (a) => {
+    setResolvedMap((prev) => ({ ...prev, [a.key]: { by: user?.name || user?.username || '-', at: new Date() } }));
+    toast.success(`${a.name || a.empCode} · ${SIDE_LABEL[a.side]} ${a.date} — บันทึกว่าแก้ไขแล้ว`);
+  };
+  const undoResolved = (a) => setResolvedMap((prev) => { const next = { ...prev }; delete next[a.key]; return next; });
+
   return (
     <div className="max-w-7xl mx-auto space-y-5">
       {/* Header */}
@@ -179,6 +217,88 @@ export default function Attendance() {
         </button>
         {!loading && loadedRange && <span className="text-xs text-gray-400">ข้อมูล: {loadedRange}</span>}
       </div>
+
+
+      {/* แจ้งเตือน: สแกนเข้า/ออกต่างจากตารางงานเกิน 2 ชม. (ไม่ดูเบรค) */}
+      {rows !== null && alerts.length > 0 && (
+        <div className={`bg-white rounded-2xl shadow-sm border overflow-hidden ${pending.length ? 'border-amber-300' : 'border-emerald-200'}`}>
+          <div className={`px-4 py-3 flex items-start gap-3 border-b ${pending.length ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-100'}`}>
+            {pending.length
+              ? <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              : <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />}
+            <div className="flex-1 min-w-0">
+              <p className={`font-bold ${pending.length ? 'text-amber-900' : 'text-emerald-800'}`}>
+                {pending.length
+                  ? <>เวลาสแกนต่างจากตารางงานเกิน 2 ชั่วโมง <span className="ml-1 align-middle px-2 py-0.5 rounded-full bg-amber-600 text-white text-xs">{pending.length} รายการ</span></>
+                  : 'แจ้งเตือนในช่วงนี้แก้ไขครบแล้ว'}
+              </p>
+              <p className={`text-xs mt-0.5 ${pending.length ? 'text-amber-800/80' : 'text-emerald-700/80'}`}>
+                เทียบเฉพาะเวลาเข้างานกับออกงาน (ไม่ดูเบรค) · แก้เวลาในหน้าลงตารางงานให้ตรงกับที่ทำงานจริง แล้วกด “แก้ไขแล้ว”
+              </p>
+            </div>
+          </div>
+
+          {pending.length > 0 && (
+            <ul className="divide-y divide-gray-100">
+              {pending.map((a) => (
+                <li key={a.key} className="px-4 py-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <div className="w-24 text-sm font-medium text-gray-800">{a.date}</div>
+                  <div className="min-w-[150px]">
+                    <div className="text-sm font-semibold text-gray-800">{a.name || <Dash />}</div>
+                    <div className="text-xs font-mono text-gray-400">{a.empCode}</div>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${a.side === 'in' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                    {SIDE_LABEL[a.side]}
+                  </span>
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-gray-500">ลงไว้</span>
+                    <span className="font-mono font-semibold text-indigo-700">{a.plan}</span>
+                    <ArrowRight className="w-4 h-4 text-gray-300" />
+                    <span className="text-gray-500">สแกน</span>
+                    <span className="font-mono font-semibold text-teal-700">{a.scan}</span>
+                    <span className="ml-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-xs font-semibold">
+                      {a.scanLater ? 'ช้ากว่า' : 'เร็วกว่า'} {fmtDiff(a.diffMin)}
+                    </span>
+                  </div>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button onClick={() => navigate('/schedule/weekly')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-indigo-200 text-indigo-700 hover:bg-indigo-50">
+                      <CalendarDays className="w-4 h-4" /> ไปหน้าลงตารางงาน
+                    </button>
+                    <button onClick={() => markResolved(a)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700">
+                      <CheckCircle2 className="w-4 h-4" /> แก้ไขแล้ว
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {resolved.length > 0 && (
+            <div className={pending.length ? 'border-t border-gray-100' : ''}>
+              <button onClick={() => setShowResolved((v) => !v)}
+                className="w-full px-4 py-2 flex items-center gap-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50/50">
+                <CheckCircle2 className="w-4 h-4" /> แก้ไขแล้ว {resolved.length} รายการ
+                {showResolved ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
+              </button>
+              {showResolved && (
+                <ul className="divide-y divide-gray-50 bg-gray-50/50">
+                  {resolved.map((a) => (
+                    <li key={a.key} className="px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+                      <span className="w-24 font-medium text-gray-600">{a.date}</span>
+                      <span className="min-w-[150px] text-gray-700">{a.name}</span>
+                      <span>{SIDE_LABEL[a.side]} · ลงไว้ <span className="font-mono">{a.plan}</span> สแกน <span className="font-mono">{a.scan}</span></span>
+                      <span className="text-emerald-700">✓ แก้ไขแล้วโดย {resolvedMap[a.key].by} · {fmtStamp(resolvedMap[a.key].at)}</span>
+                      <button onClick={() => undoResolved(a)} className="ml-auto text-gray-400 hover:text-rose-600 underline">ยกเลิก</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {rows !== null && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -251,8 +371,12 @@ export default function Attendance() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-700">
-                  {daily.map((d) => (
-                    <tr key={`${d.date}|${d.empCode}`} className="hover:bg-teal-50/40">
+                  {daily.map((d) => {
+                    const aIn = alertOf.get(`${d.date}|${d.empCode}|in`);
+                    const aOut = alertOf.get(`${d.date}|${d.empCode}|out`);
+                    const flagged = (aIn && !resolvedMap[aIn.key]) || (aOut && !resolvedMap[aOut.key]);
+                    return (
+                    <tr key={`${d.date}|${d.empCode}`} className={flagged ? 'bg-amber-50/70 hover:bg-amber-50' : 'hover:bg-teal-50/40'}>
                       <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{d.date}</td>
                       <td className="px-3 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
@@ -264,10 +388,10 @@ export default function Attendance() {
                       <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.out, 'text-indigo-700')}</td>
 
                       {/* ฝั่งที่สแกนจริง */}
-                      <td className="px-3 py-2 text-center border-l border-gray-200">{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
+                      <td className="px-3 py-2 text-center border-l border-gray-200">{scanCell(hhmm(d.first), 'font-semibold text-emerald-700', aIn, aIn && resolvedMap[aIn.key])}</td>
                       <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
                       <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700', aOut, aOut && resolvedMap[aOut.key])}</td>
 
                       {/* สรุปส่วนต่าง */}
                       <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-gray-200">{lateCell(d.lateIn)}</td>
@@ -280,7 +404,8 @@ export default function Attendance() {
                       <td className="px-3 py-2 text-right font-mono font-bold text-gray-800">{num2(d.netHours)}</td>
                       <td className="px-3 py-2 text-right font-mono text-gray-400 border-l border-gray-200">{d.count}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               <div className="px-4 py-3 text-xs text-gray-400 border-t border-gray-100 space-y-1">

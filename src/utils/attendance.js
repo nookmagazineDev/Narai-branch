@@ -169,3 +169,55 @@ export function attachSchedule(daily, scheduleRows) {
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// แจ้งเตือน: เวลาสแกนต่างจากเวลาที่ลงตารางไว้เกินเกณฑ์ (ค่าเริ่มต้น 2 ชั่วโมง)
+//
+// ดูแค่ "เข้างาน" (สแกนแรก) กับ "ออกงาน" (สแกนสุดท้าย) — เบรคไม่ดู
+// ต่างกันมากขนาดนี้แทบไม่ใช่การมาสาย แต่เป็นตารางงานที่ลงผิดกะ/ลืมแก้ หรือสแกนผิดคน
+// ข้อมูลฝั่งไหนไม่มี (ไม่ได้ลงตาราง / สแกนครั้งเดียวไม่มีเวลาออก) จะไม่เทียบ
+// ---------------------------------------------------------------------------
+
+/** ผลต่างเป็นนาทีแบบวนรอบวัน — 23:50 กับ 00:10 ต่างกัน 20 นาที ไม่ใช่ 1,420 */
+function clockDiff(a, b) {
+  const d = Math.abs(a - b) % 1440;
+  return Math.min(d, 1440 - d);
+}
+
+/**
+ * คืนรายการแจ้งเตือนจากผลของ attachSchedule()
+ * [{ key, date, empCode, name, side: 'in'|'out', plan, scan, diffMin, scanLater }]
+ * key = 'วันที่|รหัส|in/out' ใช้จำว่ากด "แก้ไขแล้ว" ไปแล้วหรือยัง
+ */
+export function scanAlerts(daily, thresholdMin = 120) {
+  const out = [];
+  for (const d of daily || []) {
+    if (!d.plan) continue;
+    const sides = [
+      ['in', d.plan.in, hhmm(d.first)],
+      ['out', d.plan.out, d.last ? hhmm(d.last) : ''],
+    ];
+    for (const [side, plan, scan] of sides) {
+      const p = minutesOfDay(plan);
+      const s = minutesOfDay(scan);
+      if (p == null || s == null) continue;
+      const diffMin = clockDiff(s, p);
+      if (diffMin <= thresholdMin) continue;
+      out.push({
+        key: `${d.date}|${d.empCode}|${side}`,
+        date: d.date, empCode: d.empCode, name: d.name,
+        side, plan, scan, diffMin,
+        // สแกนช้ากว่าที่ลงไว้ไหม — คิดแบบวนรอบวันให้ตรงกับ diffMin
+        scanLater: (s - p + 1440) % 1440 === diffMin,
+      });
+    }
+  }
+  return out;
+}
+
+/** 140 -> '2 ชม. 20 นาที' */
+export function fmtDiff(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return [h ? `${h} ชม.` : '', m ? `${m} นาที` : ''].filter(Boolean).join(' ') || '0 นาที';
+}
