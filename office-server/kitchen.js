@@ -1129,6 +1129,8 @@ async function getKitchenBalance(body) {
         UNION SELECT product_key FROM dbo.kitchen_recipe
         UNION SELECT item_key FROM dbo.kitchen_material_issue
         UNION SELECT item_key FROM dbo.kitchen_material_receipt
+        -- วัตถุดิบที่เคยนับที่สาขาครัว (นำเข้ายอดนับจาก Excel / แก้ยอด) = วัตถุดิบของครัวด้วย แม้ยังไม่อยู่ในสูตรหรือใบเบิก
+        UNION SELECT item_key FROM dbo.stock_count WHERE branch = @branch
      )
      SELECT i.item_key, i.item_code, i.item_name, i.unit,
             COALESCE(lc.remaining, 0) AS counted_qty,
@@ -1286,6 +1288,34 @@ async function getKitchenCountHistory(body) {
 }
 
 /**
+ * ยอดยกมา dbo.stock_balance ของสาขาครัว = ยอดนับนี้ — เฉพาะเมื่อเป็นยอดล่าสุดของสินค้านั้นจริง ย้อนวันไม่ไปทับยอดใหม่กว่า
+ * กติกาเดียวกับหน้านับสต๊อกของสาขา (stock.js)
+ */
+async function syncKitchenStockBalance(run, { branch, itemKey, itemCode, itemName, remaining, countedAt }) {
+  await run(
+    `IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
+                     WHERE branch = @branch AND item_key = @item_key
+                       AND counted_at > CONVERT(DATETIME2(0), @counted_at, 120))
+     MERGE dbo.stock_balance AS t
+     USING (SELECT @branch AS branch, @item_key AS item_key) AS s
+       ON t.branch = s.branch AND t.item_key = s.item_key
+     WHEN MATCHED THEN UPDATE SET
+       item_code = @item_code, item_name = @item_name, balance = @balance,
+       updated_at = CONVERT(DATETIME2(0), @counted_at, 120)
+     WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, balance, updated_at)
+       VALUES (@branch, @item_key, @item_code, @item_name, @balance, CONVERT(DATETIME2(0), @counted_at, 120));`,
+    {
+      branch: { type: sql.NVarChar(50), value: branch },
+      item_key: { type: sql.NVarChar(50), value: itemKey },
+      item_code: { type: sql.NVarChar(50), value: itemCode },
+      item_name: { type: sql.NVarChar(255), value: itemName },
+      balance: { type: sql.Decimal(18, 3), value: remaining },
+      counted_at: { type: sql.NVarChar(19), value: countedAt },
+    }
+  );
+}
+
+/**
  * แก้ยอดคงเหลือของวัตถุดิบหนึ่งตัว = บันทึกเป็น "ยอดนับ" ของสาขาครัว (KITCHEN_BRANCH)
  *
  * คงเหลือคำนวณสดจากยอดนับล่าสุด (getKitchenBalance) การแก้จึงคือการเพิ่มยอดนับใหม่ ไม่ใช่ทับตัวเลข
@@ -1347,27 +1377,7 @@ async function saveKitchenCount(body, session) {
       throw badRequest('มียอดนับของวัตถุดิบนี้ในเวลาเดียวกันอยู่แล้ว (อาจกดซ้ำ) — รีเฟรชแล้วตรวจยอดอีกครั้ง');
     }
 
-    await run(
-      `IF NOT EXISTS (SELECT 1 FROM dbo.stock_count
-                       WHERE branch = @branch AND item_key = @item_key
-                         AND counted_at > CONVERT(DATETIME2(0), @counted_at, 120))
-       MERGE dbo.stock_balance AS t
-       USING (SELECT @branch AS branch, @item_key AS item_key) AS s
-         ON t.branch = s.branch AND t.item_key = s.item_key
-       WHEN MATCHED THEN UPDATE SET
-         item_code = @item_code, item_name = @item_name, balance = @balance,
-         updated_at = CONVERT(DATETIME2(0), @counted_at, 120)
-       WHEN NOT MATCHED THEN INSERT (branch, item_key, item_code, item_name, balance, updated_at)
-         VALUES (@branch, @item_key, @item_code, @item_name, @balance, CONVERT(DATETIME2(0), @counted_at, 120));`,
-      {
-        branch: { type: sql.NVarChar(50), value: branch },
-        item_key: { type: sql.NVarChar(50), value: itemKey },
-        item_code: { type: sql.NVarChar(50), value: itemCode },
-        item_name: { type: sql.NVarChar(255), value: itemName },
-        balance: { type: sql.Decimal(18, 3), value: remaining },
-        counted_at: { type: sql.NVarChar(19), value: countedAt },
-      }
-    );
+    await syncKitchenStockBalance(run, { branch, itemKey, itemCode, itemName, remaining, countedAt });
 
     return {
       itemKey, branch, countedAt, remaining,
@@ -1376,6 +1386,93 @@ async function saveKitchenCount(body, session) {
   });
 }
 
+
+/**
+ * นำเข้ายอดนับของครัวทีละหลายรายการ (ไฟล์ Excel ยอดคงเหลือสิ้นเดือน — หน้าวัตถุดิบคงเหลือของ storefct)
+ *
+ * items: [{ itemCode, remaining }] · countDate = ยอด ณ สิ้นวันไหน (กติกาเดียวกับ saveKitchenCount)
+ * ทั้งหมดอยู่ใน transaction เดียว — พลาดตัวไหน ไม่มีอะไรถูกบันทึก
+ * นำเข้าไฟล์เดิมซ้ำวันเดิม = ทับยอดนับเวลาเดียวกัน (ไม่เกิดแถวซ้ำ) · รหัสที่ไม่มีใน stock_item ข้ามและแจ้งกลับ
+ * วัตถุดิบที่นับแล้วจะขึ้นในหน้าวัตถุดิบคงเหลือ (getKitchenBalance นับ stock_count ของสาขาครัวเป็น scope)
+ */
+async function saveKitchenCounts(body, session) {
+  const now = bangkokNow();
+  const countDate = ymd(body?.countDate);
+  if (!countDate) throw badRequest('ระบุวันที่ของยอดนับ');
+  if (countDate > now.date) throw badRequest('ย้อนได้อย่างเดียว ตั้งยอดของวันข้างหน้าไม่ได้');
+  const countedAt = countDate === now.date ? `${now.date} ${now.time}` : `${countDate} 23:59:59`;
+
+  const seen = new Map();
+  for (const it of Array.isArray(body?.items) ? body.items : []) {
+    const itemKey = normCode(it?.itemKey || it?.itemCode);
+    const raw = it?.remaining;
+    if (!itemKey) continue;
+    if (raw === '' || raw === null || raw === undefined || !Number.isFinite(Number(raw)) || Number(raw) < 0) {
+      throw badRequest(`ยอดของรหัส ${str(it?.itemCode) || itemKey} ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป`);
+    }
+    seen.set(itemKey, { itemKey, code: str(it?.itemCode), remaining: num(raw) }); // รหัสซ้ำในไฟล์ = ใช้แถวหลังสุด
+  }
+  const list = [...seen.values()];
+  if (list.length === 0) throw badRequest('ไม่มีรายการให้นำเข้า');
+  if (list.length > 3000) throw badRequest('นำเข้าได้ครั้งละไม่เกิน 3000 รายการ');
+
+  const branch = kitchenBranch().toLowerCase();
+  const recorder = recorderOf(body, session);
+
+  return withTransaction(async (run) => {
+    let saved = 0;
+    let replaced = 0;
+    const skipped = [];
+    for (const it of list) {
+      const item = await run(
+        `SELECT item_code, item_name, unit FROM dbo.stock_item WHERE item_key = @item_key;`,
+        { item_key: { type: sql.NVarChar(50), value: it.itemKey } }
+      );
+      const row = item?.recordset?.[0];
+      if (!row) { skipped.push(it.code || it.itemKey); continue; }
+      const itemCode = str(row.item_code) || it.code || it.itemKey;
+      const itemName = str(row.item_name) || null;
+      const unit = str(row.unit) || null;
+
+      const res = await run(
+        `DECLARE @replaced INT = 0;
+         IF EXISTS (SELECT 1 FROM dbo.stock_count
+                     WHERE branch = @branch AND item_key = @item_key
+                       AND counted_at = CONVERT(DATETIME2(0), @counted_at, 120))
+         BEGIN
+           UPDATE dbo.stock_count SET remaining = @remaining, counter_name = @counter_name,
+                  item_code = @item_code, item_name = @item_name, unit = @unit
+            WHERE branch = @branch AND item_key = @item_key
+              AND counted_at = CONVERT(DATETIME2(0), @counted_at, 120);
+           SET @replaced = 1;
+         END
+         ELSE
+           INSERT INTO dbo.stock_count (counted_at, branch, item_key, item_code, item_name, unit, remaining, counter_name)
+           VALUES (CONVERT(DATETIME2(0), @counted_at, 120), @branch, @item_key, @item_code, @item_name, @unit, @remaining, @counter_name);
+         SELECT @replaced AS replaced;`,
+        {
+          counted_at: { type: sql.NVarChar(19), value: countedAt },
+          branch: { type: sql.NVarChar(50), value: branch },
+          item_key: { type: sql.NVarChar(50), value: it.itemKey },
+          item_code: { type: sql.NVarChar(50), value: itemCode },
+          item_name: { type: sql.NVarChar(255), value: itemName },
+          unit: { type: sql.NVarChar(50), value: unit },
+          remaining: { type: sql.Decimal(18, 3), value: it.remaining },
+          counter_name: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
+      if (Number(res?.recordset?.[0]?.replaced)) replaced++;
+      await syncKitchenStockBalance(run, { branch, itemKey: it.itemKey, itemCode, itemName, remaining: it.remaining, countedAt });
+      saved++;
+    }
+    return {
+      branch, countedAt, saved, replaced, skipped,
+      message: `นำเข้ายอดนับ ณ ${countDate === now.date ? 'ตอนนี้' : `สิ้นวัน ${countDate}`} แล้ว ${saved} รายการ`
+        + (replaced ? ` (ทับยอดเดิมของเวลาเดียวกัน ${replaced})` : '')
+        + (skipped.length ? ` · ข้าม ${skipped.length} รหัสที่ไม่มีในทะเบียนสินค้า` : ''),
+    };
+  });
+}
 
 /* ==========================================================================
    บันทึกการผลิต + รายงาน
@@ -1671,6 +1768,7 @@ export const KITCHEN_ACTIONS = {
   getKitchenCountHistory,
   getKitchenStockCard,
   saveKitchenCount,
+  saveKitchenCounts,
   saveProductionRun,
   deleteProductionRun,
   getProductionReport,
