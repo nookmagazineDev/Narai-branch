@@ -350,7 +350,8 @@ async function deleteProductionPlan(body) {
 
    แผนผูกกับคำสั่งผลิตด้วย (plan_date = produce_date, product_key, source = 'plan')
    ซึ่ง UX_kitchen_order_day_auto รับรองว่ามีได้ใบเดียว — ไม่ต้องมีคอลัมน์ผูกตรง
-   แผนที่ออกคำสั่งไปแล้ว (ใบยังไม่ถูกยกเลิก) แก้/ลบไม่ได้ ต้องไปแก้ที่คำสั่งผลิตแทน
+   แผนที่ออกคำสั่งไปแล้ว (ใบยังไม่ถูกยกเลิก) ลบไม่ได้ · แก้จำนวนได้จนกว่าคำสั่งจะ "ผลิตเสร็จ"
+   แก้แล้วจำนวนสั่งของคำสั่งผลิตเปลี่ยนตาม (transaction เดียวกัน) ดู saveDatedPlans
 ========================================================================== */
 
 // ยังไม่ได้รัน sql/kitchen-002 = ตารางยังไม่มี (SQL Server error 208)
@@ -411,23 +412,46 @@ async function saveDatedPlans(body, session) {
   const recorder = recorderOf(body, session);
 
   if (isEdit) {
+    // แผนที่สั่งผลิตแล้วแก้ได้จนกว่าคำสั่งจะผลิตเสร็จ — จำนวนสั่งของคำสั่งผลิตเปลี่ยนตามในคราวเดียว
+    // (วัตถุดิบที่เบิกไปแล้วไม่เปลี่ยน เบิกเพิ่มที่ดินสอของหน้าสถานะการผลิต)
     try {
-      const updated = await runSql(
-        `UPDATE d SET planned_qty = @planned_qty, unit = @unit, note = @note,
-                recorder = @recorder, updated_at = SYSDATETIME()
-          OUTPUT inserted.product_name
-           FROM dbo.kitchen_production_plan_day d
-          WHERE d.plan_day_id = @plan_id AND NOT ${ACTIVE_PLAN_ORDER};`,
-        {
+      return await withTransaction(async (run) => {
+        const params = {
           plan_id: { type: sql.Int, value: planId },
           planned_qty: { type: sql.Decimal(18, 3), value: plannedQty },
           unit: { type: sql.NVarChar(50), value: orNull(body?.unit) },
           note: { type: sql.NVarChar(500), value: orNull(body?.note) },
           recorder: { type: sql.NVarChar(255), value: recorder },
-        }
-      );
-      if (updated.length === 0) throw badRequest('ไม่พบแผนนี้ หรือสั่งผลิตไปแล้ว (แก้ที่หน้ารายการสั่งผลิตแทน)');
-      return { saved: 1, skipped: 0, message: `แก้แผน "${updated[0].product_name}" แล้ว` };
+        };
+        const updated = (await run(
+          `UPDATE d SET planned_qty = @planned_qty, unit = @unit, note = @note,
+                  recorder = @recorder, updated_at = SYSDATETIME()
+            OUTPUT inserted.product_name
+             FROM dbo.kitchen_production_plan_day d
+            WHERE d.plan_day_id = @plan_id
+              AND NOT EXISTS (
+                SELECT 1 FROM dbo.kitchen_production_order o
+                 WHERE o.plan_day_id = d.plan_day_id AND o.status = N'ผลิตเสร็จ');`,
+          params
+        )).recordset || [];
+        if (updated.length === 0) throw badRequest('ไม่พบแผนนี้ หรือคำสั่งผลิตของแผนผลิตเสร็จแล้ว (แก้ไม่ได้)');
+        const orders = (await run(
+          `UPDATE dbo.kitchen_production_order
+              SET order_qty = @planned_qty, unit = @unit, updated_at = SYSDATETIME()
+            OUTPUT inserted.doc_no
+            WHERE plan_day_id = @plan_id AND status NOT IN (N'ยกเลิก', N'ผลิตเสร็จ');`,
+          params
+        )).recordset || [];
+        const name = updated[0].product_name;
+        return {
+          saved: 1,
+          skipped: 0,
+          orderDocNo: orders[0]?.doc_no || null,
+          message: orders.length
+            ? `แก้แผน "${name}" แล้ว และปรับจำนวนในคำสั่งผลิต ${orders.map((o) => o.doc_no).join(', ')} ตาม`
+            : `แก้แผน "${name}" แล้ว`,
+        };
+      });
     } catch (err) {
       throw planDayMissing(err);
     }
