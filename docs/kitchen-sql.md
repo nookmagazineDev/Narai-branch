@@ -53,7 +53,7 @@
 | `kitchen_recipe` + `kitchen_recipe_item` | สูตร: ผลิตหนึ่งชุดได้เท่าไหร่ ใช้วัตถุดิบอะไรบ้าง |
 | `kitchen_production_plan_day` | แผนผลิตรายวันจากปฏิทิน "แพลนผลิต" — หนึ่งแถวต่องาน เมนูเดิมวันเดิมมีได้หลายแถว (สร้างด้วย `office-server/sql/kitchen-002-plan-by-date.sql` · ปลด unique ด้วย `kitchen-004-plan-day-multi.sql`) คำสั่งผลิตผูกด้วย `kitchen_production_order.plan_day_id` |
 | `kitchen_production_plan` | แผนประจำรอบ (รายวัน/รายสัปดาห์) — เลิกใช้จากหน้าเว็บแล้ว ข้อมูลเดิมยังอยู่ |
-| `kitchen_production_order` | คำสั่งผลิต |
+| `kitchen_production_order` | คำสั่งผลิต — `recipe_snapshot` สูตร QC/RD ณ วันผลิต (JSON เก็บครั้งเดียวด้วย `saveOrderRecipeSnapshot` เพิ่มด้วย `office-server/sql/kitchen-006-order-recipe-snapshot.sql`) · รายงานการผลิตคิด "ตามสูตร" จากตัวนี้ แก้สูตรทีหลังตัวเลขย้อนหลังไม่ขยับ |
 | `kitchen_production_run` | บันทึกการผลิตจริง ทีละครั้ง |
 | `kitchen_material_issue` | ใบเบิกวัตถุดิบออกไปใช้ผลิต — `unit_price` ราคา ณ ตอนเบิก (เติมจาก `stock_item.price` ใน `saveMaterialIssue`) และ `loss_qty` ส่วนที่เป็นของสูญเสีย (เพิ่มด้วย `office-server/sql/kitchen-003-issue-cost.sql`) · `getProductionReport` คิดต้นทุนการผลิตจากสองคอลัมน์นี้ |
 | `kitchen_material_receipt` | ใบรับวัตถุดิบเข้าครัว |
