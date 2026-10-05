@@ -95,6 +95,21 @@ async function nextDocNo(run, table, prefix, dateStr) {
 const recorderOf = (body, session) =>
   str(body?.recorder) || str(session?.name) || str(session?.username) || 'ครัวกลาง';
 
+/**
+ * มีคอลัมน์ kitchen_production_order.recipe_snapshot แล้วหรือยัง (sql/kitchen-006-order-recipe-snapshot.sql)
+ * ฐานที่ยังไม่ได้รันไฟล์นั้น SELECT คอลัมน์นี้แล้วทั้ง query พัง — เช็คก่อนแล้วค่อยใส่คอลัมน์ลง SQL
+ * จำเฉพาะตอนที่มีแล้ว (ยังไม่มี = เช็คใหม่ทุกครั้ง รันไฟล์ SQL แล้วใช้ได้เลยไม่ต้องรอรีสตาร์ต)
+ */
+let recipeSnapshotReady = false;
+async function hasRecipeSnapshot() {
+  if (recipeSnapshotReady) return true;
+  const rows = await runSql(
+    `SELECT COL_LENGTH(N'dbo.kitchen_production_order', N'recipe_snapshot') AS len;`
+  );
+  recipeSnapshotReady = rows?.[0]?.len !== null && rows?.[0]?.len !== undefined;
+  return recipeSnapshotReady;
+}
+
 
 /* ==========================================================================
    รายการสินค้า/วัตถุดิบ — ใช้เติมช่องเลือกของทุกหน้า
@@ -547,10 +562,12 @@ async function getProductionOrders(body) {
   const to = ymd(body?.dateTo);
   if (!from || !to) throw badRequest('ต้องระบุช่วงวันที่ (dateFrom, dateTo)');
 
+  // สูตร ณ วันผลิต (ถ้าเก็บไว้แล้ว) — ฟอร์มบันทึกผลใช้สูตรนี้แทนสูตรปัจจุบันของ QC/RD
+  const snapCols = (await hasRecipeSnapshot()) ? 'o.recipe_snapshot, o.recipe_snapshot_at,' : '';
   const rows = await runSql(
     `SELECT o.order_id, o.doc_no, o.produce_date, o.product_key, o.product_code, o.product_name,
             o.order_qty, o.produced_qty, o.unit, o.status, o.source, o.plan_id,
-            o.note, o.recorder, o.created_at, o.updated_at,
+            o.note, o.recorder, o.created_at, o.updated_at, ${snapCols}
             CASE WHEN r.recipe_id IS NULL THEN 0 ELSE 1 END AS has_recipe,
             c.issue_count, c.no_price_count, c.material_cost
        FROM dbo.kitchen_production_order o
@@ -590,9 +607,16 @@ async function saveProductionOrder(body, session) {
   const recorder = recorderOf(body, session);
 
   if (isEdit) {
+    // เปลี่ยนสินค้าของคำสั่ง = สูตรที่เก็บไว้เป็นของสินค้าเดิม ล้างทิ้ง ให้เก็บใหม่ตอนเริ่มทำงานรอบหน้า
+    // (ค่าทางขวาของ SET อ่านจากแถวเดิมก่อนแก้ จึงเทียบ product_key เดิมกับใหม่ได้ในคำสั่งเดียว)
+    const resetSnap = (await hasRecipeSnapshot())
+      ? `recipe_snapshot = CASE WHEN product_key = @product_key THEN recipe_snapshot END,
+              recipe_snapshot_at = CASE WHEN product_key = @product_key THEN recipe_snapshot_at END,`
+      : '';
     const updated = await runSql(
       `UPDATE dbo.kitchen_production_order
-          SET produce_date = CONVERT(DATE, @produce_date, 23),
+          SET ${resetSnap}
+              produce_date = CONVERT(DATE, @produce_date, 23),
               product_key = @product_key, product_code = @product_code, product_name = @product_name,
               order_qty = @order_qty, unit = @unit, note = @note, updated_at = SYSDATETIME()
         OUTPUT inserted.order_id, inserted.doc_no
@@ -639,6 +663,51 @@ async function saveProductionOrder(body, session) {
       message: `สร้างคำสั่งผลิต ${docNo} แล้ว`,
     };
   });
+}
+
+/** ขนาดสูงสุดของสูตรที่รับเก็บ — สูตรจริงไม่กี่สิบบรรทัด ไม่กี่ KB กันหน้าเว็บส่งก้อนใหญ่ผิดปกติมา */
+const SNAPSHOT_MAX_CHARS = 200000;
+
+/**
+ * เก็บสูตร QC/RD ของวันที่ผลิตไว้กับคำสั่งผลิต — เขียนครั้งเดียว คำสั่งที่เก็บไว้แล้วไม่ทับ
+ *
+ * office-server อ่าน QC/RD ไม่ได้ (สูตรอยู่ที่ฝั่ง storefct) หน้าเว็บจึงเป็นคนส่งสูตรที่ใช้ผลิตมา
+ * ตอนเริ่มทำงานกับคำสั่ง (สั่งผลิต / เบิกวัตถุดิบ / บันทึกผล) แล้วรายงานการผลิตคิด "ตามสูตร"
+ * จากสูตรนี้แทนสูตรปัจจุบัน — แก้สูตรใน QC/RD ทีหลัง ตัวเลขของการผลิตที่ผ่านไปแล้วไม่ขยับตาม
+ *
+ * ฐานที่ยังไม่ได้รัน sql/kitchen-006 ตอบ saved:false แทนการโยน error — ไม่ให้การบันทึกผลิตล้มเพราะเรื่องนี้
+ */
+async function saveOrderRecipeSnapshot(body) {
+  const orderId = Number(body?.orderId);
+  if (!Number.isFinite(orderId) || orderId <= 0) throw badRequest('ไม่ระบุคำสั่งผลิต');
+  const snap = body?.snapshot;
+  if (!snap || typeof snap !== 'object' || !snap.menu || !Array.isArray(snap.lines)) {
+    throw badRequest('สูตรที่ส่งมาไม่ถูกรูปแบบ (ต้องมี menu และ lines)');
+  }
+  const text = JSON.stringify({ menu: snap.menu, lines: snap.lines });
+  if (text.length > SNAPSHOT_MAX_CHARS) throw badRequest('สูตรที่ส่งมาใหญ่เกินไป');
+
+  if (!(await hasRecipeSnapshot())) {
+    return {
+      saved: false,
+      missing: true,
+      message: 'ยังไม่มีคอลัมน์เก็บสูตร — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน',
+    };
+  }
+
+  const updated = await runSql(
+    `UPDATE dbo.kitchen_production_order
+        SET recipe_snapshot = @snapshot, recipe_snapshot_at = SYSDATETIME()
+      OUTPUT inserted.doc_no
+      WHERE order_id = @order_id AND recipe_snapshot IS NULL;`,
+    {
+      order_id: { type: sql.BigInt, value: orderId },
+      snapshot: { type: sql.NVarChar(sql.MAX), value: text },
+    }
+  );
+  return updated.length > 0
+    ? { saved: true, message: `เก็บสูตรของ ${updated[0].doc_no} แล้ว` }
+    : { saved: false, message: 'คำสั่งนี้เก็บสูตรไว้แล้ว (หรือไม่พบคำสั่ง) — ไม่ทับของเดิม' };
 }
 
 async function updateProductionOrderStatus(body) {
@@ -1664,6 +1733,9 @@ async function getProductionReport(body) {
   const to = ymd(body?.dateTo);
   if (!from || !to) throw badRequest('ต้องระบุช่วงวันที่ (dateFrom, dateTo)');
 
+  // สูตร ณ วันผลิตของคำสั่ง — หน้าเว็บคิด "ตามสูตร" จากตัวนี้ · NULL = คำสั่งรุ่นก่อนเก็บสูตร
+  const snapCols = (await hasRecipeSnapshot()) ? 'o.recipe_snapshot,' : '';
+
   const params = {
     from: { type: sql.NVarChar(10), value: from },
     to: { type: sql.NVarChar(10), value: to },
@@ -1671,7 +1743,7 @@ async function getProductionReport(body) {
 
   // ใช้ร่วมกันทั้งรายการดิบและยอดรวม ให้สองตารางคิดต้นทุนแบบเดียวกันเสมอ
   const costedRuns = `
-    SELECT p.run_id, p.order_id, o.doc_no AS order_doc_no, o.order_qty,
+    SELECT p.run_id, p.order_id, o.doc_no AS order_doc_no, o.order_qty, ${snapCols}
            p.produce_date, p.product_key, p.product_code, p.product_name,
            p.qty_produced, p.qty_waste, p.unit, p.note, p.recorder, p.recorded_at,
            c.issue_lines, c.no_price_count,
@@ -1804,6 +1876,7 @@ export const KITCHEN_ACTIONS = {
   deleteDatedPlan,
   getProductionOrders,
   saveProductionOrder,
+  saveOrderRecipeSnapshot,
   updateProductionOrderStatus,
   getBranchDemand,
   createOrdersFromDemand,
