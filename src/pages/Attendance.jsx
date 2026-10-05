@@ -15,10 +15,10 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered, AlertTriangle, CheckCircle2, Pencil } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall } from '../services/api';
+import { apiCall, fetchEmployees } from '../services/api';
 import { fetchAttendance } from '../services/dashboardApi';
 import {
-  hhmm, buildDailyReport, isAlertIssue, ISSUE_TYPES, SHORT_ALERT_MIN, SCAN_MERGE_MIN,
+  hhmm, buildDailyReport, isAlertIssue, empTypeLookup, ISSUE_TYPES, SHORT_ALERT_MIN, SCAN_MERGE_MIN,
 } from '../utils/attendance';
 import ScanFixModal from '../components/ScanFixModal';
 import { SCAN_ALERTS_CHANGED } from '../services/scanAlerts';
@@ -66,6 +66,15 @@ const ISSUE_PILL = {
 const ISSUE_STRIPE = { crit: 'shadow-[inset_3px_0_0_#e11d48]', warn: 'shadow-[inset_3px_0_0_#d97706]' };
 const isAlert = isAlertIssue;
 
+/** ป้ายประเภทพนักงาน — สีแยกให้เห็นชัดระหว่างประจำกับพาร์ทไทม์ */
+const TYPE_PILL = {
+  'F/T': 'bg-purple-100 text-purple-700',
+  'P/T': 'bg-sky-100 text-sky-700',
+};
+const TypeCell = ({ t }) => (t
+  ? <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${TYPE_PILL[t.toUpperCase()] || 'bg-gray-100 text-gray-600'}`}>{t}</span>
+  : <Dash />);
+
 export default function Attendance() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
@@ -86,6 +95,7 @@ export default function Attendance() {
   const [dateFilter, setDateFilter] = useState(''); // '' = ทุกวันในช่วงที่โหลดมา
   const [view, setView] = useState('daily'); // 'daily' = สรุปรายวัน | 'raw' = รายการสแกนทั้งหมด
   const [fixes, setFixes] = useState([]); // เวลาที่สาขากดแก้ไขไว้ (dbo.attendance_scan_fix)
+  const [employees, setEmployees] = useState([]); // รายชื่อพนักงาน — สำรองไว้หาประเภทพนักงานของคนที่ไม่มีในตารางงาน
   const [issueFilter, setIssueFilter] = useState(''); // '' = ทั้งหมด | 'bad' = เฉพาะที่ต้องแก้ | รหัสกรณี
   const [editRow, setEditRow] = useState(null);
   const [loadedBranch, setLoadedBranch] = useState('');
@@ -144,16 +154,18 @@ export default function Attendance() {
     setLoading(true);
     try {
       // ตารางงานเป็นของเสริม ถ้าดึงไม่ได้ก็ยังต้องเห็นเวลาสแกนตามปกติ
-      const [res, sched, fixRes] = await Promise.all([
+      const [res, sched, fixRes, emps] = await Promise.all([
         fetchAttendance({ branch, startDate, endDate }),
         apiCall('getHistoryData', { branch, startDate, endDate }).catch(() => null),
         apiCall('getScanFixes', { branch, startDate, endDate }).catch(() => null),
+        fetchEmployees(branch).catch(() => null),
       ]);
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setRows(res.data || []);
       setDateFilter('');
       setIssueFilter('');
       setFixes(Array.isArray(fixRes?.data) ? fixRes.data : []);
+      setEmployees(Array.isArray(emps?.data) ? emps.data : []);
       setLoadedBranch(branch);
       setSchedRows(Array.isArray(sched?.data) ? sched.data : []);
       if (!sched) toast('ดึงตารางงานมาเทียบไม่ได้ — แสดงเฉพาะเวลาสแกน', { icon: '⚠️' });
@@ -168,7 +180,8 @@ export default function Attendance() {
   };
 
   const q = search.trim().toLowerCase();
-  const matchSearch = (r) => !q || String(r.empCode).toLowerCase().includes(q) || String(r.name || '').toLowerCase().includes(q);
+  const matchSearch = (r) => !q || String(r.empCode).toLowerCase().includes(q) || String(r.name || '').toLowerCase().includes(q) ||
+    String(r.empType || '').toLowerCase() === q;
 
   // รายการสแกนดิบ (แท็บ "ทุกครั้งที่สแกน")
   const filtered = useMemo(() => {
@@ -180,10 +193,11 @@ export default function Attendance() {
 
   // สรุปรายวันของทั้งช่วงที่โหลดมา: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
   // + คนที่มีตารางงานแต่ไม่ได้สแกนเลย -> ใช้เวลาที่สาขาแก้ไขไว้ -> เทียบตารางงาน -> สถานะแจ้งเตือน
-  const allDaily = useMemo(
-    () => (rows ? buildDailyReport(rows, schedRows, fixes, today) : []),
-    [rows, schedRows, fixes, today]
-  );
+  const allDaily = useMemo(() => {
+    if (!rows) return [];
+    const typeOf = empTypeLookup(employees);
+    return buildDailyReport(rows, schedRows, fixes, today).map((d) => ({ ...d, empType: typeOf(d) }));
+  }, [rows, schedRows, fixes, today, employees]);
 
   // วันที่ในชุดที่โหลดมา (ล่าสุดก่อน) — ใช้เป็นตัวเลือกในหัวคอลัมน์วันที่
   const dateOptions = useMemo(() => [...new Set(allDaily.map((d) => d.date))].sort().reverse(), [allDaily]);
@@ -339,7 +353,7 @@ export default function Attendance() {
             </div>
             <div className="relative flex-1 min-w-[200px] max-w-xs">
               <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหารหัส หรือชื่อพนักงาน…"
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นหารหัส ชื่อ หรือประเภท (F/T, P/T)…"
                 className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-teal-500 outline-none" />
             </div>
             <span className="text-xs text-gray-400">
@@ -372,6 +386,7 @@ export default function Attendance() {
                     </th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
+                    <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ประเภท</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-gray-200 font-semibold">ตารางงานที่ลงไว้</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-teal-100 text-teal-800 border-b border-l border-gray-200 font-semibold">สแกนจริง</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-gray-200 font-semibold">สาย (นาที)</th>
@@ -410,6 +425,7 @@ export default function Attendance() {
                       <td className={`px-3 py-2 font-medium text-gray-800 whitespace-nowrap ${ISSUE_STRIPE[lv] || ''}`}>{d.date}</td>
                       <td className="px-3 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
+                      <td className="px-3 py-2"><TypeCell t={d.empType} /></td>
 
                       {/* ฝั่งตารางงานที่สาขาลงไว้ */}
                       <td className="px-3 py-2 text-center bg-indigo-50/40 border-l border-gray-200">{timeCell(d.plan?.in, 'text-indigo-700')}</td>
@@ -480,6 +496,7 @@ export default function Attendance() {
                   <span className="font-medium text-sky-700"> เวลาสีฟ้าขีดเส้นประ</span> = เวลาที่สาขากดแก้ไขแทนเวลาสแกน (เวลาสแกนจริงดูได้ในแท็บ "ทุกครั้งที่สแกน")
                 </p>
                 <p>
+                  <span className="font-medium">ประเภท</span> = ประเภทพนักงานตามตารางงานวันนั้น (ไม่มีในตารางจะใช้จากรายชื่อพนักงาน) ·
                   <span className="font-medium">สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว ·
                   จับคู่กับตารางงานด้วยรหัสพนักงานก่อน ถ้ารหัสไม่ตรงจะลองจับด้วยชื่อในวันเดียวกัน
                 </p>
