@@ -65,6 +65,7 @@ const ISSUE_PILL = {
 };
 const ISSUE_STRIPE = { crit: 'shadow-[inset_3px_0_0_#e11d48]', warn: 'shadow-[inset_3px_0_0_#d97706]' };
 const isAlert = isAlertIssue;
+const NO_TYPE = '__none__'; // ค่าในตัวกรองประเภท = แถวที่หาประเภทไม่ได้
 
 /** ป้ายประเภทพนักงาน — สีแยกให้เห็นชัดระหว่างประจำกับพาร์ทไทม์ */
 const TYPE_PILL = {
@@ -93,6 +94,7 @@ export default function Attendance() {
   const [loadedDates, setLoadedDates] = useState(null);
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(''); // '' = ทุกวันในช่วงที่โหลดมา
+  const [typeFilter, setTypeFilter] = useState(''); // '' = ทุกประเภท | NO_TYPE = ไม่ระบุ | 'F/T', 'P/T', ...
   const [view, setView] = useState('daily'); // 'daily' = สรุปรายวัน | 'raw' = รายการสแกนทั้งหมด
   const [fixes, setFixes] = useState([]); // เวลาที่สาขากดแก้ไขไว้ (dbo.attendance_scan_fix)
   const [employees, setEmployees] = useState([]); // รายชื่อพนักงาน — สำรองไว้หาประเภทพนักงานของคนที่ไม่มีในตารางงาน
@@ -163,6 +165,7 @@ export default function Attendance() {
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setRows(res.data || []);
       setDateFilter('');
+      setTypeFilter('');
       setIssueFilter('');
       setFixes(Array.isArray(fixRes?.data) ? fixRes.data : []);
       setEmployees(Array.isArray(emps?.data) ? emps.data : []);
@@ -203,6 +206,27 @@ export default function Attendance() {
   const dateOptions = useMemo(() => [...new Set(allDaily.map((d) => d.date))].sort().reverse(), [allDaily]);
 
   // ตัวกรองในหัวคอลัมน์ — ช่วงที่มีวันเดียวไม่ต้องมีให้เลือก
+  // ประเภทพนักงานที่มีในชุดที่โหลดมา พร้อมจำนวนคน — ตัวเลือกในหัวคอลัมน์ประเภท
+  const typeOptions = useMemo(() => {
+    const people = new Map();
+    for (const d of allDaily) {
+      const t = d.empType || NO_TYPE;
+      if (!people.has(t)) people.set(t, new Set());
+      people.get(t).add(d.empCode);
+    }
+    return [...people.entries()]
+      .map(([t, set]) => ({ t, n: set.size }))
+      .sort((a, b) => (a.t === NO_TYPE) - (b.t === NO_TYPE) || a.t.localeCompare(b.t));
+  }, [allDaily]);
+  const typeFilterEl = typeOptions.length > 1 || typeFilter ? (
+    <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="กรองประเภทพนักงาน"
+      className={`mt-1 max-w-[110px] border rounded-md px-1.5 py-0.5 text-[11px] font-normal focus:ring-2 focus:ring-teal-500 outline-none cursor-pointer ${
+        typeFilter ? 'bg-teal-50 border-teal-400 text-teal-700' : 'bg-white border-gray-200 text-gray-600'}`}>
+      <option value="">ทุกประเภท</option>
+      {typeOptions.map(({ t, n }) => <option key={t} value={t}>{t === NO_TYPE ? 'ไม่ระบุ' : t} ({n} คน)</option>)}
+    </select>
+  ) : null;
+
   const dateFilterEl = dateOptions.length > 1 ? (
     <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}
       className="mt-1 max-w-[132px] bg-white border border-gray-200 rounded-md px-1.5 py-0.5 text-[11px] font-normal text-gray-600 focus:ring-2 focus:ring-teal-500 outline-none cursor-pointer">
@@ -212,25 +236,30 @@ export default function Attendance() {
   ) : null;
 
   // สรุปแจ้งเตือนของทั้งช่วง (ไม่ขึ้นกับช่องค้นหา) — นับเฉพาะเมื่อวานย้อนไป
+  // ตัวกรองประเภทมีผลกับแบนเนอร์ด้วย (เลือก P/T = เห็นตัวเลขเฉพาะพาร์ทไทม์)
+  const typeMatch = (d) => !typeFilter || (typeFilter === NO_TYPE ? !d.empType : d.empType === typeFilter);
   const alertSummary = useMemo(() => {
-    const bad = allDaily.filter((d) => isAlert(d.issue));
+    const scope = allDaily.filter(typeMatch);
+    const bad = scope.filter((d) => isAlert(d.issue));
     const byCode = {};
     for (const d of bad) byCode[d.issue.code] = (byCode[d.issue.code] || 0) + 1;
     return {
       total: bad.length,
       people: new Set(bad.map((d) => d.empCode)).size,
       byCode,
-      fixed: allDaily.filter((d) => d.issue.level === 'fixed').length,
-      checked: allDaily.some((d) => d.issue.level !== 'pending'),
+      fixed: scope.filter((d) => d.issue.level === 'fixed').length,
+      checked: scope.some((d) => d.issue.level !== 'pending'),
     };
-  }, [allDaily]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allDaily, typeFilter]);
 
   const daily = useMemo(() => allDaily.filter((d) =>
     (!dateFilter || d.date === dateFilter) &&
+    typeMatch(d) &&
     matchSearch(d) &&
     (!issueFilter || (issueFilter === 'bad' ? isAlert(d.issue) : d.issue.code === issueFilter))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [allDaily, dateFilter, q, issueFilter]);
+  ), [allDaily, dateFilter, typeFilter, q, issueFilter]);
 
   /** หลังบันทึก/ยกเลิกการแก้ไข — โหลดเฉพาะรายการแก้ไขใหม่ ไม่ต้องดึงสแกนทั้งชุด */
   const reloadFixes = async () => {
@@ -369,7 +398,7 @@ export default function Attendance() {
           ) : (view === 'raw' ? filtered.length === 0 : daily.length === 0) ? (
             <div className="py-16 text-center text-gray-400 text-sm">
               {search.trim() ? 'ไม่พบพนักงานที่ค้นหา'
-                : issueFilter ? 'ไม่มีรายการในกรณีที่เลือก'
+                : issueFilter || typeFilter ? 'ไม่มีรายการตามตัวกรองที่เลือก'
                 : `ไม่พบการสแกนของวันที่ ${dateFilter}`}
             </div>
           ) : view === 'daily' ? (
@@ -386,7 +415,10 @@ export default function Attendance() {
                     </th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">รหัส</th>
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
-                    <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ประเภท</th>
+                    <th rowSpan={2} className="px-3 py-1 text-left align-top sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <div className="h-7 flex items-center">ประเภท</div>
+                      {typeFilterEl}
+                    </th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-gray-200 font-semibold">ตารางงานที่ลงไว้</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-teal-100 text-teal-800 border-b border-l border-gray-200 font-semibold">สแกนจริง</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-gray-200 font-semibold">สาย (นาที)</th>
