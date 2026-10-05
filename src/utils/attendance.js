@@ -286,6 +286,42 @@ export function scanIssue(d, today) {
   return { code: 'ok', level: 'ok', label: 'ครบ' };
 }
 
+/** แถวนี้ต้องแจ้งเตือนไหม (ระดับด่วน/เตือน) */
+export const isAlertIssue = (issue) => issue?.level === 'crit' || issue?.level === 'warn';
+
+/**
+ * สรุปรายวันพร้อมสถานะแจ้งเตือน — ใช้ร่วมกันระหว่างหน้าสแกนเข้า-ออกกับกระดิ่งแจ้งเตือน
+ * scans = รายการสแกนดิบ, schedule = getHistoryData, fixes = getScanFixes, today = 'YYYY-MM-DD'
+ * เรียงวันที่ล่าสุดก่อน แล้วตามชื่อ
+ */
+export function buildDailyReport(scans, schedule, fixes, today) {
+  const scanned = summarizeDaily(scans);
+  const all = [...scanned, ...missingFromSchedule(scanned, schedule)];
+  return attachSchedule(applyFixes(all, fixes), schedule)
+    .map((d) => ({ ...d, issue: scanIssue(d, today) }))
+    .sort((a, b) => b.date.localeCompare(a.date) ||
+      String(a.name || a.empCode).localeCompare(String(b.name || b.empCode), 'th'));
+}
+
+/** รายละเอียดสั้น ๆ ของแถวที่ถูกเตือน (ใช้ในกระดิ่ง) */
+export function issueDetail(d) {
+  const t = (v) => (v ? hhmm(v) : '');
+  switch (d.issue?.code) {
+    case 'none': return d.plan ? `ตารางงาน ${d.plan.in}–${d.plan.out}` : '';
+    case 'noOut': return `เข้า ${t(d.first)} · ไม่มีสแกนออก`;
+    case 'noBreakIn': return `ออกเบรค ${t(d.breakOut)} · ไม่มีสแกนกลับ`;
+    case 'noBreak': return `สแกน ${t(d.first)} – ${t(d.last)} · ตารางมีเบรค`;
+    case 'short': {
+      const parts = [];
+      if (d.lateIn) parts.push(`สาย ${d.lateIn}`);
+      if (d.lateBreakIn) parts.push(`เบรคเกิน ${d.lateBreakIn}`);
+      if (d.earlyOut) parts.push(`ออกก่อน ${d.earlyOut}`);
+      return parts.length ? `${parts.join(' · ')} นาที` : '';
+    }
+    default: return '';
+  }
+}
+
 /** ชื่อกรณีสำหรับชิปกรองบนแบนเนอร์ (เรียงตามความด่วน) */
 export const ISSUE_TYPES = [
   { code: 'none', level: 'crit', label: 'ไม่สแกนทั้งวัน' },

@@ -10,17 +10,18 @@
 // แจ้งเตือนสแกนไม่ครบ / ชั่วโมงขาด (แบนเนอร์เหนือตาราง + คอลัมน์สถานะ) — ตรวจเฉพาะเมื่อวานย้อนไป
 // วันนี้ยังไม่นับ เพราะพนักงานอาจยังทำงานอยู่ กฎทั้งหมดอยู่ที่ scanIssue() ใน utils/attendance.js
 // ปุ่ม "แก้ไข" ให้สาขา/แอดมินกรอกเวลาที่ถูกต้องพร้อมเหตุผล (ScanFixModal) แล้ววันนั้นจะไม่ถูกเตือนอีก
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered, AlertTriangle, CheckCircle2, Pencil } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 import { fetchAttendance } from '../services/dashboardApi';
 import {
-  hhmm, summarizeDaily, attachSchedule, missingFromSchedule, applyFixes, scanIssue,
-  ISSUE_TYPES, SHORT_ALERT_MIN, SCAN_MERGE_MIN,
+  hhmm, buildDailyReport, isAlertIssue, ISSUE_TYPES, SHORT_ALERT_MIN, SCAN_MERGE_MIN,
 } from '../utils/attendance';
 import ScanFixModal from '../components/ScanFixModal';
+import { SCAN_ALERTS_CHANGED } from '../services/scanAlerts';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -63,7 +64,7 @@ const ISSUE_PILL = {
   pending: 'bg-gray-50 text-gray-400',
 };
 const ISSUE_STRIPE = { crit: 'shadow-[inset_3px_0_0_#e11d48]', warn: 'shadow-[inset_3px_0_0_#d97706]' };
-const isAlert = (i) => i.level === 'crit' || i.level === 'warn';
+const isAlert = isAlertIssue;
 
 export default function Attendance() {
   const { user } = useAuth();
@@ -102,6 +103,34 @@ export default function Attendance() {
       })
       .catch(() => {});
   }, [isAdmin]);
+
+  /* มาจากกระดิ่งแจ้งเตือน: /attendance?date=YYYY-MM-DD&branch=xxx&emp=รหัส
+     ตั้งวันที่/สาขา/ช่องค้นหาให้ แล้วดึงข้อมูลอัตโนมัติเมื่อ state เปลี่ยนครบแล้ว
+     (load() อ่านค่าจาก state ของรอบเรนเดอร์ จึงต้องรอให้ค่าใหม่เข้าก่อน ไม่เรียกทันที) */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoLoad = useRef(null);
+  const [autoTick, setAutoTick] = useState(0); // กดรายการวันเดิมซ้ำ (state ไม่เปลี่ยน) ก็ยังต้องดึงใหม่
+  useEffect(() => {
+    const date = searchParams.get('date');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
+    const b = String(searchParams.get('branch') || '').toLowerCase();
+    if (isAdmin && b) setSelBranch(b);
+    setStartDate(date);
+    setEndDate(date);
+    setSearch(searchParams.get('emp') || '');
+    setView('daily');
+    autoLoad.current = { date, branch: isAdmin && b ? b : null };
+    setAutoTick((n) => n + 1);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, isAdmin, setSearchParams]);
+  useEffect(() => {
+    const want = autoLoad.current;
+    if (!want || startDate !== want.date || endDate !== want.date) return;
+    if (want.branch && selBranch !== want.branch) return;
+    autoLoad.current = null;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, endDate, selBranch, autoTick]);
 
   const applyPreset = (preset) => {
     const [s, e] = preset.range(new Date());
@@ -151,14 +180,10 @@ export default function Attendance() {
 
   // สรุปรายวันของทั้งช่วงที่โหลดมา: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
   // + คนที่มีตารางงานแต่ไม่ได้สแกนเลย -> ใช้เวลาที่สาขาแก้ไขไว้ -> เทียบตารางงาน -> สถานะแจ้งเตือน
-  const allDaily = useMemo(() => {
-    if (!rows) return [];
-    const scanned = summarizeDaily(rows);
-    const all = [...scanned, ...missingFromSchedule(scanned, schedRows)];
-    return attachSchedule(applyFixes(all, fixes), schedRows)
-      .map((d) => ({ ...d, issue: scanIssue(d, today) }))
-      .sort((a, b) => b.date.localeCompare(a.date) || String(a.name || a.empCode).localeCompare(String(b.name || b.empCode), 'th'));
-  }, [rows, schedRows, fixes, today]);
+  const allDaily = useMemo(
+    () => (rows ? buildDailyReport(rows, schedRows, fixes, today) : []),
+    [rows, schedRows, fixes, today]
+  );
 
   // วันที่ในชุดที่โหลดมา (ล่าสุดก่อน) — ใช้เป็นตัวเลือกในหัวคอลัมน์วันที่
   const dateOptions = useMemo(() => [...new Set(allDaily.map((d) => d.date))].sort().reverse(), [allDaily]);
@@ -199,6 +224,8 @@ export default function Attendance() {
     if (!loadedDates) return;
     const res = await apiCall('getScanFixes', { branch: loadedBranch, ...loadedDates }).catch(() => null);
     if (Array.isArray(res?.data)) setFixes(res.data);
+    // ให้กระดิ่งมุมขวาบนโหลดใหม่ ตัวเลขจะได้ลดลงทันทีหลังแก้
+    window.dispatchEvent(new Event(SCAN_ALERTS_CHANGED));
   };
 
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
