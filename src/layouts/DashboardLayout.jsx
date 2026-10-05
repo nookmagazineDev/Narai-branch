@@ -3,6 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { Users, UserPlus, LogOut, Menu, X, LayoutDashboard, ChevronDown, ChevronRight, Calendar, PackageSearch, Wallet, Search, Fingerprint } from 'lucide-react';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { isStaleBuild } from '../services/api';
+import { loadScanAlerts, getSeen, markSeen, ALERT_CACHE_MS, SCAN_ALERTS_CHANGED } from '../services/scanAlerts';
+import ScanAlertBell from '../components/ScanAlertBell';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -36,6 +38,39 @@ export default function DashboardLayout() {
     } catch (e) {}
   }, []);
   const outletContext = useMemo(() => ({ setTopStats }), [setTopStats]);
+
+  /* กระดิ่งแจ้งเตือนสแกนไม่ครบ — โหลดตอนเข้าระบบ แล้วทุก 15 นาที (ดู services/scanAlerts.js)
+     หน้าสแกนเข้า-ออกยิง SCAN_ALERTS_CHANGED หลังกดแก้ไข ให้ตัวเลขบนกระดิ่งลดลงทันที */
+  const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
+  const [scanAlerts, setScanAlerts] = useState(null);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [seenAlerts, setSeenAlerts] = useState(getSeen);
+  const refreshAlerts = useCallback(async (force = false) => {
+    if (!user?.branch) return;
+    setAlertsLoading(true);
+    try {
+      setScanAlerts(await loadScanAlerts(user, { force }));
+    } catch {
+      setScanAlerts((prev) => prev || { items: [], failed: [], at: Date.now() });
+    } finally {
+      setAlertsLoading(false);
+    }
+  }, [user]);
+  useEffect(() => {
+    refreshAlerts();
+    const t = setInterval(() => refreshAlerts(true), ALERT_CACHE_MS);
+    const onChanged = () => refreshAlerts(true);
+    window.addEventListener(SCAN_ALERTS_CHANGED, onChanged);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener(SCAN_ALERTS_CHANGED, onChanged);
+    };
+  }, [refreshAlerts]);
+  const onSeenAlerts = useCallback((keys) => setSeenAlerts(markSeen(keys)), []);
+  const bell = (
+    <ScanAlertBell alerts={scanAlerts} seen={seenAlerts} loading={alertsLoading} isAdmin={isAdmin}
+      onRefresh={() => refreshAlerts(true)} onSeen={onSeenAlerts} />
+  );
 
   /* ไฟล์ที่เบราว์เซอร์ถืออยู่เก่ากว่าที่ deploy จริง — ต้องบอก ไม่ใช่ปล่อยให้ทำงานต่อเงียบ ๆ
      เครื่องสาขาเปิดหน้าค้างไว้ข้ามวันเป็นเรื่องปกติ และไฟล์ชุดเก่าเคยทำให้บันทึกสต๊อกลงชีทเก่า
@@ -265,17 +300,21 @@ export default function DashboardLayout() {
                  </span>
                </div>
              )}
+             {bell}
              <span className="text-sm text-gray-500">ผู้ใช้งาน:</span>
              <span className="font-semibold">{user?.username}</span>
              <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full">สาขา: {user?.branch}</span>
           </div>
 
-          <button
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500 lg:hidden"
-          >
-            <Menu className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-2 lg:hidden">
+            {bell}
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <Menu className="w-6 h-6" />
+            </button>
+          </div>
         </header>
 
         {/* Content Area */}
