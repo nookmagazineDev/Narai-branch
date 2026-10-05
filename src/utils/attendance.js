@@ -28,7 +28,24 @@ export function hoursBetween(a, b) {
  *   1 ครั้ง = มีแต่เวลาเข้า (ยังไม่ออก หรือลืมสแกน)
  *   2 ครั้ง = เข้า-ออก ไม่ได้แยกเบรค
  *   3 ครั้ง = มีออกเบรค แต่ขาดเข้าเบรค (ลืมสแกนตอนกลับ)
+ *
+ * สแกนที่ห่างจากครั้งก่อนไม่ถึง SCAN_MERGE_MIN นาทีนับเป็นครั้งเดียว (เก็บเวลาแรกไว้)
+ * กันกรณีกดเครื่องซ้ำ หรือสแกนรวดหลายครั้ง ซึ่งจะทำให้ลำดับเข้า/ออกเบรคเลื่อนผิดทั้งแถว
+ * จำนวนครั้งก่อนรวมอยู่ใน rawCount (แท็บ "ทุกครั้งที่สแกน" ยังเห็นครบทุกครั้ง)
  */
+export const SCAN_MERGE_MIN = 10;
+
+function mergeCloseScans(sorted) {
+  const out = [];
+  for (const t of sorted) {
+    const prev = out[out.length - 1];
+    const gap = prev ? hoursBetween(prev, t) : null;
+    if (prev && (prev === t || (gap != null && gap * 60 < SCAN_MERGE_MIN))) continue;
+    out.push(t);
+  }
+  return out;
+}
+
 export function summarizeDaily(rows) {
   const m = {};
   for (const r of rows || []) {
@@ -39,7 +56,7 @@ export function summarizeDaily(rows) {
   }
   return Object.values(m)
     .map((e) => {
-      const ts = e.times.slice().sort();
+      const ts = mergeCloseScans(e.times.slice().sort());
       const n = ts.length;
       const first = ts[0];
       const last = n > 1 ? ts[n - 1] : null;
@@ -54,6 +71,7 @@ export function summarizeDaily(rows) {
         breakIn,
         last,
         count: n,
+        rawCount: e.times.length,
         hours,
         breakHours,
         // ชั่วโมงทำงานจริงหลังหักเวลาพัก (ถ้าไม่มีข้อมูลพักก็เท่ากับชั่วโมงรวม)
@@ -107,7 +125,17 @@ export function planOf(record) {
     status: record.status || '',
     otHours: parseFloat(record.ot || '0') || 0,
     otApprover: record.otApprover || '',
+    hourlyLeave: parseFloat(record.hourlyLeave || '0') || 0,
+    expected: expectedToWork(record),
   };
+}
+
+/** วันนั้นพนักงานต้องมาทำงาน (มีเวลาเข้า-ออก และไม่ได้ลงว่าหยุด/ลา) */
+export function expectedToWork(record) {
+  if (!record || record.otherNote === 'ล้างข้อมูล') return false;
+  if (String(record.status || '').trim() === 'หยุด') return false;
+  if (String(record.leaveNote || '').trim() || String(record.unpaidLeave || '').trim()) return false;
+  return Boolean(record.checkIn && record.checkOut);
 }
 
 /** ต่างกันกี่นาที คืน null ถ้าข้อมูลไม่พอ และคืน 0 เมื่อไม่สาย (ไม่คืนค่าติดลบ) */
@@ -148,7 +176,7 @@ export function attachSchedule(daily, scheduleRows) {
       byName.get(`${d.date}|${normName(d.name)}`) ||
       null;
     const plan = planOf(rec);
-    if (!plan) return { ...d, plan: null, lateIn: null, lateBreakIn: null, earlyOut: null };
+    if (!plan) return { ...d, plan: null, lateIn: null, lateBreakIn: null, earlyOut: null, shortMin: null };
 
     // กลับจากเบรคสาย: เทียบกับเวลาสิ้นสุดเบรคที่ลงไว้ ถ้าไม่ได้ลงช่วงเวลาไว้
     // ก็เทียบกับ "ออกเบรคจริง + ระยะเบรคที่อนุญาต" แทน จะได้ยังวัดได้
@@ -159,13 +187,110 @@ export function attachSchedule(daily, scheduleRows) {
       if (out != null && back != null) lateBreakIn = Math.max(0, Math.round(back - out - plan.breakAllowed));
     }
 
+    const lateIn = lateBy(hhmm(d.first), plan.in);
+    // ออกก่อนเวลา = กลับด้านของการสาย (เวลาที่ลงไว้ - เวลาที่สแกนออกจริง)
+    const earlyOut = lateBy(plan.out, d.last ? hhmm(d.last) : '');
+    // ชั่วโมงที่ขาดทั้งวัน = สาย + เบรคเกิน + ออกก่อน หักลาเป็นชั่วโมงที่ลงไว้แล้ว
+    // วันที่สแกนไม่ครบคิดไม่ได้ (ไม่รู้ว่าออกกี่โมง) จึงเป็น null
+    const shortMin = d.first && d.last && (lateIn != null || earlyOut != null)
+      ? Math.max(0, (lateIn || 0) + (lateBreakIn || 0) + (earlyOut || 0) - Math.round(plan.hourlyLeave * 60))
+      : null;
+
+    return { ...d, plan, lateIn, lateBreakIn, earlyOut, shortMin };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// แจ้งเตือนสแกนไม่ครบ / ชั่วโมงขาด
+// ---------------------------------------------------------------------------
+
+/** ขาดรวมเกินกี่นาทีต่อวันถึงแจ้งเตือน */
+export const SHORT_ALERT_MIN = 15;
+
+/**
+ * คนที่มีตารางงานวันนั้นแต่ไม่มีการสแกนเลย -> แถวว่างแบบเดียวกับ summarizeDaily (count = 0)
+ * จับคู่แบบเดียวกับ attachSchedule: รหัสก่อน ไม่เจอค่อยลองชื่อ
+ */
+export function missingFromSchedule(daily, scheduleRows) {
+  const seenCode = new Set();
+  const seenName = new Set();
+  for (const d of daily || []) {
+    seenCode.add(`${d.date}|${String(d.empCode).trim()}`);
+    const n = normName(d.name);
+    if (n) seenName.add(`${d.date}|${n}`);
+  }
+  const out = [];
+  const added = new Set();
+  for (const r of scheduleRows || []) {
+    if (!expectedToWork(r)) continue;
+    const date = String(r.workDate || '').slice(0, 10);
+    const code = String(r.hrCode || '').trim();
+    const n = normName(r.name);
+    if (!date || (!code && !n)) continue;
+    if ((code && seenCode.has(`${date}|${code}`)) || (n && seenName.has(`${date}|${n}`))) continue;
+    const key = `${date}|${code || n}`;
+    if (added.has(key)) continue;
+    added.add(key);
+    out.push({
+      date, empCode: code || r.name, name: r.name || '', times: [],
+      first: null, breakOut: null, breakIn: null, last: null,
+      count: 0, rawCount: 0, hours: null, breakHours: null, netHours: null,
+    });
+  }
+  return out;
+}
+
+/**
+ * ใช้เวลาที่สาขากด "แก้ไข" ไว้แทนเวลาสแกนในช่องที่กรอก (ช่องที่เว้นว่างยังใช้เวลาสแกนจริง)
+ * fixes = [{ workDate, empCode, timeIn, breakOut, breakIn, timeOut, reason, note, savedBy, savedAt }]
+ */
+export function applyFixes(daily, fixes) {
+  const byKey = new Map((fixes || []).map((f) => [`${f.workDate}|${String(f.empCode).trim()}`, f]));
+  if (byKey.size === 0) return daily;
+  return (daily || []).map((d) => {
+    const fix = byKey.get(`${d.date}|${String(d.empCode).trim()}`);
+    if (!fix) return d;
+    const at = (t, orig) => (t ? `${d.date} ${t}:00` : orig);
+    const first = at(fix.timeIn, d.first);
+    const breakOut = at(fix.breakOut, d.breakOut);
+    const breakIn = at(fix.breakIn, d.breakIn);
+    const last = at(fix.timeOut, d.last);
+    const hours = hoursBetween(first, last);
+    const breakHours = hoursBetween(breakOut, breakIn);
     return {
-      ...d,
-      plan,
-      lateIn: lateBy(hhmm(d.first), plan.in),
-      lateBreakIn,
-      // ออกก่อนเวลา = กลับด้านของการสาย (เวลาที่ลงไว้ - เวลาที่สแกนออกจริง)
-      earlyOut: lateBy(plan.out, d.last ? hhmm(d.last) : ''),
+      ...d, fix, first, breakOut, breakIn, last, hours, breakHours,
+      netHours: hours != null && breakHours != null ? hours - breakHours : hours,
     };
   });
 }
+
+/**
+ * สถานะของแถวหนึ่ง (หลัง attachSchedule แล้ว)
+ *   level: 'crit' | 'warn' | 'info' | 'ok' | 'fixed' | 'pending'
+ * วันนี้ (และหลังจากนี้) ยังไม่ตรวจ — แจ้งเตือนเฉพาะเมื่อวานย้อนไป
+ */
+export function scanIssue(d, today) {
+  if (d.date >= today) return { code: 'pending', level: 'pending', label: 'วันนี้ ยังไม่ตรวจ' };
+  if (d.fix) return { code: 'fixed', level: 'fixed', label: 'แก้ไขแล้ว' };
+  if (!d.first) return { code: 'none', level: 'crit', label: 'ไม่สแกนทั้งวัน' };
+  if (!d.last) return { code: 'noOut', level: 'crit', label: 'ขาดออกงาน' };
+  const expected = Boolean(d.plan?.expected);
+  if (d.breakOut && !d.breakIn) return { code: 'noBreakIn', level: 'warn', label: 'ขาดเข้าเบรค' };
+  if (expected && !d.breakOut && (d.plan.breakAllowed || 0) > 0) {
+    return { code: 'noBreak', level: 'warn', label: 'ไม่ได้สแกนเบรค' };
+  }
+  if (expected && d.shortMin != null && d.shortMin > SHORT_ALERT_MIN) {
+    return { code: 'short', level: 'warn', label: `ทำงานขาด ${d.shortMin} นาที` };
+  }
+  if (!d.plan) return { code: 'noPlan', level: 'info', label: 'ไม่มีในตารางงาน' };
+  return { code: 'ok', level: 'ok', label: 'ครบ' };
+}
+
+/** ชื่อกรณีสำหรับชิปกรองบนแบนเนอร์ (เรียงตามความด่วน) */
+export const ISSUE_TYPES = [
+  { code: 'none', level: 'crit', label: 'ไม่สแกนทั้งวัน' },
+  { code: 'noOut', level: 'crit', label: 'ขาดออกงาน' },
+  { code: 'noBreakIn', level: 'warn', label: 'ขาดเข้าเบรค' },
+  { code: 'noBreak', level: 'warn', label: 'ไม่ได้สแกนเบรค' },
+  { code: 'short', level: 'warn', label: 'สแกนครบแต่ชั่วโมงขาด' },
+];

@@ -21,6 +21,7 @@ import { STORE_WORK_ACTIONS } from './storework.js';
 import { KITCHEN_ACTIONS } from './kitchen.js';
 import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
+import { ATTENDANCE_ACTIONS } from './attendance.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
 } from './hr-session.js';
@@ -1042,6 +1043,9 @@ const ACTIONS = {
   // ปุ่ม "เบิกเข้าสาขา" ของกล่องนั้นไม่ได้อยู่ในชุดนี้ มันเรียก saveStock ของ stock.js
   // เพื่อให้ใบเบิกลง dbo.stock_request ตารางเดียวกับใบเบิกของสต๊อก
   ...UNIFORM_ACTIONS,
+
+  // หน้าสแกนเข้า-ออก: เวลาที่สาขา/แอดมินแก้แทนเวลาสแกนจริง (ปุ่ม "แก้ไข") — ดู office-server/attendance.js
+  ...ATTENDANCE_ACTIONS,
 };
 
 /* ชื่อ action ทั้งหมดของโค้ดชุดนี้ — /health เอาไปแสดง เพื่อให้ตอบได้ว่า "ไม่รู้จักคำสั่ง X"

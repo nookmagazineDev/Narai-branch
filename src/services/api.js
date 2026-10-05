@@ -103,6 +103,12 @@ const SQL_ACTIONS = new Set([
   'saveEmployeeUniform',
   'deleteEmployeeUniform',
 
+  // กลุ่มที่ 3.06 — หน้าสแกนเข้า-ออก: แก้เวลาสแกนที่ขาด/ผิด (ปุ่ม "แก้ไข" ในตารางสรุปรายวัน)
+  // ของใหม่ทั้งชุด ไม่เคยมีใน Apps Script — ดู office-server/attendance.js
+  'getScanFixes',
+  'saveScanFix',
+  'deleteScanFix',
+
   // กลุ่มที่ 3.1 — หน้ารับสินค้า
   //
   // ต้องสลับพร้อมกับที่แอป storefct สลับ STORE_SOURCE=sql เพราะทั้งสองฝั่งอ้างข้อมูลก้อนเดียวกัน:
