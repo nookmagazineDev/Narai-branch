@@ -126,6 +126,7 @@ export function planOf(record) {
     otHours: parseFloat(record.ot || '0') || 0,
     otApprover: record.otApprover || '',
     hourlyLeave: parseFloat(record.hourlyLeave || '0') || 0,
+    empType: String(record.empType || '').trim(),
     expected: expectedToWork(record),
   };
 }
@@ -284,6 +285,24 @@ export function scanIssue(d, today) {
   }
   if (!d.plan) return { code: 'noPlan', level: 'info', label: 'ไม่มีในตารางงาน' };
   return { code: 'ok', level: 'ok', label: 'ครบ' };
+}
+
+/**
+ * ประเภทพนักงาน (F/T, P/T, DAY9 ...) ของแต่ละแถว
+ * ใช้ค่าในตารางงานของวันนั้นก่อน (ประเภท ณ วันนั้น) ไม่มีค่อยดูจากรายชื่อพนักงานปัจจุบัน
+ * จับคู่รายชื่อด้วยรหัสก่อน ไม่เจอค่อยลองชื่อ แบบเดียวกับ attachSchedule
+ */
+export function empTypeLookup(employees) {
+  const byCode = new Map();
+  const byName = new Map();
+  for (const e of employees || []) {
+    const t = String(e.empType || e.type || '').trim();
+    if (!t) continue;
+    if (e.hrCode) byCode.set(String(e.hrCode).trim(), t);
+    const n = normName(e.name || e.fullName);
+    if (n) byName.set(n, t);
+  }
+  return (d) => d.plan?.empType || byCode.get(String(d.empCode).trim()) || byName.get(normName(d.name)) || '';
 }
 
 /** แถวนี้ต้องแจ้งเตือนไหม (ระดับด่วน/เตือน) */
