@@ -6,13 +6,21 @@
 //
 // "เข้า/ออก" คิดจากเวลาสแกนแรกและสแกนสุดท้ายของวัน ไม่ได้อิง punch_state
 // เพราะการตั้งค่าปุ่มเข้า/ออกของแต่ละเครื่องไม่เหมือนกัน (แสดง punch_state ไว้ในตารางรายการดิบแทน)
+//
+// แจ้งเตือนสแกนไม่ครบ / ชั่วโมงขาด (แบนเนอร์เหนือตาราง + คอลัมน์สถานะ) — ตรวจเฉพาะเมื่อวานย้อนไป
+// วันนี้ยังไม่นับ เพราะพนักงานอาจยังทำงานอยู่ กฎทั้งหมดอยู่ที่ scanIssue() ใน utils/attendance.js
+// ปุ่ม "แก้ไข" ให้สาขา/แอดมินกรอกเวลาที่ถูกต้องพร้อมเหตุผล (ScanFixModal) แล้ววันนั้นจะไม่ถูกเตือนอีก
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered } from 'lucide-react';
+import { Fingerprint, RefreshCw, Store, Search, CalendarDays, ListOrdered, AlertTriangle, CheckCircle2, Pencil } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiCall } from '../services/api';
 import { fetchAttendance } from '../services/dashboardApi';
-import { hhmm, summarizeDaily, attachSchedule } from '../utils/attendance';
+import {
+  hhmm, summarizeDaily, attachSchedule, missingFromSchedule, applyFixes, scanIssue,
+  ISSUE_TYPES, SHORT_ALERT_MIN, SCAN_MERGE_MIN,
+} from '../utils/attendance';
+import ScanFixModal from '../components/ScanFixModal';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -39,6 +47,24 @@ const lateCell = (v) => {
 };
 const num2 = (v) => (v != null ? v.toFixed(2) : '-');
 
+/** ช่องที่ควรมีแต่ไม่ได้สแกน */
+const Missing = ({ warn }) => (
+  <span className={`inline-block text-[11px] font-semibold px-1.5 rounded-md border border-dashed whitespace-nowrap ${
+    warn ? 'text-amber-700 border-amber-400' : 'text-rose-700 border-rose-400'}`}>ไม่ได้สแกน</span>
+);
+
+/** สีของป้ายสถานะ / แถบซ้ายแถว ตามระดับ */
+const ISSUE_PILL = {
+  crit: 'bg-rose-100 text-rose-700',
+  warn: 'bg-amber-100 text-amber-800',
+  info: 'bg-gray-100 text-gray-500',
+  ok: 'bg-emerald-50 text-emerald-700',
+  fixed: 'bg-sky-100 text-sky-700',
+  pending: 'bg-gray-50 text-gray-400',
+};
+const ISSUE_STRIPE = { crit: 'shadow-[inset_3px_0_0_#e11d48]', warn: 'shadow-[inset_3px_0_0_#d97706]' };
+const isAlert = (i) => i.level === 'crit' || i.level === 'warn';
+
 export default function Attendance() {
   const { user } = useAuth();
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
@@ -54,9 +80,14 @@ export default function Attendance() {
   const [rows, setRows] = useState(null);
   const [schedRows, setSchedRows] = useState([]); // ตารางงานที่สาขาลงไว้ ในช่วงวันเดียวกัน
   const [loadedRange, setLoadedRange] = useState('');
+  const [loadedDates, setLoadedDates] = useState(null);
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(''); // '' = ทุกวันในช่วงที่โหลดมา
   const [view, setView] = useState('daily'); // 'daily' = สรุปรายวัน | 'raw' = รายการสแกนทั้งหมด
+  const [fixes, setFixes] = useState([]); // เวลาที่สาขากดแก้ไขไว้ (dbo.attendance_scan_fix)
+  const [issueFilter, setIssueFilter] = useState(''); // '' = ทั้งหมด | 'bad' = เฉพาะที่ต้องแก้ | รหัสกรณี
+  const [editRow, setEditRow] = useState(null);
+  const [loadedBranch, setLoadedBranch] = useState('');
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -84,16 +115,21 @@ export default function Attendance() {
     setLoading(true);
     try {
       // ตารางงานเป็นของเสริม ถ้าดึงไม่ได้ก็ยังต้องเห็นเวลาสแกนตามปกติ
-      const [res, sched] = await Promise.all([
+      const [res, sched, fixRes] = await Promise.all([
         fetchAttendance({ branch, startDate, endDate }),
         apiCall('getHistoryData', { branch, startDate, endDate }).catch(() => null),
+        apiCall('getScanFixes', { branch, startDate, endDate }).catch(() => null),
       ]);
       if (res?.status !== 'success') throw new Error(res?.message || 'ดึงข้อมูลไม่สำเร็จ');
       setRows(res.data || []);
       setDateFilter('');
+      setIssueFilter('');
+      setFixes(Array.isArray(fixRes?.data) ? fixRes.data : []);
+      setLoadedBranch(branch);
       setSchedRows(Array.isArray(sched?.data) ? sched.data : []);
       if (!sched) toast('ดึงตารางงานมาเทียบไม่ได้ — แสดงเฉพาะเวลาสแกน', { icon: '⚠️' });
       setLoadedRange(startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`);
+      setLoadedDates({ startDate, endDate });
       toast.success(`พบการสแกน ${res.data?.length || 0} ครั้ง`);
     } catch (e) {
       toast.error(e.message || 'ดึงข้อมูลไม่สำเร็จ');
@@ -102,16 +138,30 @@ export default function Attendance() {
     }
   };
 
+  const q = search.trim().toLowerCase();
+  const matchSearch = (r) => !q || String(r.empCode).toLowerCase().includes(q) || String(r.name || '').toLowerCase().includes(q);
+
+  // รายการสแกนดิบ (แท็บ "ทุกครั้งที่สแกน")
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
     let list = rows || [];
     if (dateFilter) list = list.filter((r) => r.date === dateFilter);
-    if (!q) return list;
-    return list.filter((r) => String(r.empCode).toLowerCase().includes(q) || String(r.name || '').toLowerCase().includes(q));
-  }, [rows, search, dateFilter]);
+    return list.filter(matchSearch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, q, dateFilter]);
 
-  // วันที่ที่มีสแกนจริงในชุดที่โหลดมา (ล่าสุดก่อน) — ใช้เป็นตัวเลือกในหัวคอลัมน์วันที่
-  const dateOptions = useMemo(() => [...new Set((rows || []).map((r) => r.date))].sort().reverse(), [rows]);
+  // สรุปรายวันของทั้งช่วงที่โหลดมา: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
+  // + คนที่มีตารางงานแต่ไม่ได้สแกนเลย -> ใช้เวลาที่สาขาแก้ไขไว้ -> เทียบตารางงาน -> สถานะแจ้งเตือน
+  const allDaily = useMemo(() => {
+    if (!rows) return [];
+    const scanned = summarizeDaily(rows);
+    const all = [...scanned, ...missingFromSchedule(scanned, schedRows)];
+    return attachSchedule(applyFixes(all, fixes), schedRows)
+      .map((d) => ({ ...d, issue: scanIssue(d, today) }))
+      .sort((a, b) => b.date.localeCompare(a.date) || String(a.name || a.empCode).localeCompare(String(b.name || b.empCode), 'th'));
+  }, [rows, schedRows, fixes, today]);
+
+  // วันที่ในชุดที่โหลดมา (ล่าสุดก่อน) — ใช้เป็นตัวเลือกในหัวคอลัมน์วันที่
+  const dateOptions = useMemo(() => [...new Set(allDaily.map((d) => d.date))].sort().reverse(), [allDaily]);
 
   // ตัวกรองในหัวคอลัมน์ — ช่วงที่มีวันเดียวไม่ต้องมีให้เลือก
   const dateFilterEl = dateOptions.length > 1 ? (
@@ -122,9 +172,34 @@ export default function Attendance() {
     </select>
   ) : null;
 
-  // สรุปรายวัน: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
-  // แล้วเทียบกับตารางงานที่สาขาลงไว้ เพื่อคิดว่าสาย/ออกก่อนเวลากี่นาที
-  const daily = useMemo(() => attachSchedule(summarizeDaily(filtered), schedRows), [filtered, schedRows]);
+  // สรุปแจ้งเตือนของทั้งช่วง (ไม่ขึ้นกับช่องค้นหา) — นับเฉพาะเมื่อวานย้อนไป
+  const alertSummary = useMemo(() => {
+    const bad = allDaily.filter((d) => isAlert(d.issue));
+    const byCode = {};
+    for (const d of bad) byCode[d.issue.code] = (byCode[d.issue.code] || 0) + 1;
+    return {
+      total: bad.length,
+      people: new Set(bad.map((d) => d.empCode)).size,
+      byCode,
+      fixed: allDaily.filter((d) => d.issue.level === 'fixed').length,
+      checked: allDaily.some((d) => d.issue.level !== 'pending'),
+    };
+  }, [allDaily]);
+
+  const daily = useMemo(() => allDaily.filter((d) =>
+    (!dateFilter || d.date === dateFilter) &&
+    matchSearch(d) &&
+    (!issueFilter || (issueFilter === 'bad' ? isAlert(d.issue) : d.issue.code === issueFilter))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [allDaily, dateFilter, q, issueFilter]);
+
+  /** หลังบันทึก/ยกเลิกการแก้ไข — โหลดเฉพาะรายการแก้ไขใหม่ ไม่ต้องดึงสแกนทั้งชุด */
+  const reloadFixes = async () => {
+    setEditRow(null);
+    if (!loadedDates) return;
+    const res = await apiCall('getScanFixes', { branch: loadedBranch, ...loadedDates }).catch(() => null);
+    if (Array.isArray(res?.data)) setFixes(res.data);
+  };
 
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
 
@@ -180,6 +255,47 @@ export default function Attendance() {
         {!loading && loadedRange && <span className="text-xs text-gray-400">ข้อมูล: {loadedRange}</span>}
       </div>
 
+      {/* แจ้งเตือนสแกนไม่ครบ / ชั่วโมงขาด — กดชิปเพื่อกรองตาราง */}
+      {rows !== null && alertSummary.checked && (alertSummary.total > 0 ? (
+        <div role="alert" className="bg-white rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-rose-500 p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-rose-100 text-rose-600 rounded-xl"><AlertTriangle className="w-5 h-5" /></div>
+              <div>
+                <p className="font-semibold text-gray-800">สแกนไม่ครบ / เวลาไม่ตรง {alertSummary.total} รายการ ({alertSummary.people} คน)</p>
+                <p className="text-xs text-gray-500">
+                  เทียบกับตารางงานที่ลงไว้ · ตรวจถึงเมื่อวาน · กด "แก้ไข" ท้ายแถวเพื่อกรอกเวลาที่ถูกต้อง
+                  {alertSummary.fixed > 0 && ` · แก้ไขแล้ว ${alertSummary.fixed} รายการ`}
+                </p>
+              </div>
+            </div>
+            <button onClick={() => { setView('daily'); setIssueFilter(issueFilter === 'bad' ? '' : 'bad'); }}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold ${issueFilter === 'bad'
+                ? 'bg-teal-50 text-teal-700 border border-teal-500' : 'bg-teal-600 text-white hover:bg-teal-700'}`}>
+              {issueFilter === 'bad' ? 'แสดงทั้งหมด' : 'ดูเฉพาะที่ไม่ครบ'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {ISSUE_TYPES.filter((t) => alertSummary.byCode[t.code]).map((t) => {
+              const active = issueFilter === t.code;
+              return (
+                <button key={t.code} onClick={() => { setView('daily'); setIssueFilter(active ? '' : t.code); }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm border ${active
+                    ? 'border-teal-500 bg-teal-50 text-teal-700' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                  <span className={`font-mono font-semibold ${t.level === 'crit' ? 'text-rose-600' : 'text-amber-600'}`}>{alertSummary.byCode[t.code]}</span>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 flex items-center gap-2 text-sm text-emerald-800">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+          สแกนครบทุกคนตามตารางงาน (ตรวจถึงเมื่อวาน){alertSummary.fixed > 0 && ` · แก้ไขแล้ว ${alertSummary.fixed} รายการ`}
+        </div>
+      ))}
+
       {rows !== null && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           {/* แถบเครื่องมือ */}
@@ -204,14 +320,16 @@ export default function Attendance() {
             </span>
           </div>
 
-          {rows.length === 0 ? (
+          {rows.length === 0 && (view === 'raw' || allDaily.length === 0) ? (
             <div className="py-16 px-6 text-center text-sm space-y-1">
               <p className="text-amber-600 font-medium">ไม่พบการสแกนในช่วงวันที่ที่เลือก</p>
               <p className="text-gray-400 text-xs">ลองเปลี่ยนช่วงวันที่ หรือตรวจว่าเครื่องสแกนของสาขาส่งข้อมูลเข้าระบบแล้วหรือยัง</p>
             </div>
-          ) : filtered.length === 0 ? (
+          ) : (view === 'raw' ? filtered.length === 0 : daily.length === 0) ? (
             <div className="py-16 text-center text-gray-400 text-sm">
-              {search.trim() ? 'ไม่พบพนักงานที่ค้นหา' : `ไม่พบการสแกนของวันที่ ${dateFilter}`}
+              {search.trim() ? 'ไม่พบพนักงานที่ค้นหา'
+                : issueFilter ? 'ไม่มีรายการในกรณีที่เลือก'
+                : `ไม่พบการสแกนของวันที่ ${dateFilter}`}
             </div>
           ) : view === 'daily' ? (
             <div className="overflow-auto max-h-[65vh]">
@@ -229,9 +347,11 @@ export default function Attendance() {
                     <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-gray-200">ชื่อ</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-gray-200 font-semibold">ตารางงานที่ลงไว้</th>
                     <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-teal-100 text-teal-800 border-b border-l border-gray-200 font-semibold">สแกนจริง</th>
-                    <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-gray-200 font-semibold">สาย (นาที)</th>
+                    <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-gray-200 font-semibold">สาย (นาที)</th>
                     <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-gray-50 border-b border-l border-gray-200 font-semibold">เวลาทำงาน (ชม.)</th>
                     <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-gray-50 border-b border-l border-gray-200">สแกน</th>
+                    <th rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-gray-50 border-b border-l border-gray-200">สถานะ</th>
+                    <th rowSpan={2} className="h-8 px-3 sticky top-0 bg-gray-50 border-b border-gray-200"><span className="sr-only">แก้ไข</span></th>
                   </tr>
                   <tr>
                     <th className="px-3 py-1.5 text-center sticky top-8 bg-indigo-50 border-b border-l border-gray-200 font-normal">เข้า</th>
@@ -245,15 +365,22 @@ export default function Attendance() {
                     <th className="px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-l border-gray-200 font-normal">เข้าสาย</th>
                     <th className="px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-gray-200 font-normal">เบรคสาย</th>
                     <th className="px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-gray-200 font-normal">ออกก่อน</th>
+                    <th className="px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-gray-200 font-semibold">รวมขาด</th>
                     <th className="px-3 py-1.5 text-right sticky top-8 bg-gray-50 border-b border-l border-gray-200 font-normal">รวม</th>
                     <th className="px-3 py-1.5 text-right sticky top-8 bg-gray-50 border-b border-gray-200 font-normal">พัก</th>
                     <th className="px-3 py-1.5 text-right sticky top-8 bg-gray-50 border-b border-gray-200 font-normal">สุทธิ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-700">
-                  {daily.map((d) => (
-                    <tr key={`${d.date}|${d.empCode}`} className="hover:bg-teal-50/40">
-                      <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{d.date}</td>
+                  {daily.map((d) => {
+                    const lv = d.issue.level;
+                    const code = d.issue.code;
+                    const fixedCls = (k) => (d.fix?.[k] ? 'text-sky-700 underline decoration-dotted' : '');
+                    // ช่องที่ขาด -> ป้าย "ไม่ได้สแกน" แทนขีด เฉพาะแถวที่ถูกแจ้งเตือน
+                    const scanCell = (t, missing, cls) => (missing ? <Missing warn={lv === 'warn'} /> : timeCell(t ? hhmm(t) : '', cls));
+                    return (
+                    <tr key={`${d.date}|${d.empCode}`} className={`hover:bg-teal-50/40 ${lv === 'crit' ? 'bg-rose-50/30' : ''}`}>
+                      <td className={`px-3 py-2 font-medium text-gray-800 whitespace-nowrap ${ISSUE_STRIPE[lv] || ''}`}>{d.date}</td>
                       <td className="px-3 py-2 font-mono text-xs text-gray-500">{d.empCode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
 
@@ -263,24 +390,47 @@ export default function Attendance() {
                       <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.breakIn, 'text-indigo-500')}</td>
                       <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.out, 'text-indigo-700')}</td>
 
-                      {/* ฝั่งที่สแกนจริง */}
-                      <td className="px-3 py-2 text-center border-l border-gray-200">{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
+                      {/* ฝั่งที่สแกนจริง (ตัวเลขสีฟ้าขีดเส้นประ = เวลาที่สาขาแก้ไขแทน) */}
+                      <td className="px-3 py-2 text-center border-l border-gray-200">{scanCell(d.first, code === 'none', `font-semibold text-emerald-700 ${fixedCls('timeIn')}`)}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d.breakOut, code === 'none' || code === 'noBreak', `text-amber-600 ${fixedCls('breakOut')}`)}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d.breakIn, code === 'none' || code === 'noBreak' || code === 'noBreakIn', `text-amber-600 ${fixedCls('breakIn')}`)}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d.last, code === 'none' || code === 'noOut', `font-semibold text-rose-700 ${fixedCls('timeOut')}`)}</td>
 
                       {/* สรุปส่วนต่าง */}
                       <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-gray-200">{lateCell(d.lateIn)}</td>
                       <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.lateBreakIn)}</td>
                       <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.earlyOut)}</td>
+                      <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.shortMin)}</td>
 
                       {/* เวลาทำงาน */}
                       <td className="px-3 py-2 text-right font-mono text-gray-500 border-l border-gray-200">{num2(d.hours)}</td>
                       <td className="px-3 py-2 text-right font-mono text-gray-400">{num2(d.breakHours)}</td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-gray-800">{num2(d.netHours)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-gray-400 border-l border-gray-200">{d.count}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-400 border-l border-gray-200"
+                        title={d.rawCount > d.count ? `สแกนจริง ${d.rawCount} ครั้ง (ที่ห่างกันไม่ถึง ${SCAN_MERGE_MIN} นาทีนับเป็นครั้งเดียว)` : undefined}>
+                        {d.count}{d.rawCount > d.count && <span className="text-[10px] text-amber-600"> ({d.rawCount})</span>}
+                      </td>
+
+                      {/* สถานะแจ้งเตือน */}
+                      <td className="px-3 py-2 border-l border-gray-200 whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${ISSUE_PILL[lv]}`}
+                          title={d.fix ? `${d.fix.reason}${d.fix.note ? ` — ${d.fix.note}` : ''} · โดย ${d.fix.savedBy || '-'} ${d.fix.savedAt || ''}` : undefined}>
+                          {d.issue.label}
+                        </span>
+                        {d.fix && <div className="text-[10px] text-sky-700 mt-0.5">{d.fix.reason}</div>}
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        {lv !== 'pending' && (isAlert(d.issue) || d.fix || lv === 'info') && (
+                          <button onClick={() => setEditRow(d)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border ${isAlert(d.issue)
+                              ? 'border-teal-500 text-teal-700 hover:bg-teal-50' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                            <Pencil className="w-3 h-3" /> แก้ไข
+                          </button>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               <div className="px-4 py-3 text-xs text-gray-400 border-t border-gray-100 space-y-1">
@@ -294,7 +444,13 @@ export default function Attendance() {
                   <span className="font-medium text-rose-600"> เบรคสาย</span> = สแกนเข้าเบรค − เวลาสิ้นสุดเบรคที่ลงไว้
                   (ถ้าไม่ได้ลงช่วงเบรคไว้ จะเทียบกับ ออกเบรคจริง + ระยะเบรคที่อนุญาตแทน) ·
                   <span className="font-medium text-rose-600"> ออกก่อน</span> = เวลาออกที่ลงไว้ − สแกนออก ·
-                  นับเฉพาะที่เกิน 0 นาที มาก่อนเวลาไม่ถือว่าติดลบ
+                  นับเฉพาะที่เกิน 0 นาที มาก่อนเวลาไม่ถือว่าติดลบ ·
+                  <span className="font-medium text-rose-600"> รวมขาด</span> = สาย + เบรคสาย + ออกก่อน (หักลาเป็นชั่วโมงแล้ว) แจ้งเตือนเมื่อเกิน {SHORT_ALERT_MIN} นาที
+                </p>
+                <p>
+                  <span className="font-medium">สถานะ</span> ตรวจเฉพาะเมื่อวานย้อนไป (วันนี้พนักงานอาจยังทำงานอยู่) ·
+                  สแกนที่ห่างกันไม่ถึง {SCAN_MERGE_MIN} นาทีนับเป็นครั้งเดียว ·
+                  <span className="font-medium text-sky-700"> เวลาสีฟ้าขีดเส้นประ</span> = เวลาที่สาขากดแก้ไขแทนเวลาสแกน (เวลาสแกนจริงดูได้ในแท็บ "ทุกครั้งที่สแกน")
                 </p>
                 <p>
                   <span className="font-medium">สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว ·
@@ -336,6 +492,10 @@ export default function Attendance() {
             </div>
           )}
         </div>
+      )}
+
+      {editRow && (
+        <ScanFixModal row={editRow} branch={loadedBranch} onClose={() => setEditRow(null)} onSaved={reloadFixes} />
       )}
     </div>
   );

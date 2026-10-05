@@ -43,6 +43,8 @@ const READ_ONLY = new Set([
   'getUniformItems',
   'getUniformSummary',
   'getEmployeeUniform',
+  // หน้าสแกนเข้า-ออก: เวลาที่แก้ไขแทนเวลาสแกน (ดู office-server/attendance.js)
+  'getScanFixes',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
   'getGoodsToReceive',
   'getStoreReceivingStatus',
