@@ -5,7 +5,8 @@ import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
 //   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data}, supCost }
 //   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
-//     ยกเว้นเดือนของ end เป็นเดือนที่ผ่านไปแล้ว (ดูย้อนหลัง) และมียอดปิดรอบสิ้นเดือนแล้ว → ใช้ยอดปิดรอบแทน
+//     ยกเว้นเดือนของ end เป็นเดือนที่ผ่านไปแล้ว (ดูย้อนหลัง) + end เป็นวันสิ้นเดือนพอดี + มียอดปิดรอบสิ้นเดือนแล้ว
+//     → ใช้ยอดปิดรอบแทน (เลือกไม่ถึงสิ้นเดือน เช่น 1–15 ก.ย. ยังใช้ยอดนับ <= end เพราะยอดปิดรอบคือยอด ณ สิ้นเดือน)
 //     เดือนปัจจุบันยังไม่ปิดยอด จึงยังใช้ยอดนับเหมือนเดิม
 //   ทั้ง current/previous มี source: 'closing' (ยอดปิดรอบ) | 'count' (ยอดนับ) ให้หน้าเว็บบอกที่มาได้
 //   previous = ยอดปิดรอบสิ้นเดือนที่บันทึกไว้อย่างเป็นทางการของเดือนก่อนหน้า
@@ -364,10 +365,13 @@ export default async function handler(req, res) {
       return { countDate: latestDate, total, data };
     };
 
-    // เดือนของ end: ถ้าเป็นเดือนที่ผ่านไปแล้ว (เทียบเดือนปัจจุบันตามเวลาไทย) และมียอดปิดรอบสิ้นเดือนแล้ว ใช้ยอดปิดรอบ
-    // ส่วนเดือนปัจจุบัน (ยังไม่ปิดยอด) หรือเดือนเก่าที่ยังไม่มีใครกดปิดยอด ใช้ยอดนับสต๊อก (ไม่เกิน end) ตามเดิม
+    // เดือนของ end: ถ้าเป็นเดือนที่ผ่านไปแล้ว (เทียบเดือนปัจจุบันตามเวลาไทย) และเลือกถึงวันสิ้นเดือนพอดี
+    // และมียอดปิดรอบสิ้นเดือนแล้ว ใช้ยอดปิดรอบ — ยอดปิดรอบคือยอด ณ สิ้นเดือน ถ้าเลือกไม่ถึงสิ้นเดือนจึงไม่ตรงช่วง
+    // ส่วนเดือนปัจจุบัน (ยังไม่ปิดยอด) เลือกไม่ถึงสิ้นเดือน หรือเดือนเก่าที่ยังไม่มีใครกดปิดยอด ใช้ยอดนับสต๊อก (ไม่เกิน end) ตามเดิม
     const thisMonth = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
-    const closingCur = curMonth < thisMonth ? closingMonthValue(closingRows, curMonth) : null;
+    const [ey, em] = curMonth.split('-').map(Number);
+    const monthEnd = `${curMonth}-${String(new Date(Date.UTC(ey, em, 0)).getUTCDate()).padStart(2, '0')}`;
+    const closingCur = curMonth < thisMonth && endStr === monthEnd ? closingMonthValue(closingRows, curMonth) : null;
     const current = closingCur?.data.length
       ? { ...closingCur, source: 'closing' }
       : { ...pick(curMonth, endStr), source: 'count' };
