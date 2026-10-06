@@ -5,6 +5,9 @@ import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
 //   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data}, supCost }
 //   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
+//     ยกเว้นเดือนของ end เป็นเดือนที่ผ่านไปแล้ว (ดูย้อนหลัง) และมียอดปิดรอบสิ้นเดือนแล้ว → ใช้ยอดปิดรอบแทน
+//     เดือนปัจจุบันยังไม่ปิดยอด จึงยังใช้ยอดนับเหมือนเดิม
+//   ทั้ง current/previous มี source: 'closing' (ยอดปิดรอบ) | 'count' (ยอดนับ) ให้หน้าเว็บบอกที่มาได้
 //   previous = ยอดปิดรอบสิ้นเดือนที่บันทึกไว้อย่างเป็นทางการของเดือนก่อนหน้า
 //     ถ้าเดือนนั้นยังไม่มีใครกดปิดยอดเลย fallback ไปใช้ยอดนับสต๊อกล่าสุดในเดือนนั้นแทน
 //     กันหน้า dashboard โชว์ 0 เปล่าๆ ระหว่างรอทีมงานกดปิดยอด (ปกติบันทึกกันภายในต้นเดือนถัดไป ไม่เกินวันที่ 5)
@@ -361,11 +364,19 @@ export default async function handler(req, res) {
       return { countDate: latestDate, total, data };
     };
 
-    const current = pick(curMonth, endStr);   // เดือนนี้ (ไม่เกิน end) — ยังใช้ยอดนับสต๊อกตามเดิม (เดือนนี้ยังไม่ปิดยอด)
+    // เดือนของ end: ถ้าเป็นเดือนที่ผ่านไปแล้ว (เทียบเดือนปัจจุบันตามเวลาไทย) และมียอดปิดรอบสิ้นเดือนแล้ว ใช้ยอดปิดรอบ
+    // ส่วนเดือนปัจจุบัน (ยังไม่ปิดยอด) หรือเดือนเก่าที่ยังไม่มีใครกดปิดยอด ใช้ยอดนับสต๊อก (ไม่เกิน end) ตามเดิม
+    const thisMonth = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
+    const closingCur = curMonth < thisMonth ? closingMonthValue(closingRows, curMonth) : null;
+    const current = closingCur?.data.length
+      ? { ...closingCur, source: 'closing' }
+      : { ...pick(curMonth, endStr), source: 'count' };
 
     // เดือนที่แล้ว: ใช้ยอดปิดรอบสิ้นเดือนอย่างเป็นทางการก่อนเสมอ ถ้ายังไม่มีข้อมูล (ยังไม่กดปิดยอด) ค่อย fallback ไปยอดนับสต๊อก
     const closingPrev = closingMonthValue(closingRows, preMonth);
-    const previous = closingPrev.data.length ? closingPrev : pick(preMonth, null);
+    const previous = closingPrev.data.length
+      ? { ...closingPrev, source: 'closing' }
+      : { ...pick(preMonth, null), source: 'count' };
 
     // รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ของสาขานี้ ในช่วง [start, end]
     // คอลัมน์: [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
