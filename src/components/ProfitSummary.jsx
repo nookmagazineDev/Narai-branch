@@ -12,6 +12,8 @@ const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const intf = (n) => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const pct = (v, base) => (base ? `${((Number(v || 0) / base) * 100).toFixed(2)}%` : '0.00%');
+// ป้ายที่มาของมูลค่าสต๊อก: "ปิดรอบ" = ยอดปิดรอบสิ้นเดือน, "นับ" = ยอดนับสต๊อก
+const stockTag = (s, empty = '') => (s?.countDate ? ` (${s.source === 'closing' ? 'ปิดรอบ' : 'นับ'} ${s.countDate})` : empty);
 
 // ───────── หมวดวัตถุดิบตามช่วงรหัส (เทียบเป็นเลขจำนวนเต็ม 8 หลัก) ─────────
 const CATS = [
@@ -157,7 +159,7 @@ function CategoryModal({ cat, onClose }) {
 }
 
 // ───────── Modal: รายละเอียดมูลค่าสต๊อกคงเหลือ ─────────
-function StockModal({ open, onClose, title, rows, countDate, total }) {
+function StockModal({ open, onClose, title, rows, countDate, source, total }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm" onClick={onClose}>
@@ -165,7 +167,7 @@ function StockModal({ open, onClose, title, rows, countDate, total }) {
         <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
           <div>
             <h3 className="text-base font-bold flex items-center gap-2"><Boxes className="w-4 h-4 text-indigo-300" /> {title || 'มูลค่าสต๊อกคงเหลือ'}</h3>
-            <p className="text-xs text-gray-400 mt-0.5">{countDate ? `นับ ณ ${countDate} • ` : ''}{rows.length} รายการ • รวม {baht(total)}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{countDate ? `${source === 'closing' ? 'ยอดปิดรอบ' : 'นับ'} ณ ${countDate} • ` : ''}{rows.length} รายการ • รวม {baht(total)}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
         </div>
@@ -298,8 +300,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [member, setMember] = useState('');
   const [delivery, setDelivery] = useState('');
   const [openCat, setOpenCat] = useState(null);
-  const [stock, setStock] = useState(null);       // { current:{countDate,items}, previous:{countDate,items} }
-  const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, total } | null
+  const [stock, setStock] = useState(null);       // { current:{countDate,source,data}, previous:{countDate,source,data} }
+  const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, source, total } | null
   const [supCost, setSupCost] = useState(null);   // { total, count, items:[...] } — รายจ่ายจากชีท "ต้นทุนจากsup"
   const [supModal, setSupModal] = useState(false);
 
@@ -334,8 +336,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
       }
       setLines(flat);
       setStock(sRes ? {
-        current: { countDate: sRes.current?.countDate || '', data: sRes.current?.data || [] },
-        previous: { countDate: sRes.previous?.countDate || '', data: sRes.previous?.data || [] },
+        current: { countDate: sRes.current?.countDate || '', source: sRes.current?.source || 'count', data: sRes.current?.data || [] },
+        previous: { countDate: sRes.previous?.countDate || '', source: sRes.previous?.source || 'count', data: sRes.previous?.data || [] },
       } : { current: { countDate: '', data: [] }, previous: { countDate: '', data: [] } });
       setSupCost(sRes?.supCost ? {
         total: Number(sRes.supCost.total) || 0,
@@ -466,14 +468,14 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
             <>
               <div className="px-3 pt-3 pb-1 text-xs font-bold text-indigo-700 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> มูลค่าสต๊อกคงเหลือ</div>
               <Row
-                label={`เดือนนี้${stock.current.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
+                label={`เดือนนี้${stockTag(stock.current, ' (ยังไม่นับ)')}`}
                 value={curStockValue} percent={pct(curStockValue, netSale)} indent accent="text-indigo-600"
-                onClick={curStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกคงเหลือ (เดือนนี้)', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
+                onClick={curStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกคงเหลือ (เดือนนี้)', rows: curStock, countDate: stock.current.countDate, source: stock.current.source, total: curStockValue }) : undefined}
               />
               <Row
-                label={`เดือนที่แล้ว${stock.previous.countDate ? ` (นับ ${stock.previous.countDate})` : ' (ไม่มีข้อมูล)'}`}
+                label={`เดือนที่แล้ว${stockTag(stock.previous, ' (ไม่มีข้อมูล)')}`}
                 value={prevStockValue} percent={pct(prevStockValue, netSale)} indent accent="text-indigo-500"
-                onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
+                onClick={prevStock.length ? () => setStockModal({ title: 'มูลค่าสต๊อกเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, source: stock.previous.source, total: prevStockValue }) : undefined}
               />
               <p className="px-3 py-2 text-[11px] text-gray-400">
                 * มูลค่าสต๊อก = ยอดคงเหลือสิ้นเดือน × ราคาต้นทุน (จากชีท 8.2) — เข้าสูตร Total Food Cost (ยอดยกมาเดือนที่แล้ว + / ยอดมูลค่าสตอคปัจจุบัน −)
@@ -506,14 +508,14 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 onClick={supCost?.items?.length ? () => setSupModal(true) : undefined}
               />
               <Row
-                label={`+ ยอดยกมาเดือนที่แล้ว${stock?.previous?.countDate ? ` (นับ ${stock.previous.countDate})` : ''}`}
+                label={`+ ยอดยกมาเดือนที่แล้ว${stockTag(stock?.previous)}`}
                 value={prevStockValue} percent={pct(prevStockValue, netSale)} indent accent="text-rose-500"
-                onClick={prevStock.length ? () => setStockModal({ title: 'ยอดยกมาเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, total: prevStockValue }) : undefined}
+                onClick={prevStock.length ? () => setStockModal({ title: 'ยอดยกมาเดือนที่แล้ว', rows: prevStock, countDate: stock.previous.countDate, source: stock.previous.source, total: prevStockValue }) : undefined}
               />
               <Row
-                label={`− ยอดมูลค่าสตอคปัจจุบัน${stock?.current?.countDate ? ` (นับ ${stock.current.countDate})` : ' (ยังไม่นับ)'}`}
+                label={`− ยอดมูลค่าสตอคปัจจุบัน${stockTag(stock?.current, ' (ยังไม่นับ)')}`}
                 value={-curStockValue} percent={pct(curStockValue, netSale)} indent accent="text-emerald-600"
-                onClick={curStock.length ? () => setStockModal({ title: 'ยอดมูลค่าสตอคปัจจุบัน', rows: curStock, countDate: stock.current.countDate, total: curStockValue }) : undefined}
+                onClick={curStock.length ? () => setStockModal({ title: 'ยอดมูลค่าสตอคปัจจุบัน', rows: curStock, countDate: stock.current.countDate, source: stock.current.source, total: curStockValue }) : undefined}
               />
               <Row label="Total Food Cost" value={totalFoodCost} percent={pct(totalFoodCost, netSale)} bold accent="text-rose-700" />
               <p className="px-3 py-1.5 text-[11px] text-gray-400">
@@ -546,7 +548,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
       <CategoryModal cat={openCat} onClose={() => setOpenCat(null)} />
       <StockModal
         open={!!stockModal} onClose={() => setStockModal(null)}
-        title={stockModal?.title} rows={stockModal?.rows || []} countDate={stockModal?.countDate} total={stockModal?.total || 0}
+        title={stockModal?.title} rows={stockModal?.rows || []} countDate={stockModal?.countDate} source={stockModal?.source} total={stockModal?.total || 0}
       />
       <SupCostModal open={supModal} onClose={() => setSupModal(false)} items={supCost?.items || []} total={supCostValue} />
     </div>
