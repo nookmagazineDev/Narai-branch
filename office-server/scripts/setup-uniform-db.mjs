@@ -2,15 +2,15 @@
 /**
  * ตั้งฐานข้อมูลของกล่องยูนิฟอร์ม (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน) ให้เสร็จในคำสั่งเดียว
  *
- * สร้างตาราง dbo.UniformBranch จาก docs/schema-uniform.sql แล้วไล่ตรวจให้ครบทุกข้อที่ทำให้
+ * สร้างตาราง dbo.UniformBranch + dbo.UniformRequest จาก docs/schema-uniform.sql แล้วไล่ตรวจให้ครบทุกข้อที่ทำให้
  * กล่องยูนิฟอร์มใช้งานได้จริง — ไม่ต้องมี sqlcmd และไม่ต้องเปิด SSMS
  *   1) ต่อฐานข้อมูลได้ (ค่าใน .env ถูก) และต่อไปฐานไหน
- *   2) มีตาราง dbo.UniformBranch (ไม่มี = สร้างให้)
+ *   2) มีตาราง dbo.UniformBranch + dbo.UniformRequest (ไม่ครบ = สร้างให้)
  *   3) คอลัมน์ครบตามที่ uniform.js อ้างถึง
  *   4) มีอินเด็กซ์ทั้งสองตัว (เปิดกล่องของพนักงาน + สรุปรายสาขาถึงจะไม่ช้า)
  *   5) login ที่เว็บใช้มีสิทธิ์ SELECT / INSERT / DELETE บนตารางนี้
  *   6) มีไอเทมรหัส 80000* / 80001* / 8001* ใน dbo.stock_item (ไม่มี = ช่องค้นหาในกล่องจะว่างเปล่า)
- *   7) มีตาราง dbo.stock_request (ปุ่ม "เบิกเข้าสาขา" ลงตารางเดียวกับใบเบิกของสต๊อก)
+ *   7) มีตาราง dbo.stock_request (ออฟฟิศอนุมัติเบิกแล้วใบเบิกลงตารางเดียวกับใบเบิกของสต๊อก)
  *   8) ตอนนี้มีข้อมูลอยู่กี่แถว
  *
  * วิธีใช้ (รันจากโฟลเดอร์ office-server บนเครื่องที่ออฟฟิศ):
@@ -78,6 +78,7 @@ if (!isConfigured()) {
 }
 
 const TABLE = 'dbo.UniformBranch';
+const REQUEST_TABLE = 'dbo.UniformRequest';   // คำขอเบิก (สาขาส่ง -> ออฟฟิศอนุมัติ -> สาขารับของ)
 
 /* คอลัมน์ที่โค้ดใน uniform.js อ้างถึงจริง — ไว้จับกรณีตารางถูกสร้างไว้ตั้งแต่เวอร์ชันก่อน
    แล้วขาดคอลัมน์ที่เพิ่มมาทีหลัง (เช่น size) ซึ่งจะพังตอนกดบันทึก ไม่ใช่ตอนเปิดกล่อง */
@@ -134,19 +135,24 @@ async function main() {
   console.log(`   เครื่อง: ${where.server}   ฐานข้อมูล: ${where.db}   login: ${where.login_name}`);
 
   /* ---------- 2. ตาราง ---------- */
-  const exists = async () =>
-    Boolean((await stockDb.queryRead(`SELECT OBJECT_ID(N'${TABLE}', N'U') AS id`))[0]?.id);
+  // สองตารางอยู่ในไฟล์สคีมาเดียวกัน — ขาดตัวไหนก็รันทั้งไฟล์ (ทุกคำสั่งห่อ IF NOT EXISTS ไว้แล้ว)
+  const exists = async () => {
+    const [r] = await stockDb.queryRead(
+      `SELECT OBJECT_ID(N'${TABLE}', N'U') AS a, OBJECT_ID(N'${REQUEST_TABLE}', N'U') AS b`
+    );
+    return Boolean(r?.a) && Boolean(r?.b);
+  };
 
   let hasTable = await exists();
   if (!hasTable && CHECK_ONLY) {
-    console.log(`2) ตาราง ${TABLE}   ${yes(false)} ยังไม่มี`);
+    console.log(`2) ตาราง ${TABLE} + ${REQUEST_TABLE}   ${yes(false)} ยังไม่ครบ`);
     fail('โหมด --check ไม่สร้างให้ — รันซ้ำโดยไม่ใส่ --check');
   } else if (!hasTable) {
     if (!fs.existsSync(SQL_FILE)) {
-      console.log(`2) ตาราง ${TABLE}   ${yes(false)} ยังไม่มี`);
+      console.log(`2) ตาราง ${TABLE} + ${REQUEST_TABLE}   ${yes(false)} ยังไม่ครบ`);
       fail(`หาไฟล์สคีมาไม่เจอ: ${SQL_FILE} (ระบุเองด้วย --file=)`);
     } else {
-      console.log(`2) ตาราง ${TABLE}   ยังไม่มี — กำลังสร้างจาก ${path.relative(process.cwd(), SQL_FILE)}`);
+      console.log(`2) ตาราง ${TABLE} + ${REQUEST_TABLE}   ยังไม่ครบ — กำลังสร้างจาก ${path.relative(process.cwd(), SQL_FILE)}`);
       const batches = sqlBatches(fs.readFileSync(SQL_FILE, 'utf8'));
       for (const [i, batch] of batches.entries()) {
         try {
@@ -167,7 +173,7 @@ async function main() {
       console.log(`   ${yes(hasTable)} สร้างตารางเรียบร้อย (${batches.length} ก้อนคำสั่ง)`);
     }
   } else {
-    console.log(`2) ตาราง ${TABLE}   ${yes(true)} มีอยู่แล้ว (ไม่แตะข้อมูลเดิม)`);
+    console.log(`2) ตาราง ${TABLE} + ${REQUEST_TABLE}   ${yes(true)} มีอยู่แล้ว (ไม่แตะข้อมูลเดิม)`);
   }
 
   if (!hasTable) {
@@ -251,8 +257,8 @@ async function main() {
   const hasRequest = Boolean(
     (await stockDb.queryRead(`SELECT OBJECT_ID(N'dbo.stock_request', N'U') AS id`))[0]?.id
   );
-  console.log(`7) ตาราง dbo.stock_request   ${yes(hasRequest)} (ปุ่ม "เบิกเข้าสาขา" ลงตารางนี้)`);
-  if (!hasRequest) fail('รัน docs/schema-stock.sql — ปุ่มเบิกใช้ใบเบิกชุดเดียวกับหน้านับสต๊อก');
+  console.log(`7) ตาราง dbo.stock_request   ${yes(hasRequest)} (ออฟฟิศกด "อนุมัติเบิก" แล้วใบเบิกลงตารางนี้)`);
+  if (!hasRequest) fail('รัน docs/schema-stock.sql — ใบเบิกยูนิฟอร์มใช้ชุดเดียวกับหน้านับสต๊อก');
 
   /* ---------- 8. ข้อมูลที่มีอยู่ ---------- */
   const [count] = await stockDb.queryRead(

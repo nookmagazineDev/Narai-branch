@@ -96,12 +96,12 @@ const SQL_ACTIONS = new Set([
   //
   // ทั้งชุดเป็นของใหม่ ไม่เคยมีใน Apps Script จึงไม่มีทางถอยไปชีท — เครื่องที่ถือไฟล์เก่า
   // จะไม่มีปุ่มนี้ให้กดอยู่แล้ว
-  // ปุ่ม "เบิกเข้าสาขา" ในกล่องนั้นไม่ได้อยู่ในลิสต์นี้เพราะมันเรียก saveStock (กลุ่มที่ 3)
+  // สาขาส่งคำขอ -> ออฟฟิศ (naraipizzeria) อนุมัติและออกใบเบิก -> สาขากดได้รับของ (ดู office-server/uniform.js)
   'getUniformItems',
   'getUniformSummary',
   'getEmployeeUniform',
-  'saveEmployeeUniform',
-  'deleteEmployeeUniform',
+  'submitUniformRequest',
+  'receiveUniformRequest',
 
   // กลุ่มที่ 3.06 — หน้าสแกนเข้า-ออก: แก้เวลาสแกนที่ขาด/ผิด (ปุ่ม "แก้ไข" ในตารางสรุปรายวัน)
   // ของใหม่ทั้งชุด ไม่เคยมีใน Apps Script — ดู office-server/attendance.js
