@@ -409,6 +409,8 @@ function doPost(e) {
       for (var i = 1; i < values.length; i++) {
         var row = values[i];
         if (!row[0] && !row[2]) continue; // Skip completely empty rows
+        // ข้ามแถวหัวตารางที่ถูกวางซ้ำไว้กลางชีท (ไม่ใช่พนักงานจริง)
+        if (String(row[2]).replace(/\s+/g, '').toLowerCase() === 'รหัสhr') continue;
 
         var empBranch = row[4] ? row[4].toString().toLowerCase() : ''; // คอลัมน์ E (สาขา)
         var reqBranch = requestBranch.toLowerCase();

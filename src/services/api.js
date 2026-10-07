@@ -157,7 +157,7 @@ const mirrorToSql = (action, payload, result) => {
     body: JSON.stringify({
       action: 'syncEmployees',
       branch,
-      employees: result.data,
+      employees: result.data.filter((e) => !isHeaderRow(e)),
       fullList: action === 'getEmployees',
       _user: sessionUser(),
     }),
@@ -229,6 +229,15 @@ const normalizeEmployee = (e) => {
   };
 };
 
+/**
+ * แถวหัวตารางที่หลุดมาเป็นข้อมูล (เช่น มีคนวางหัวคอลัมน์ "รหัส HR / ชื่อ - สกุล" ซ้ำไว้กลางชีท DATA)
+ * ไม่ใช่พนักงานจริง — ตัดทิ้งทั้งตอนแสดงผลและตอนซิงก์เข้า SQL
+ */
+const HEADER_LABELS = new Set(['รหัสhr', 'ชื่อ-สกุล', 'ชื่อ-นามสกุล']);
+const squash = (v) => String(v ?? '').replace(/\s+/g, '').toLowerCase();
+const isHeaderRow = (e) =>
+  HEADER_LABELS.has(squash(e?.hrCode)) || HEADER_LABELS.has(squash(e?.name ?? e?.fullName));
+
 /** รวมรายชื่อจากหลายคำตอบ ตัดคนซ้ำด้วยรหัส HR (คนเดิมอาจมีแถวใต้ทั้งสองรหัสสาขา) */
 const mergeRosters = (responses) => {
   const seen = new Set();
@@ -236,6 +245,7 @@ const mergeRosters = (responses) => {
   for (const res of responses) {
     if (res?.status !== 'success') continue;
     for (const emp of res.data || []) {
+      if (isHeaderRow(emp)) continue;
       const e = normalizeEmployee(emp);
       const key = e.hrCode.toLowerCase();
       if (key) {
@@ -337,7 +347,7 @@ export const fetchEmployees = async (branch, { includeResigned = false, fresh = 
     console.warn('อ่านรายชื่อพนักงานจาก SQL ไม่สำเร็จ จะใช้ชีทแทน:', err?.message || err);
   }
 
-  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data.map(normalizeEmployee) : [];
+  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data.filter((e) => !isHeaderRow(e)).map(normalizeEmployee) : [];
 
   // SQL ไม่มีข้อมูล -> ต้องได้จากชีทก่อนคืนค่า (mirror จะซิงก์เข้า SQL ให้เอง)
   if (fromSql.length === 0) {
