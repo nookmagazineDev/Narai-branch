@@ -52,7 +52,7 @@ export default function EmployeeList() {
   /* ================== ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในคอลัมน์จัดการ) ==================
      สาขาทำแค่ "ส่งคำขอเบิก" กับ "ได้รับของแล้ว" — ใบเบิกจริงออกที่ออฟฟิศ (naraipizzeria)
        ส่งคำขอเบิก   -> submitUniformRequest  -> dbo.UniformRequest สถานะ กำลังรออนุมัติ
-       ออฟฟิศกด      -> รอสินค้าเข้า / อนุมัติเบิก (ออกใบเบิกลง stock_request) / กำลังรอจัดส่ง
+       ออฟฟิศกด      -> รอสินค้าเข้า / อนุมัติเบิก / กำลังรอจัดส่ง (ส่งใบเบิกไปคลัง ลง stock_request)
        ได้รับของแล้ว -> receiveUniformRequest -> จบงาน + ลง dbo.UniformBranch
      กล่องมีตารางเดียว: คำขอทุกใบของพนักงานคนนี้พร้อมสถานะ
 
@@ -1174,7 +1174,7 @@ export default function EmployeeList() {
               <button
                 onClick={handleUniformSend}
                 disabled={!!uniformBusy || uniformRows.length === 0}
-                title="ส่งให้ออฟฟิศอนุมัติ — ใบเบิกจะออกเมื่อออฟฟิศกดอนุมัติเบิก"
+                title="ส่งให้ออฟฟิศอนุมัติ — ใบเบิกจะส่งไปคลังเมื่อออฟฟิศกดกำลังรอจัดส่ง"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-50"
               >
                 {uniformBusy === 'send' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}

@@ -3,7 +3,7 @@
 // โฟลว์ (ตาราง dbo.UniformRequest ดู docs/schema-uniform.sql):
 //   1) สาขากด "ส่งคำขอเบิก"   -> submitUniformRequest   สถานะ pending (กำลังรออนุมัติ)
 //   2) ออฟฟิศ (naraipizzeria หน้า HR → ยูนิฟอร์ม) กด รอสินค้าเข้า / อนุมัติเบิก / กำลังรอจัดส่ง
-//      "อนุมัติเบิก" เป็นจุดเดียวที่สร้างใบเบิกลง dbo.stock_request (เลขที่ใบเบิกรูปแบบเดิม)
+//      "กำลังรอจัดส่ง" เป็นจุดเดียวที่ส่งใบเบิกไปคลัง ลง dbo.stock_request (เลขที่ใบเบิกรูปแบบเดิม)
 //      ทีมโกดังจึงยังเห็นใบเบิกยูนิฟอร์มในที่เดียวกับใบเบิกของสต๊อก
 //   3) สาขากด "ได้รับของแล้ว"  -> receiveUniformRequest  สถานะ received + ลง dbo.UniformBranch
 //
@@ -103,8 +103,8 @@ async function getUniformItems() {
    ต้องตรงกับ UNIFORM_REQUEST_STATUS ใน lib/uniformSql.mjs ของรีโป naraipizzeria (ฝั่งออฟฟิศที่กดอนุมัติ)
      pending       สาขาส่งคำขอแล้ว รอออฟฟิศอนุมัติ
      waiting_stock ออฟฟิศรับเรื่องแล้ว แต่ของยังไม่มี
-     approved      ออฟฟิศอนุมัติเบิก — ใบเบิกถูกสร้างลง dbo.stock_request ตอนนี้ (doc_no)
-     shipping      ออฟฟิศแจ้งว่ากำลังรอจัดส่ง
+     approved      ออฟฟิศอนุมัติเบิกแล้ว ยังไม่ส่งคลัง
+     shipping      ออฟฟิศกดกำลังรอจัดส่ง — ใบเบิกถูกส่งไปคลัง ลง dbo.stock_request ตอนนี้ (doc_no)
      received      สาขากด "ได้รับของแล้ว" — จบงาน และลง dbo.UniformBranch ว่าพนักงานได้ของไป */
 export const UNIFORM_REQUEST_STATUS = ['pending', 'waiting_stock', 'approved', 'shipping', 'received'];
 const REQUEST_TABLE = 'dbo.UniformRequest';
@@ -202,7 +202,7 @@ async function getUniformSummary(body, session) {
 
 /* ===================== ส่งคำขอเบิก =====================
    สาขาไม่สร้างใบเบิกเองแล้ว — ลงแค่ dbo.UniformRequest สถานะ pending
-   ใบเบิกจริง (dbo.stock_request) ออกตอนออฟฟิศกด "อนุมัติเบิก" ที่ naraipizzeria
+   ใบเบิกจริง (dbo.stock_request) ออกตอนออฟฟิศกด "กำลังรอจัดส่ง" ที่ naraipizzeria
    หลายไอเทมในคำขอเดียว ทั้งชุดอยู่ใน transaction เดียว — สำเร็จหมดหรือไม่เกิดอะไรเลย */
 async function submitUniformRequest(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();

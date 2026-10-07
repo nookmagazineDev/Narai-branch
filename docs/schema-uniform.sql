@@ -70,8 +70,8 @@ GO
    คำขอเบิกยูนิฟอร์ม — dbo.UniformRequest
    1 แถว = 1 ไอเทมที่สาขาขอให้พนักงาน 1 คน
    สาขาส่งคำขอ (pending) -> ออฟฟิศที่ naraipizzeria กด รอสินค้าเข้า (waiting_stock)
-   / อนุมัติเบิก (approved — ออกใบเบิกลง dbo.stock_request แล้วเก็บเลขไว้ที่ doc_no)
-   / กำลังรอจัดส่ง (shipping) -> สาขากดได้รับของแล้ว (received — ลง dbo.UniformBranch ให้ด้วย)
+   / อนุมัติเบิก (approved)
+   / กำลังรอจัดส่ง (shipping — ส่งใบเบิกไปคลัง ลง dbo.stock_request แล้วเก็บเลขไว้ที่ doc_no) -> สาขากดได้รับของแล้ว (received — ลง dbo.UniformBranch ให้ด้วย)
    ไม่มี FK ไป stock_item / stock_request ด้วยเหตุผลเดียวกับ UniformBranch (ข้อ 4 ข้างบน)
 ============================================================================ */
 IF OBJECT_ID(N'dbo.UniformRequest', N'U') IS NULL
@@ -93,7 +93,7 @@ CREATE TABLE dbo.UniformRequest (
     requested_by  NVARCHAR(255)  NULL,          -- ผู้ใช้สาขาที่กดส่ง
     status_by     NVARCHAR(255)  NULL,          -- ผู้ใช้ออฟฟิศที่เปลี่ยนสถานะล่าสุด
     status_at     DATETIME2(0)   NULL,
-    doc_no        NVARCHAR(50)   NULL,          -- เลขที่ใบเบิกใน dbo.stock_request (มีเมื่ออนุมัติเบิกแล้ว)
+    doc_no        NVARCHAR(50)   NULL,          -- เลขที่ใบเบิกใน dbo.stock_request (มีเมื่อกดกำลังรอจัดส่งแล้ว)
     received_at   DATETIME2(0)   NULL,
     received_by   NVARCHAR(255)  NULL,
     CONSTRAINT PK_UniformRequest PRIMARY KEY CLUSTERED (request_id)
