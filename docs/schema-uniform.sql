@@ -66,6 +66,54 @@ CREATE INDEX IX_UniformBranch_branch_date
     INCLUDE (item_key, qty);
 GO
 
+/* ============================================================================
+   คำขอเบิกยูนิฟอร์ม — dbo.UniformRequest
+   1 แถว = 1 ไอเทมที่สาขาขอให้พนักงาน 1 คน
+   สาขาส่งคำขอ (pending) -> ออฟฟิศที่ naraipizzeria กด รอสินค้าเข้า (waiting_stock)
+   / อนุมัติเบิก (approved — ออกใบเบิกลง dbo.stock_request แล้วเก็บเลขไว้ที่ doc_no)
+   / กำลังรอจัดส่ง (shipping) -> สาขากดได้รับของแล้ว (received — ลง dbo.UniformBranch ให้ด้วย)
+   ไม่มี FK ไป stock_item / stock_request ด้วยเหตุผลเดียวกับ UniformBranch (ข้อ 4 ข้างบน)
+============================================================================ */
+IF OBJECT_ID(N'dbo.UniformRequest', N'U') IS NULL
+CREATE TABLE dbo.UniformRequest (
+    request_id    INT IDENTITY(1,1) NOT NULL,
+    branch        NVARCHAR(50)   NOT NULL,      -- รหัสสาขา (ตัวพิมพ์เล็ก)
+    hr_code       NVARCHAR(50)   NOT NULL,      -- รหัส HR ของพนักงานที่ขอให้
+    emp_name      NVARCHAR(255)  NULL,          -- ชื่อพนักงาน ณ วันที่ขอ
+    item_key      NVARCHAR(50)   NOT NULL,      -- รหัสไอเทมที่ normalize แล้ว
+    item_code     NVARCHAR(50)   NOT NULL,
+    item_name     NVARCHAR(255)  NULL,
+    unit          NVARCHAR(50)   NULL,
+    qty           DECIMAL(18,2)  NOT NULL,
+    want_date     NVARCHAR(30)   NULL,          -- วันที่สาขาต้องการรับ (YYYY-MM-DD)
+    status        NVARCHAR(20)   NOT NULL
+                  CONSTRAINT DF_UniformRequest_status DEFAULT (N'pending'),
+    requested_at  DATETIME2(0)   NOT NULL
+                  CONSTRAINT DF_UniformRequest_requested_at DEFAULT (SYSDATETIME()),
+    requested_by  NVARCHAR(255)  NULL,          -- ผู้ใช้สาขาที่กดส่ง
+    status_by     NVARCHAR(255)  NULL,          -- ผู้ใช้ออฟฟิศที่เปลี่ยนสถานะล่าสุด
+    status_at     DATETIME2(0)   NULL,
+    doc_no        NVARCHAR(50)   NULL,          -- เลขที่ใบเบิกใน dbo.stock_request (มีเมื่ออนุมัติเบิกแล้ว)
+    received_at   DATETIME2(0)   NULL,
+    received_by   NVARCHAR(255)  NULL,
+    CONSTRAINT PK_UniformRequest PRIMARY KEY CLUSTERED (request_id)
+);
+GO
+
+/* กล่องของพนักงาน 1 คน */
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformRequest') AND name = N'IX_UniformRequest_emp')
+CREATE INDEX IX_UniformRequest_emp
+    ON dbo.UniformRequest (hr_code, branch, requested_at DESC);
+GO
+
+/* หน้าอนุมัติของออฟฟิศ กรองตามสถานะ */
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+                WHERE object_id = OBJECT_ID(N'dbo.UniformRequest') AND name = N'IX_UniformRequest_status')
+CREATE INDEX IX_UniformRequest_status
+    ON dbo.UniformRequest (status, requested_at DESC);
+GO
+
 /* ---- สิทธิ์ ----
    ถ้าใช้ login เดียวกับที่ office-server ใช้อยู่แล้ว (narai_app) ไม่ต้องทำอะไรเพิ่ม
    สิทธิ์ระดับฐานข้อมูลที่ให้ไว้ตอนตั้ง schema-stock.sql ครอบตารางใหม่นี้ให้เอง
@@ -73,5 +121,5 @@ GO
      SELECT * FROM dbo.UniformBranch;   -- ต้องไม่ error (ตอนนี้ยังว่าง)
 */
 
-PRINT N'สร้างตาราง dbo.UniformBranch เรียบร้อย (ตรวจซ้ำได้ด้วย node scripts/setup-uniform-db.mjs --check ที่โฟลเดอร์ office-server)';
+PRINT N'สร้างตาราง dbo.UniformBranch + dbo.UniformRequest เรียบร้อย (ตรวจซ้ำได้ด้วย node scripts/setup-uniform-db.mjs --check ที่โฟลเดอร์ office-server)';
 GO

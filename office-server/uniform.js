@@ -1,12 +1,11 @@
 // ยูนิฟอร์มพนักงาน — ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน
 //
-// สองงานที่กล่องนี้ทำ ลงคนละที่โดยตั้งใจ:
-//   1) "บันทึกข้อมูล"   -> dbo.UniformBranch (ตารางใหม่ ดู docs/schema-uniform.sql)
-//      บันทึกว่าใครได้อะไรไป ไซซ์อะไร กี่ชิ้น วันไหน
-//   2) "เบิกเข้าสาขา"   -> ไม่ได้อยู่ในไฟล์นี้เลย ฝั่งเว็บเรียก saveStock ของ stock.js ตรง ๆ
-//      จึงได้เลขที่ใบเบิกรูปแบบเดิมและลง dbo.stock_request ตารางเดียวกับใบเบิกของสต๊อก
-//      (ถ้าทำตารางใบเบิกของยูนิฟอร์มแยก ทีมโกดังจะต้องเปิดดูสองที่ และใบเบิกค้าง/หน้าสั่งของ
-//       จะมองไม่เห็นใบพวกนี้เลย)
+// โฟลว์ (ตาราง dbo.UniformRequest ดู docs/schema-uniform.sql):
+//   1) สาขากด "ส่งคำขอเบิก"   -> submitUniformRequest   สถานะ pending (กำลังรออนุมัติ)
+//   2) ออฟฟิศ (naraipizzeria หน้า HR → ยูนิฟอร์ม) กด รอสินค้าเข้า / อนุมัติเบิก / กำลังรอจัดส่ง
+//      "อนุมัติเบิก" เป็นจุดเดียวที่สร้างใบเบิกลง dbo.stock_request (เลขที่ใบเบิกรูปแบบเดิม)
+//      ทีมโกดังจึงยังเห็นใบเบิกยูนิฟอร์มในที่เดียวกับใบเบิกของสต๊อก
+//   3) สาขากด "ได้รับของแล้ว"  -> receiveUniformRequest  สถานะ received + ลง dbo.UniformBranch
 //
 // ทุกสาขาบันทึกของพนักงานตัวเองได้ ไม่จำกัดเฉพาะผู้ใช้สิทธิ์ all — branchFor() กันไว้แล้วว่า
 // สาขาหนึ่งจะไปอ่าน/เขียนข้อมูลของอีกสาขาไม่ได้
@@ -15,7 +14,6 @@ import { sql, stockDb } from './hr-db.js';
 import { branchFor, branchGroup } from './hr-session.js';
 
 const { queryRead, withTransaction } = stockDb;
-const runSql = queryRead;
 
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const num = (v) => {
@@ -101,8 +99,18 @@ async function getUniformItems() {
   };
 }
 
-/* ===================== ประวัติของพนักงานหนึ่งคน =====================
-   อ่านครอบรหัสสาขาพี่น้อง เหมือนทุกหน้าของสต๊อก ไม่งั้นของที่บันทึกไว้ใต้ zjp
+/* ===================== สถานะคำขอเบิก =====================
+   ต้องตรงกับ UNIFORM_REQUEST_STATUS ใน lib/uniformSql.mjs ของรีโป naraipizzeria (ฝั่งออฟฟิศที่กดอนุมัติ)
+     pending       สาขาส่งคำขอแล้ว รอออฟฟิศอนุมัติ
+     waiting_stock ออฟฟิศรับเรื่องแล้ว แต่ของยังไม่มี
+     approved      ออฟฟิศอนุมัติเบิก — ใบเบิกถูกสร้างลง dbo.stock_request ตอนนี้ (doc_no)
+     shipping      ออฟฟิศแจ้งว่ากำลังรอจัดส่ง
+     received      สาขากด "ได้รับของแล้ว" — จบงาน และลง dbo.UniformBranch ว่าพนักงานได้ของไป */
+export const UNIFORM_REQUEST_STATUS = ['pending', 'waiting_stock', 'approved', 'shipping', 'received'];
+const REQUEST_TABLE = 'dbo.UniformRequest';
+
+/* ===================== คำขอเบิกของพนักงานหนึ่งคน =====================
+   อ่านครอบรหัสสาขาพี่น้อง เหมือนทุกหน้าของสต๊อก ไม่งั้นของที่ขอไว้ใต้ zjp
    จะหายไปเมื่อเปิดด้วย sjp ทั้งที่เป็นร้านเดียวกัน */
 async function getEmployeeUniform(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
@@ -112,76 +120,43 @@ async function getEmployeeUniform(body, session) {
 
   const inBranch = branchIn(branch);
   const rows = await queryRead(
-    `SELECT uniform_id, item_code, item_name, unit, size, qty, note, saved_by,
-            CONVERT(NVARCHAR(19), issued_at, 120) AS issued_text,
-            CONVERT(NVARCHAR(19), saved_at, 120)  AS saved_text
-       FROM dbo.UniformBranch
+    `SELECT request_id, item_code, item_name, unit, qty, want_date, status, doc_no, status_by, received_by,
+            CONVERT(NVARCHAR(19), requested_at, 120) AS requested_text,
+            CONVERT(NVARCHAR(19), status_at, 120)    AS status_text,
+            CONVERT(NVARCHAR(19), received_at, 120)  AS received_text
+       FROM ${REQUEST_TABLE}
       WHERE hr_code = @hr_code AND branch IN (${inBranch.list})
-      ORDER BY issued_at DESC, uniform_id DESC`,
+      ORDER BY requested_at DESC, request_id DESC`,
     { hr_code: { type: sql.NVarChar(50), value: hrCode }, ...inBranch.params }
   );
-
-  const requests = await getEmployeeRequests(branch, body.empName);
 
   return {
     branch,
     hrCode,
     count: rows.length,
-    requests,
-    data: rows.map((r) => ({
-      id: Number(r.uniform_id),
+    requests: rows.map((r) => ({
+      id: Number(r.request_id),
       code: str(r.item_code),
       name: str(r.item_name),
       unit: str(r.unit),
-      size: str(r.size),
       qty: Number(r.qty),
-      note: str(r.note),
-      issuedAt: thaiDateTime(r.issued_text),
-      issuedDate: str(r.issued_text).slice(0, 10),
-      savedAt: thaiDateTime(r.saved_text),
-      savedBy: str(r.saved_by),
+      wantDate: str(r.want_date),
+      status: UNIFORM_REQUEST_STATUS.includes(str(r.status)) ? str(r.status) : 'pending',
+      docNo: str(r.doc_no),
+      requestedAt: thaiDateTime(r.requested_text),
+      statusAt: thaiDateTime(r.status_text),
+      statusBy: str(r.status_by),
+      receivedAt: thaiDateTime(r.received_text),
+      receivedBy: str(r.received_by),
     })),
   };
 }
 
-/* ===================== ใบเบิกเข้าสาขาที่ขอในนามพนักงานคนนี้ =====================
-   ปุ่ม "เบิกเข้าสาขา" ลง dbo.stock_request ผ่าน saveStock (ดูหัวไฟล์) ซึ่งไม่มีคอลัมน์รหัส HR
-   มีแต่ requester = ชื่อพนักงานที่หน้าเว็บส่งมาเป็น requesterName จึงจับคู่ด้วยชื่อ
-   และกรองเฉพาะรหัสยูนิฟอร์ม (UNIFORM_CODE_PREFIXES) กันใบเบิกของสต๊อกปกติที่บังเอิญใส่ชื่อคนเดียวกันปนเข้ามา
-   ชื่อพนักงานเปลี่ยนทีหลัง = ใบเบิกเก่าที่ลงชื่อเดิมจะไม่ขึ้นในกล่องของชื่อใหม่ */
-async function getEmployeeRequests(branch, empName) {
-  const name = str(empName);
-  if (!name) return [];
-  const inBranch = branchIn(branch, 'rb');
-  const codeFilter = uniformCodeFilter();
-  const rows = await queryRead(
-    `SELECT doc_no, item_code, item_name, unit, qty, request_date,
-            CONVERT(NVARCHAR(19), saved_at, 120) AS saved_text
-       FROM dbo.stock_request
-      WHERE requester = @requester
-        AND ${codeFilter.cond}
-        AND branch IN (${inBranch.list})
-      ORDER BY saved_at DESC, request_id DESC`,
-    {
-      requester: { type: sql.NVarChar(255), value: name },
-      ...codeFilter.params,
-      ...inBranch.params,
-    }
-  );
-  return rows.map((r) => ({
-    docNo: str(r.doc_no),
-    code: str(r.item_code),
-    name: str(r.item_name),
-    unit: str(r.unit),
-    qty: Number(r.qty),
-    requestDate: str(r.request_date),
-    savedAt: thaiDateTime(r.saved_text),
-  }));
-}
-
-/* ===================== สรุปว่าใครมีกี่ไอเทม (ไว้ติดตัวเลขบนปุ่ม) =====================
+/* ===================== ตัวเลขบนปุ่ม =====================
    หน้ารายชื่อพนักงานมีได้เป็นร้อยแถว ถ้ายิงถามทีละคนจะเป็นร้อยคำขอต่อการเปิดหน้าหนึ่งครั้ง
-   จึงสรุปมาทั้งสาขาในคำขอเดียว */
+   จึงสรุปมาทั้งสาขาในคำขอเดียว
+     data[hrCode]      = ได้รับของไปแล้ว (dbo.UniformBranch)
+     requested[hrCode] = คำขอที่ยังไม่จบ (ทุกสถานะยกเว้น received) */
 async function getUniformSummary(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   if (!branch) throw badRequest('ไม่ระบุสาขา');
@@ -205,46 +180,40 @@ async function getUniformSummary(body, session) {
     };
   }
 
-  // ยอดที่ขอเบิกเข้าสาขาในนามแต่ละคน — ใบเบิกไม่มีรหัส HR จึงคีย์ด้วยชื่อ (ดู getEmployeeRequests)
-  const inReq = branchIn(branch, 'rb');
-  const reqFilter = uniformCodeFilter();
   const reqRows = await queryRead(
-    `SELECT requester, COUNT(DISTINCT doc_no) AS docs, SUM(qty) AS total_qty
-       FROM dbo.stock_request
-      WHERE requester IS NOT NULL
-        AND ${reqFilter.cond}
-        AND branch IN (${inReq.list})
-      GROUP BY requester`,
-    { ...reqFilter.params, ...inReq.params }
+    `SELECT hr_code, COUNT(*) AS n, SUM(qty) AS total_qty,
+            SUM(CASE WHEN status = N'shipping' THEN 1 ELSE 0 END) AS shipping
+       FROM ${REQUEST_TABLE}
+      WHERE status <> N'received' AND branch IN (${inBranch.list})
+      GROUP BY hr_code`,
+    inBranch.params
   );
   const requested = {};
   for (const r of reqRows) {
-    const name = str(r.requester);
-    if (name) requested[name] = { docs: Number(r.docs), qty: Number(r.total_qty) || 0 };
+    requested[str(r.hr_code)] = {
+      rows: Number(r.n),
+      qty: Number(r.total_qty) || 0,
+      shipping: Number(r.shipping) || 0,
+    };
   }
 
   return { branch, count: rows.length, data, requested };
 }
 
-/* ===================== บันทึกการจ่าย =====================
-   หลายไอเทมในคำขอเดียว ทั้งชุดอยู่ใน transaction เดียว — สำเร็จหมดหรือไม่เกิดอะไรเลย
-   (กติกาเดียวกับ saveStock ที่บันทึกยอดนับทั้งชั้นในครั้งเดียว) */
-async function saveEmployeeUniform(body, session) {
+/* ===================== ส่งคำขอเบิก =====================
+   สาขาไม่สร้างใบเบิกเองแล้ว — ลงแค่ dbo.UniformRequest สถานะ pending
+   ใบเบิกจริง (dbo.stock_request) ออกตอนออฟฟิศกด "อนุมัติเบิก" ที่ naraipizzeria
+   หลายไอเทมในคำขอเดียว ทั้งชุดอยู่ใน transaction เดียว — สำเร็จหมดหรือไม่เกิดอะไรเลย */
+async function submitUniformRequest(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
   const hrCode = str(body.hrCode);
   if (!branch) throw badRequest('ไม่ระบุสาขา');
   if (!hrCode) throw badRequest('ไม่ระบุรหัสพนักงาน');
 
   const empName = str(body.empName);
-  const savedBy = str(body.username) || str(session?.username);
-  const savedAt = localStamp();
-
-  // วันที่จ่ายเลือกเองได้ (กรอกย้อนหลังได้) ส่งมาเป็น YYYY-MM-DD — ไม่ส่งมาก็ถือว่าวันนี้
-  // เก็บเวลาที่กดบันทึกต่อท้ายวันที่ที่เลือก เพื่อให้เรียงลำดับภายในวันเดียวกันได้
-  const dateOnly = str(body.issuedDate);
-  const issuedAt = /^\d{4}-\d{2}-\d{2}$/.test(dateOnly)
-    ? `${dateOnly} ${savedAt.slice(11)}`
-    : savedAt;
+  const requestedBy = str(body.username) || str(session?.username);
+  const requestedAt = localStamp();
+  const wantDate = str(body.wantDate);
 
   const items = Array.isArray(body.items) ? body.items : [];
   const rows = [];
@@ -253,25 +222,18 @@ async function saveEmployeeUniform(body, session) {
     const key = normCode(code);
     const qty = num(it.qty);
     if (!key || qty <= 0) continue;
-    rows.push({
-      key,
-      code,
-      name: str(it.name),
-      unit: str(it.unit),
-      size: str(it.size),
-      note: str(it.note),
-      qty,
-    });
+    rows.push({ key, code, name: str(it.name), unit: str(it.unit), qty });
   }
-  if (rows.length === 0) throw badRequest('ไม่มีรายการที่จะบันทึก (ต้องเลือกไอเทมและใส่จำนวน)');
+  if (rows.length === 0) throw badRequest('ไม่มีรายการที่จะส่ง (ต้องเลือกไอเทมและใส่จำนวน)');
 
   await withTransaction(async (run) => {
     for (const r of rows) {
       await run(
-        `INSERT INTO dbo.UniformBranch
-           (branch, hr_code, emp_name, item_key, item_code, item_name, unit, size, qty, note, issued_at, saved_at, saved_by)
-         VALUES (@branch, @hr_code, @emp_name, @item_key, @item_code, @item_name, @unit, @size, @qty, @note,
-                 CONVERT(DATETIME2(0), @issued_at, 120), CONVERT(DATETIME2(0), @saved_at, 120), @saved_by);`,
+        `INSERT INTO ${REQUEST_TABLE}
+           (branch, hr_code, emp_name, item_key, item_code, item_name, unit, qty, want_date,
+            status, requested_at, requested_by)
+         VALUES (@branch, @hr_code, @emp_name, @item_key, @item_code, @item_name, @unit, @qty, @want_date,
+                 N'pending', CONVERT(DATETIME2(0), @requested_at, 120), @requested_by);`,
         {
           branch: { type: sql.NVarChar(50), value: branch },
           hr_code: { type: sql.NVarChar(50), value: hrCode },
@@ -280,54 +242,90 @@ async function saveEmployeeUniform(body, session) {
           item_code: { type: sql.NVarChar(50), value: r.code },
           item_name: { type: sql.NVarChar(255), value: r.name || null },
           unit: { type: sql.NVarChar(50), value: r.unit || null },
-          size: { type: sql.NVarChar(20), value: r.size || null },
           qty: { type: sql.Decimal(18, 2), value: r.qty },
-          note: { type: sql.NVarChar(500), value: r.note || null },
-          issued_at: { type: sql.NVarChar(19), value: issuedAt },
-          saved_at: { type: sql.NVarChar(19), value: savedAt },
-          saved_by: { type: sql.NVarChar(255), value: savedBy || null },
+          want_date: { type: sql.NVarChar(30), value: wantDate || null },
+          requested_at: { type: sql.NVarChar(19), value: requestedAt },
+          requested_by: { type: sql.NVarChar(255), value: requestedBy || null },
         }
       );
     }
   });
 
   return {
-    message: `บันทึกยูนิฟอร์ม ${rows.length} รายการเรียบร้อยแล้ว`,
+    message: `ส่งคำขอเบิก ${rows.length} รายการแล้ว · กำลังรออนุมัติ`,
     branch,
     hrCode,
     saved: rows.length,
-    issuedAt,
   };
 }
 
-/* ===================== ลบแถวที่บันทึกผิด =====================
-   ไม่มีการ "แก้ไข" แถวเดิมโดยตั้งใจ — ลบแล้วบันทึกใหม่เห็นร่องรอยชัดกว่าการทับค่าเงียบ ๆ
-   เงื่อนไข branch IN (...) ในคำสั่งลบคือด่านจริง: ต่อให้ยิง API ตรง ๆ ด้วย uniform_id
-   ของสาขาอื่นก็ลบไม่ได้ (ผู้ใช้สิทธิ์ all ที่เลือกสาขาไว้แล้วยังลบได้ตามปกติ) */
-async function deleteEmployeeUniform(body, session) {
+/* ===================== ได้รับของแล้ว (จบงาน) =====================
+   รับได้เฉพาะแถวที่ออฟฟิศตั้งเป็น "กำลังรอจัดส่ง" แล้ว และเป็นของสาขาตัวเอง (branch IN (...) คือด่านจริง)
+   แถวที่รับแล้วลง dbo.UniformBranch ด้วย — การ์ด "อยู่ในสาขา" ของออฟฟิศกับตัวเลขบนปุ่มนับจากตารางนั้น */
+async function receiveUniformRequest(body, session) {
   const branch = str(branchFor(session, body.branch)).toLowerCase();
-  const id = Number(body.uniformId ?? body.id);
   if (!branch) throw badRequest('ไม่ระบุสาขา');
-  if (!Number.isFinite(id) || id <= 0) throw badRequest('ไม่ระบุรายการที่จะลบ');
+  const ids = [...new Set((Array.isArray(body.requestIds) ? body.requestIds : [body.requestId])
+    .map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) throw badRequest('ไม่ระบุรายการที่ได้รับ');
+  if (ids.length > 200) throw badRequest('กดรับได้ครั้งละไม่เกิน 200 รายการ');
 
+  const receivedBy = str(body.username) || str(session?.username);
+  const receivedAt = localStamp();
   const inBranch = branchIn(branch);
-  const res = await runSql(
-    `DELETE FROM dbo.UniformBranch
-      WHERE uniform_id = @id AND branch IN (${inBranch.list});
-     SELECT @@ROWCOUNT AS deleted;`,
-    { id: { type: sql.Int, value: id }, ...inBranch.params }
-  );
+  const idParams = {};
+  const idList = ids.map((id, i) => {
+    idParams[`id${i}`] = { type: sql.Int, value: id };
+    return `@id${i}`;
+  }).join(', ');
 
-  // queryRead คืน recordset เป็นอาเรย์ (ดู hr-db.js) — ของคำสั่ง SELECT ตัวท้ายในก้อนนี้
-  const deleted = Number(res?.[0]?.deleted ?? 0);
-  if (!deleted) throw badRequest('ไม่พบรายการนี้ในสาขาของคุณ (อาจถูกลบไปแล้ว)');
-  return { message: 'ลบรายการเรียบร้อยแล้ว', branch, uniformId: id, deleted };
+  const done = await withTransaction(async (run) => {
+    const upd = await run(
+      `UPDATE ${REQUEST_TABLE}
+          SET status = N'received', received_at = CONVERT(DATETIME2(0), @received_at, 120), received_by = @received_by
+       OUTPUT inserted.request_id, inserted.branch, inserted.hr_code, inserted.emp_name, inserted.item_key,
+              inserted.item_code, inserted.item_name, inserted.unit, inserted.qty, inserted.doc_no
+        WHERE request_id IN (${idList}) AND status = N'shipping' AND branch IN (${inBranch.list});`,
+      {
+        received_at: { type: sql.NVarChar(19), value: receivedAt },
+        received_by: { type: sql.NVarChar(255), value: receivedBy || null },
+        ...idParams,
+        ...inBranch.params,
+      }
+    );
+    const rows = upd.recordset || [];
+    for (const r of rows) {
+      await run(
+        `INSERT INTO dbo.UniformBranch
+           (branch, hr_code, emp_name, item_key, item_code, item_name, unit, size, qty, note, issued_at, saved_at, saved_by)
+         VALUES (@branch, @hr_code, @emp_name, @item_key, @item_code, @item_name, @unit, NULL, @qty, @note,
+                 CONVERT(DATETIME2(0), @at, 120), CONVERT(DATETIME2(0), @at, 120), @saved_by);`,
+        {
+          branch: { type: sql.NVarChar(50), value: str(r.branch) },
+          hr_code: { type: sql.NVarChar(50), value: str(r.hr_code) },
+          emp_name: { type: sql.NVarChar(255), value: str(r.emp_name) || null },
+          item_key: { type: sql.NVarChar(50), value: str(r.item_key) },
+          item_code: { type: sql.NVarChar(50), value: str(r.item_code) },
+          item_name: { type: sql.NVarChar(255), value: str(r.item_name) || null },
+          unit: { type: sql.NVarChar(50), value: str(r.unit) || null },
+          qty: { type: sql.Decimal(18, 2), value: Number(r.qty) },
+          note: { type: sql.NVarChar(500), value: r.doc_no ? `ใบเบิก ${str(r.doc_no)}` : null },
+          at: { type: sql.NVarChar(19), value: receivedAt },
+          saved_by: { type: sql.NVarChar(255), value: receivedBy || null },
+        }
+      );
+    }
+    return rows.length;
+  });
+
+  if (!done) throw badRequest('ไม่มีรายการที่รับได้ (ต้องเป็นสถานะ "กำลังรอจัดส่ง" ของสาขานี้ — ลองโหลดใหม่)');
+  return { message: `รับของแล้ว ${done} รายการ`, branch, received: done };
 }
 
 export const UNIFORM_ACTIONS = {
   getUniformItems,
   getUniformSummary,
   getEmployeeUniform,
-  saveEmployeeUniform,
-  deleteEmployeeUniform,
+  submitUniformRequest,
+  receiveUniformRequest,
 };

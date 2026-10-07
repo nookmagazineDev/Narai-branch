@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react';
 import { apiCall, fetchEmployees as fetchEmployeesApi } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint, Shirt, Plus, Minus, Trash2, Save, ArrowRight } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint, Shirt, Plus, Minus, Trash2, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
 import UniformGuide from '../components/UniformGuide';
 import { uniformSpecImage } from '../utils/uniformSpecs';
+
+/* สถานะคำขอเบิกยูนิฟอร์ม — คีย์ตรงกับ UNIFORM_REQUEST_STATUS ใน office-server/uniform.js
+   และหน้าอนุมัติของออฟฟิศ (naraipizzeria components/UniformReport.jsx) */
+const UNIFORM_STATUS = {
+  pending: { label: 'กำลังรออนุมัติ', badge: 'bg-gray-100 text-gray-600 border-gray-200' },
+  waiting_stock: { label: 'รอสินค้าเข้า', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+  approved: { label: 'อนุมัติเบิก', badge: 'bg-blue-50 text-blue-700 border-blue-200' },
+  shipping: { label: 'กำลังรอจัดส่ง', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  received: { label: 'ได้รับของแล้ว', badge: 'bg-violet-50 text-violet-700 border-violet-200' },
+};
 
 export default function EmployeeList() {
   const { user } = useAuth();
@@ -40,32 +50,28 @@ export default function EmployeeList() {
   const isAdmin = String(user?.branch || '').toLowerCase() === 'all';
 
   /* ================== ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในคอลัมน์จัดการ) ==================
-     กล่องเดียวทำสองงานที่ลงคนละที่โดยตั้งใจ
-       "บันทึกข้อมูล"   -> saveEmployeeUniform -> dbo.UniformBranch (ใครได้อะไรไป)
-       "เบิกเข้าสาขา"   -> saveStock ตัวเดิมของหน้านับสต๊อก -> dbo.stock_request
-     ปุ่มเบิกต้องเป็น saveStock เท่านั้น ไม่ใช่ action ใหม่ ไม่งั้นใบเบิกของยูนิฟอร์มจะไม่โผล่
-     ในใบเบิกค้าง/หน้าสั่งของ และทีมโกดังต้องเปิดดูสองที่
+     สาขาทำแค่ "ส่งคำขอเบิก" กับ "ได้รับของแล้ว" — ใบเบิกจริงออกที่ออฟฟิศ (naraipizzeria)
+       ส่งคำขอเบิก   -> submitUniformRequest  -> dbo.UniformRequest สถานะ กำลังรออนุมัติ
+       ออฟฟิศกด      -> รอสินค้าเข้า / อนุมัติเบิก (ออกใบเบิกลง stock_request) / กำลังรอจัดส่ง
+       ได้รับของแล้ว -> receiveUniformRequest -> จบงาน + ลง dbo.UniformBranch
+     กล่องมีตารางเดียว: คำขอทุกใบของพนักงานคนนี้พร้อมสถานะ
 
      ไม่มีช่องเลือกไซซ์โดยตั้งใจ — ทะเบียนสินค้าแยกไซซ์ไว้เป็นคนละรหัสอยู่แล้ว (เสื้อไซซ์ M
-     กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้
-     คอลัมน์ size ใน UniformBranch ยังอยู่ (รับค่าว่าง) เผื่อข้อมูลเก่าและการคีย์ตรงในฐาน      */
+     กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้      */
   const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
   const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000*/80001*/8001* (โหลดครั้งเดียวใช้ซ้ำ)
-  const [uniformHistory, setUniformHistory] = useState([]);
   const [uniformLoading, setUniformLoading] = useState(false);
   const [uniformError, setUniformError] = useState('');
   const [uniformQuery, setUniformQuery] = useState('');
   const [uniformPicked, setUniformPicked] = useState(null);
   const [uniformSpec, setUniformSpec] = useState(null);         // ไอเทมที่เปิดดูรูปสเปคอยู่
   const [uniformQty, setUniformQty] = useState('1');
-  const [uniformRows, setUniformRows] = useState([]);
-  const [uniformIssuedDate, setUniformIssuedDate] = useState('');
+  const [uniformRows, setUniformRows] = useState([]);           // รายการที่เพิ่มแล้วแต่ยังไม่ได้ส่ง
   const [uniformWantDate, setUniformWantDate] = useState('');
-  const [uniformBusy, setUniformBusy] = useState('');          // '' | 'save' | 'order'
-  const [uniformSummary, setUniformSummary] = useState({});    // hrCode -> { rows, qty }
-  // ใบเบิกเข้าสาขาที่ขอในนามพนักงาน — ใบเบิกไม่มีรหัส HR จึงคีย์ด้วยชื่อ (ดู office-server/uniform.js)
-  const [uniformRequests, setUniformRequests] = useState([]);
-  const [uniformRequested, setUniformRequested] = useState({}); // ชื่อพนักงาน -> { docs, qty }
+  const [uniformBusy, setUniformBusy] = useState('');          // '' | 'send' | request_id ที่กำลังกดรับ
+  const [uniformSummary, setUniformSummary] = useState({});    // hrCode -> { rows, qty } ที่ได้รับไปแล้ว
+  const [uniformRequests, setUniformRequests] = useState([]);  // คำขอทุกใบของพนักงานที่เปิดกล่องอยู่
+  const [uniformRequested, setUniformRequested] = useState({}); // hrCode -> { rows, qty, shipping } คำขอที่ยังไม่จบ
 
   /** สาขาของพนักงานแถวนั้น — สาขาทั่วไปไม่มีคอลัมน์สาขาให้ดู ใช้สาขาที่ล็อกอินแทน */
   const branchOfEmp = (emp) => String(emp?.branch || user?.branch || '').toLowerCase().trim();
@@ -104,10 +110,8 @@ export default function EmployeeList() {
     if (!branch) { toast.error('ไม่ทราบสาขาของพนักงานคนนี้'); return; }
     const today = ymd(new Date());
     setUniformTarget({ hrCode: emp.hrCode, fullName: emp.fullName, position: emp.position, branch });
-    setUniformIssuedDate(today);
     setUniformWantDate(today);
     setUniformError('');
-    setUniformHistory([]);
     setUniformRequests([]);
     resetUniformForm();
     setUniformLoading(true);
@@ -119,10 +123,8 @@ export default function EmployeeList() {
       ]);
       if (items && items.status === 'success') setUniformCatalog(items.data?.data || []);
       else if (items) throw new Error(items.message || 'โหลดรายการยูนิฟอร์มไม่สำเร็จ');
-      if (history?.status === 'success') {
-        setUniformHistory(history.data?.data || []);
-        setUniformRequests(history.data?.requests || []);
-      } else throw new Error(history?.message || 'โหลดประวัติไม่สำเร็จ');
+      if (history?.status === 'success') setUniformRequests(history.data?.requests || []);
+      else throw new Error(history?.message || 'โหลดรายการไม่สำเร็จ');
     } catch (err) {
       setUniformError(err?.message || 'โหลดข้อมูลไม่สำเร็จ');
     } finally {
@@ -165,97 +167,82 @@ export default function EmployeeList() {
 
   const removeUniformRow = (key) => setUniformRows((rows) => rows.filter((r) => r.key !== key));
 
-  /** บันทึกการจ่าย -> UniformBranch */
-  const handleUniformSave = async () => {
-    if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
-    setUniformBusy('save');
+  /** อ่านคำขอของพนักงานที่เปิดกล่องอยู่ใหม่ — ล้มก็ไม่เป็นไร งานที่กดไปสำเร็จแล้ว */
+  const reloadUniformRequests = async (target) => {
     try {
-      const res = await apiCall('saveEmployeeUniform', {
-        branch: uniformTarget.branch,
-        hrCode: uniformTarget.hrCode,
-        empName: uniformTarget.fullName,
-        issuedDate: uniformIssuedDate,
-        username: user?.username,
-        items: uniformRows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty })),
-      });
-      if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกไม่สำเร็จ');
-      toast.success(res.message || 'บันทึกเรียบร้อยแล้ว');
-      resetUniformForm();
       const again = await apiCall('getEmployeeUniform', {
-        branch: uniformTarget.branch, hrCode: uniformTarget.hrCode, empName: uniformTarget.fullName,
+        branch: target.branch, hrCode: target.hrCode, empName: target.fullName,
       });
-      if (again?.status === 'success') {
-        setUniformHistory(again.data?.data || []);
-        setUniformRequests(again.data?.requests || []);
-      }
+      if (again?.status === 'success') setUniformRequests(again.data?.requests || []);
+    } catch { /* ไม่ต้องทำอะไร */ }
+  };
+
+  /** ส่งคำขอเบิก -> dbo.UniformRequest สถานะ pending (ใบเบิกออกตอนออฟฟิศอนุมัติ) */
+  const handleUniformSend = async () => {
+    if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
+    if (!uniformWantDate) { toast.error('ระบุวันที่ต้องการรับ'); return; }
+    const target = uniformTarget;
+    const rows = uniformRows;
+    setUniformBusy('send');
+    try {
+      const res = await apiCall('submitUniformRequest', {
+        branch: target.branch,
+        hrCode: target.hrCode,
+        empName: target.fullName,
+        wantDate: uniformWantDate,
+        username: user?.username,
+        items: rows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty })),
+      });
+      if (res?.status !== 'success') throw new Error(res?.message || 'ส่งคำขอไม่สำเร็จ');
+      toast.success(res.message || 'ส่งคำขอแล้ว · กำลังรออนุมัติ');
+      resetUniformForm();
       // ตัวเลขบนปุ่มต้องขยับตามทันที ไม่ต้องรอรีเฟรชหน้า
-      setUniformSummary((prev) => {
-        const cur = prev[uniformTarget.hrCode] || { rows: 0, qty: 0 };
-        return { ...prev, [uniformTarget.hrCode]: {
+      setUniformRequested((prev) => {
+        const cur = prev[target.hrCode] || { rows: 0, qty: 0, shipping: 0 };
+        return { ...prev, [target.hrCode]: {
           ...cur,
-          rows: cur.rows + uniformRows.length,
-          qty: cur.qty + uniformRows.reduce((sum, r) => sum + r.qty, 0),
+          rows: cur.rows + rows.length,
+          qty: cur.qty + rows.reduce((sum, r) => sum + r.qty, 0),
         } };
       });
+      await reloadUniformRequests(target);
+    } catch (err) {
+      toast.error(err?.message || 'ส่งคำขอไม่สำเร็จ');
+    } finally {
+      setUniformBusy('');
+    }
+  };
+
+  /** ได้รับของแล้ว — เฉพาะแถวที่ออฟฟิศตั้งเป็น "กำลังรอจัดส่ง" จบงานแถวนั้น */
+  const handleUniformReceive = async (row) => {
+    if (!uniformTarget) return;
+    const target = uniformTarget;
+    setUniformBusy(row.id);
+    try {
+      const res = await apiCall('receiveUniformRequest', {
+        branch: target.branch, requestIds: [row.id], username: user?.username,
+      });
+      if (res?.status !== 'success') throw new Error(res?.message || 'บันทึกไม่สำเร็จ');
+      toast.success(`ได้รับ "${row.name}" แล้ว`);
+      setUniformRequests((list) => list.map((r) => (r.id === row.id ? { ...r, status: 'received' } : r)));
+      setUniformRequested((prev) => {
+        const cur = prev[target.hrCode];
+        if (!cur) return prev;
+        return { ...prev, [target.hrCode]: {
+          rows: Math.max(0, cur.rows - 1),
+          qty: Math.max(0, cur.qty - row.qty),
+          shipping: Math.max(0, (cur.shipping || 0) - 1),
+        } };
+      });
+      setUniformSummary((prev) => {
+        const cur = prev[target.hrCode] || { rows: 0, qty: 0 };
+        return { ...prev, [target.hrCode]: { ...cur, rows: cur.rows + 1, qty: cur.qty + row.qty } };
+      });
+      await reloadUniformRequests(target);
     } catch (err) {
       toast.error(err?.message || 'บันทึกไม่สำเร็จ');
     } finally {
       setUniformBusy('');
-    }
-  };
-
-  /** เบิกเข้าสาขา -> saveStock ตัวเดิม (ลง dbo.stock_request ได้เลขที่ใบเบิกรูปแบบเดิม)
-      ส่งเฉพาะ requested ไม่ส่ง remaining — saveStock จะไม่บันทึกเป็นการนับสต๊อก */
-  const handleUniformOrder = async () => {
-    if (!uniformTarget || uniformRows.length === 0) { toast.error('ยังไม่มีรายการ'); return; }
-    if (!uniformWantDate) { toast.error('ระบุวันที่เบิก'); return; }
-    setUniformBusy('order');
-    try {
-      const res = await apiCall('saveStock', {
-        branch: uniformTarget.branch,
-        username: user?.username,
-        requestDate: uniformWantDate,
-        requesterName: uniformTarget.fullName,
-        items: uniformRows.map((r) => ({
-          productId: r.code,
-          name: r.name,
-          unit: r.unit,
-          requested: r.qty,
-        })),
-      }, { timeoutMs: 55000, deadlineMs: 58000 });
-      if (res?.status !== 'success') throw new Error(res?.message || 'สร้างใบเบิกไม่สำเร็จ');
-      const docNo = res.data?.requisitionNo;
-      toast.success(docNo ? `สร้างใบเบิกเลขที่ ${docNo} แล้ว` : (res.message || 'สร้างใบเบิกแล้ว'));
-      const name = String(uniformTarget.fullName || '').trim();
-      const orderedQty = uniformRows.reduce((sum, r) => sum + r.qty, 0);
-      setUniformRequested((prev) => {
-        const cur = prev[name] || { docs: 0, qty: 0 };
-        return { ...prev, [name]: { docs: cur.docs + 1, qty: cur.qty + orderedQty } };
-      });
-      // ใบเบิกที่เพิ่งสร้างต้องขึ้นในรายการทันที — ล้มก็ไม่เป็นไร ใบเบิกสร้างสำเร็จไปแล้ว
-      try {
-        const again = await apiCall('getEmployeeUniform', {
-          branch: uniformTarget.branch, hrCode: uniformTarget.hrCode, empName: uniformTarget.fullName,
-        });
-        if (again?.status === 'success') setUniformRequests(again.data?.requests || []);
-      } catch { /* ไม่ต้องทำอะไร */ }
-    } catch (err) {
-      toast.error(err?.message || 'สร้างใบเบิกไม่สำเร็จ');
-    } finally {
-      setUniformBusy('');
-    }
-  };
-
-  const deleteUniformHistory = async (row) => {
-    if (!uniformTarget) return;
-    if (!window.confirm(`ลบรายการ "${row.name}" ${row.qty} ${row.unit || ''} ของวันที่ ${row.issuedAt}?`)) return;
-    try {
-      const res = await apiCall('deleteEmployeeUniform', { branch: uniformTarget.branch, uniformId: row.id });
-      if (res?.status !== 'success') throw new Error(res?.message || 'ลบไม่สำเร็จ');
-      setUniformHistory((rows) => rows.filter((r) => r.id !== row.id));
-      toast.success('ลบรายการแล้ว');
-    } catch (err) {
-      toast.error(err?.message || 'ลบไม่สำเร็จ');
     }
   };
 
@@ -792,12 +779,14 @@ export default function EmployeeList() {
                               {uniformSummary[emp.hrCode].rows}
                             </span>
                           )}
-                          {uniformRequested[String(emp.fullName || '').trim()]?.qty > 0 && (
+                          {uniformRequested[emp.hrCode]?.qty > 0 && (
                             <span
-                              title="จำนวนที่ขอเบิกเข้าสาขาในนามพนักงานคนนี้"
-                              className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-amber-500 text-white rounded-full text-[10px] font-bold"
+                              title={uniformRequested[emp.hrCode].shipping > 0
+                                ? 'มีของกำลังรอจัดส่ง — เปิดกล่องแล้วกด "ได้รับของแล้ว" เมื่อของถึง'
+                                : 'จำนวนที่ขอเบิกไว้และยังไม่ได้รับ'}
+                              className={`ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-white rounded-full text-[10px] font-bold ${uniformRequested[emp.hrCode].shipping > 0 ? 'bg-emerald-600' : 'bg-amber-500'}`}
                             >
-                              เบิก {uniformRequested[String(emp.fullName || '').trim()].qty}
+                              {uniformRequested[emp.hrCode].shipping > 0 ? 'รอรับ' : 'เบิก'} {uniformRequested[emp.hrCode].qty}
                             </span>
                           )}
                         </button>
@@ -1085,120 +1074,89 @@ export default function EmployeeList() {
               </div>
 
               <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
-                  <span className="text-sm font-bold text-gray-700">รายการที่จะบันทึก</span>
-                  <span className="text-[11px] font-semibold text-violet-700 bg-violet-100 rounded-full px-2 py-0.5">
-                    {uniformRows.length} ไอเทม
-                  </span>
+                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold text-gray-700">รายการยูนิฟอร์มของพนักงานคนนี้</span>
+                  {uniformLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
                   <span className="ml-auto text-xs text-gray-400">
-                    รวม {uniformRows.reduce((sum, r) => sum + r.qty, 0)} ชิ้น
+                    ขอแล้ว {uniformRequests.length} รายการ · รออนุมัติ {uniformRequests.filter((r) => r.status === 'pending').length}
                   </span>
                 </div>
-                {uniformRows.length === 0 ? (
+                {uniformRows.length === 0 && uniformRequests.length === 0 ? (
                   <div className="px-4 py-6 text-center text-xs text-gray-400">
-                    ยังไม่มีรายการ — ค้นหารหัสหรือชื่อไอเทมด้านบนแล้วกด &quot;เพิ่มไอเทม&quot;
+                    {uniformLoading ? 'กำลังโหลด...' : 'ยังไม่มีรายการ — ค้นหาไอเทมด้านบนแล้วกด "เพิ่มไอเทม" จากนั้นกด "ส่งคำขอเบิก"'}
                   </div>
                 ) : (
-                  <table className="w-full">
-                    <tbody>
-                      {uniformRows.map((r) => (
-                        <tr key={r.key} className="border-b border-gray-50 last:border-0">
-                          <td className="px-4 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{r.code}</td>
-                          <td className="px-2 py-2 text-sm text-gray-800">{r.name}</td>
-                          <td className="px-2 py-2 text-center text-sm font-bold text-gray-800 tabular-nums w-20">{r.qty}</td>
-                          <td className="px-4 py-2 text-center w-16">
-                            <button
-                              onClick={() => removeUniformRow(r.key)}
-                              aria-label="ลบรายการนี้"
-                              className="p-1.5 bg-red-50 text-red-600 border border-red-100 rounded-lg hover:bg-red-100"
-                            ><Trash2 className="w-3.5 h-3.5" /></button>
-                          </td>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-100 text-[11px] text-gray-400">
+                          <th className="px-4 py-2 text-left font-semibold">วันที่ขอ</th>
+                          <th className="px-2 py-2 text-left font-semibold">รหัส</th>
+                          <th className="px-2 py-2 text-left font-semibold">ไอเทม</th>
+                          <th className="px-2 py-2 text-center font-semibold">จำนวน</th>
+                          <th className="px-4 py-2 text-left font-semibold">สถานะ</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
-                  <span className="text-sm font-bold text-amber-800">ขอเบิกเข้าสาขาไว้</span>
-                  {uniformRequests.length > 0 && (
-                    <span className="text-xs font-semibold text-amber-700">
-                      รวม {uniformRequests.reduce((sum, r) => sum + (Number(r.qty) || 0), 0)} ชิ้น
-                    </span>
-                  )}
-                  {uniformLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
-                  <span className="ml-auto text-xs text-gray-400">จากใบเบิก (stock_request)</span>
-                </div>
-                {uniformRequests.length === 0 ? (
-                  <div className="px-4 py-6 text-center text-xs text-gray-400">
-                    {uniformLoading ? 'กำลังโหลด...' : 'ยังไม่เคยขอเบิกยูนิฟอร์มในนามพนักงานคนนี้'}
+                      </thead>
+                      <tbody>
+                        {/* แถวพื้นม่วง = เพิ่งเพิ่ม ยังไม่ได้ส่ง */}
+                        {uniformRows.map((r) => (
+                          <tr key={r.key} className="border-b border-gray-50 bg-violet-50/70">
+                            <td className="px-4 py-2 text-xs text-violet-500 whitespace-nowrap">ยังไม่ส่ง</td>
+                            <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums">{r.code}</td>
+                            <td className="px-2 py-2 text-sm text-gray-800">{r.name}</td>
+                            <td className="px-2 py-2 text-center text-sm font-bold text-gray-800 tabular-nums">{r.qty}</td>
+                            <td className="px-4 py-2">
+                              <button
+                                onClick={() => removeUniformRow(r.key)}
+                                aria-label="ลบรายการนี้"
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-600 border border-red-100 rounded-lg text-xs hover:bg-red-100"
+                              ><Trash2 className="w-3.5 h-3.5" /> ลบ</button>
+                            </td>
+                          </tr>
+                        ))}
+                        {uniformRequests.map((r) => {
+                          const st = UNIFORM_STATUS[r.status] || UNIFORM_STATUS.pending;
+                          return (
+                            <tr key={r.id} className="border-b border-gray-50 last:border-0">
+                              <td className="px-4 py-2 text-xs text-gray-500 tabular-nums whitespace-nowrap">{r.requestedAt}</td>
+                              <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums">{r.code}</td>
+                              <td className="px-2 py-2 text-sm text-gray-700">{r.name}</td>
+                              <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 tabular-nums">{r.qty}</td>
+                              <td className="px-4 py-2">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${st.badge}`}>
+                                    {st.label}
+                                  </span>
+                                  {r.status === 'shipping' && (
+                                    <button
+                                      onClick={() => handleUniformReceive(r)}
+                                      disabled={!!uniformBusy}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                      {uniformBusy === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                      ได้รับของแล้ว
+                                    </button>
+                                  )}
+                                </div>
+                                {(r.docNo || r.statusAt) && (
+                                  <div className="text-[11px] text-gray-400 mt-0.5">
+                                    {[r.docNo && `ใบเบิก ${r.docNo}`, r.status === 'received' ? r.receivedAt : r.statusAt].filter(Boolean).join(' · ')}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                ) : (
-                  <table className="w-full">
-                    <tbody>
-                      {uniformRequests.map((r) => (
-                        <tr key={`${r.docNo}-${r.code}`} className="border-b border-gray-50 last:border-0">
-                          <td className="px-4 py-2 text-xs text-gray-500 tabular-nums w-28">{r.savedAt}</td>
-                          <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{r.code}</td>
-                          <td className="px-2 py-2 text-sm text-gray-700">{r.name}</td>
-                          <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 w-16">{r.qty}</td>
-                          <td className="px-4 py-2 text-xs text-gray-400 w-32 truncate" title={`ต้องการรับ ${r.requestDate || '-'}`}>{r.docNo}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
-                  <span className="text-sm font-bold text-gray-700">ประวัติที่เคยจ่าย</span>
-                  {uniformLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
-                  <span className="ml-auto text-xs text-gray-400">จากตาราง UniformBranch</span>
-                </div>
-                {uniformHistory.length === 0 ? (
-                  <div className="px-4 py-6 text-center text-xs text-gray-400">
-                    {uniformLoading ? 'กำลังโหลด...' : 'ยังไม่เคยบันทึกยูนิฟอร์มให้พนักงานคนนี้'}
-                  </div>
-                ) : (
-                  <table className="w-full">
-                    <tbody>
-                      {uniformHistory.map((h) => (
-                        <tr key={h.id} className="border-b border-gray-50 last:border-0">
-                          <td className="px-4 py-2 text-xs text-gray-500 tabular-nums w-28">{h.issuedAt}</td>
-                          <td className="px-2 py-2 text-xs font-bold text-violet-700 tabular-nums w-24">{h.code}</td>
-                          <td className="px-2 py-2 text-sm text-gray-700">{h.name}</td>
-                          <td className="px-2 py-2 text-center text-sm font-semibold text-gray-800 w-16">{h.qty}</td>
-                          <td className="px-2 py-2 text-xs text-gray-400 w-24 truncate">{h.savedBy}</td>
-                          <td className="px-4 py-2 text-center w-16">
-                            <button
-                              onClick={() => deleteUniformHistory(h)}
-                              aria-label="ลบรายการนี้"
-                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                            ><Trash2 className="w-3.5 h-3.5" /></button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 )}
               </div>
             </div>
 
             <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 flex flex-wrap items-end gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">วันที่รับของ</label>
-                <input
-                  type="date"
-                  value={uniformIssuedDate}
-                  onChange={(e) => setUniformIssuedDate(e.target.value)}
-                  className="px-3 py-2 bg-white border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">วันที่เบิก</label>
+                <label className="block text-xs text-gray-500 mb-1">วันที่ต้องการรับ</label>
                 <input
                   type="date"
                   value={uniformWantDate}
@@ -1214,21 +1172,13 @@ export default function EmployeeList() {
                 ปิด
               </button>
               <button
-                onClick={handleUniformOrder}
+                onClick={handleUniformSend}
                 disabled={!!uniformBusy || uniformRows.length === 0}
-                title="สร้างใบเบิกลงตารางเดียวกับใบเบิกของสต๊อก"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 disabled:opacity-50"
+                title="ส่งให้ออฟฟิศอนุมัติ — ใบเบิกจะออกเมื่อออฟฟิศกดอนุมัติเบิก"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-bold hover:bg-violet-700 disabled:opacity-50"
               >
-                {uniformBusy === 'order' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
-                เบิกเข้าสาขา
-              </button>
-              <button
-                onClick={handleUniformSave}
-                disabled={!!uniformBusy || uniformRows.length === 0}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-bold hover:bg-green-700 disabled:opacity-50"
-              >
-                {uniformBusy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                บันทึกข้อมูล
+                {uniformBusy === 'send' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                ส่งคำขอเบิก{uniformRows.length > 0 ? ` (${uniformRows.length})` : ''}
               </button>
             </div>
           </div>
