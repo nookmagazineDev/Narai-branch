@@ -25,9 +25,15 @@ const CATS = [
   { key: 'consume', label: 'วัสดุสิ้นเปลือง', test: (c) => (c >= 11800001 && c <= 11800217) || c >= 41000001 },
   { key: 'other', label: 'อื่นๆ', test: () => true }, // fallback — รหัสนอกหมวด
 ];
+// รหัสที่อยู่นอกช่วงของหมวด แต่ต้องนับเข้าหมวดที่กำหนด (มาก่อนการเทียบช่วง)
+const CAT_OVERRIDES = {
+  5000103: 'central', // FC ชอคลาวา(BM)
+  11050101: 'central', // ไก่ไร้กระดูกขิมชิว
+  11050069: 'food', // น้ำปรุงซูชิซามูไร
+};
 const catOf = (code) => {
   const n = parseInt(String(code).replace(/\D/g, ''), 10) || 0;
-  return (CATS.find((c) => c.test(n)) || CATS[CATS.length - 1]).key;
+  return CAT_OVERRIDES[n] || (CATS.find((c) => c.test(n)) || CATS[CATS.length - 1]).key;
 };
 
 const EXPENSES = [
