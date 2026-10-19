@@ -543,7 +543,8 @@ export default function EmployeeList() {
             </div>
           </div>
           <div className="bg-purple-50 text-purple-700 px-4 py-2 rounded-lg font-medium text-sm border border-purple-100 shadow-sm">
-            พนักงานทั้งหมด {filteredEmployees.length} คน
+            {/* นับเฉพาะคนที่ยังทำงานอยู่ (สถานะว่างถือเป็นทำงาน — ตารางแสดงแบบเดียวกัน) ตามตัวกรองที่เลือก */}
+            พนักงานที่ทำงานอยู่ {filteredEmployees.filter(emp => emp.status !== 'ลาออก').length} คน
           </div>
         </div>
 
