@@ -22,6 +22,7 @@ import { KITCHEN_ACTIONS } from './kitchen.js';
 import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
 import { ATTENDANCE_ACTIONS } from './attendance.js';
+import { ORDER_SHOP_ACTIONS } from './ordershop.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
 } from './hr-session.js';
@@ -1046,6 +1047,9 @@ const ACTIONS = {
 
   // หน้าสแกนเข้า-ออก: เวลาที่สาขา/แอดมินแก้แทนเวลาสแกนจริง (ปุ่ม "แก้ไข") — ดู office-server/attendance.js
   ...ATTENDANCE_ACTIONS,
+
+  // ร้านที่เบิกของของแอป ordernaraipizzeria (ทะเบียนร้าน/ล็อกอินร้าน/สินค้าที่เบิกได้) — ดู ordershop.js
+  ...ORDER_SHOP_ACTIONS,
 };
 
 /* ชื่อ action ทั้งหมดของโค้ดชุดนี้ — /health เอาไปแสดง เพื่อให้ตอบได้ว่า "ไม่รู้จักคำสั่ง X"
