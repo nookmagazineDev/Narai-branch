@@ -1,4 +1,5 @@
 // ร้านที่เบิกของ (แอป ordernaraipizzeria) — ทะเบียนร้าน / ล็อกอินร้าน / รายการสินค้าที่ร้านเบิกได้
+// (sql/ordershop-001-shops.sql = ทะเบียนร้าน · sql/ordershop-002-shop-items.sql = สินค้าที่แต่ละร้านเบิกได้)
 //
 // เรียกจากแอป ordernaraipizzeria (Narai-IT/ordernaraipizzeria) ผ่าน POST /schedule เหมือน action อื่น
 //
@@ -93,8 +94,12 @@ async function orderShopGet(body) {
 }
 
 async function orderShopList() {
-  const rows = await queryRead(`SELECT ${SHOP_COLUMNS} FROM dbo.order_shop ORDER BY branch_code`);
-  return { shops: rows.map(shape) };
+  const rows = await queryRead(
+    `SELECT ${SHOP_COLUMNS},
+            (SELECT COUNT(*) FROM dbo.order_shop_item s WHERE s.shop_no = order_shop.shop_no) AS item_count
+       FROM dbo.order_shop ORDER BY branch_code`
+  );
+  return { shops: rows.map((r) => ({ ...shape(r), itemCount: Number(r.item_count) || 0 })) };
 }
 
 /**
@@ -164,38 +169,112 @@ async function orderShopSave(body) {
   return { shop: shape(row), message: `บันทึกร้าน ${code} แล้ว` };
 }
 
+const ITEM_COLUMNS = `i.item_key, i.item_code, i.item_name, i.unit, i.request_unit, i.price,
+       i.pos_item_id, i.store_cat, i.plan_only`;
+const ACTIVE_ITEM = `ISNULL(i.status, N'') <> N'ปิดการใช้งาน'`;
+
+function shapeItem(r) {
+  return {
+    key: normCode(r.item_key || r.item_code),
+    code: str(r.item_code),
+    name: str(r.item_name),
+    unit: str(r.unit),
+    requestUnit: num(r.request_unit),
+    price: num(r.price),
+    itemId: Number(r.pos_item_id) || 0,
+    storeCat: str(r.store_cat),
+    planOnly: Boolean(r.plan_only),
+  };
+}
+
+const shopNoParam = (v) => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw bad('ไม่ระบุรหัสร้าน');
+  return { type: sql.Int, value: n };
+};
+
 /**
- * สินค้าที่ร้านเบิกได้ — ทะเบียนเดียวกับหน้านับสต๊อก (dbo.stock_item) ตัดของที่ปิดการใช้งาน
- * ร้านที่มีรายการผูกไว้ใน stock_item_branch เห็นเฉพาะของตัวเอง ร้านใหม่ที่ยังไม่ได้ผูกเห็นทั้งทะเบียน
- * (ดีกว่าเปิดมาเจอหน้าว่างแล้วสั่งอะไรไม่ได้เลย)
+ * สินค้าที่ร้านเบิกได้ — เฉพาะที่ผู้ดูแลตั้งไว้ใน dbo.order_shop_item (ตัดของที่ปิดการใช้งานในทะเบียน)
+ * ร้านที่ยังไม่ได้ตั้งรายการ = ได้รายการว่าง (configured: false) หน้าเว็บจะบอกให้ติดต่อผู้ดูแล
+ * ใช้ทั้งตอนแสดงหน้าเบิกของและตอนตรวจใบเบิกก่อนส่ง ร้านจึงส่งของนอกรายการไม่ได้แม้ยิง API ตรง
  */
 async function orderShopItems(body) {
-  const branch = str(body.branch).toLowerCase();
   const rows = await queryRead(
-    `SELECT i.item_key, i.item_code, i.item_name, i.unit, i.request_unit, i.price,
-            i.pos_item_id, i.store_cat, i.plan_only,
-            CASE WHEN b.item_key IS NULL THEN 0 ELSE 1 END AS for_branch
-       FROM dbo.stock_item i
-       LEFT JOIN dbo.stock_item_branch b ON b.item_key = i.item_key AND b.branch = @branch
-      WHERE ISNULL(i.status, N'') <> N'ปิดการใช้งาน'
+    `SELECT ${ITEM_COLUMNS}
+       FROM dbo.order_shop_item s
+       JOIN dbo.stock_item i ON i.item_key = s.item_key
+      WHERE s.shop_no = @no AND ${ACTIVE_ITEM}
       ORDER BY i.sort_order, i.item_code`,
-    { branch: { type: sql.NVarChar(50), value: branch } }
+    { no: shopNoParam(body.shopNo) }
   );
-  const mine = rows.filter((r) => r.for_branch);
-  const list = mine.length ? mine : rows;
+  return { configured: rows.length > 0, items: rows.map(shapeItem) };
+}
+
+/**
+ * หน้าตั้งรายการของผู้ดูแล — ทะเบียนทั้งหมด พร้อมธงว่าร้านนี้เลือกไว้หรือยัง
+ * และธงว่าสินค้าผูกกับสาขานี้ในสต๊อกสาขา (stock_item_branch) ไว้ใช้ปุ่ม "เลือกตามสต๊อกสาขา"
+ */
+async function orderShopGetItems(body) {
+  const no = shopNoParam(body.shopNo);
+  const shop = await findShop(String(no.value));
+  if (!shop) throw bad(`ไม่พบร้านรหัส ${no.value}`);
+  const rows = await queryRead(
+    `SELECT ${ITEM_COLUMNS},
+            CASE WHEN s.item_key IS NULL THEN 0 ELSE 1 END AS selected,
+            CASE WHEN b.item_key IS NULL THEN 0 ELSE 1 END AS in_branch
+       FROM dbo.stock_item i
+       LEFT JOIN dbo.order_shop_item s ON s.item_key = i.item_key AND s.shop_no = @no
+       LEFT JOIN dbo.stock_item_branch b ON b.item_key = i.item_key AND b.branch = @branch
+      WHERE ${ACTIVE_ITEM}
+      ORDER BY i.sort_order, i.item_code`,
+    { no, branch: { type: sql.NVarChar(50), value: str(shop.branch_code).toLowerCase() } }
+  );
   return {
-    scoped: mine.length > 0,
-    items: list.map((r) => ({
-      key: normCode(r.item_key || r.item_code),
-      code: str(r.item_code),
-      name: str(r.item_name),
-      unit: str(r.unit),
-      requestUnit: num(r.request_unit),
-      price: num(r.price),
-      itemId: Number(r.pos_item_id) || 0,
-      storeCat: str(r.store_cat),
-      planOnly: Boolean(r.plan_only),
-    })),
+    shop: shape(shop),
+    items: rows.map((r) => ({ ...shapeItem(r), selected: Boolean(r.selected), inBranch: Boolean(r.in_branch) })),
+  };
+}
+
+/**
+ * ตั้งรายการที่ร้านเบิกได้ใหม่ทั้งชุด — body: { shopNo, codes: ['100101', ...] }
+ * รับรหัสได้ทั้งแบบมี/ไม่มี 0 นำหน้า (มาจาก Excel บ่อย) รหัสที่ไม่อยู่ในทะเบียนคืนกลับเป็น unknown ไม่บันทึก
+ */
+async function orderShopSetItems(body) {
+  const no = shopNoParam(body.shopNo);
+  const codes = Array.isArray(body.codes) ? body.codes : [];
+  if (codes.length > 5000) throw bad('รายการเกิน 5,000 รายการ');
+  const wanted = [...new Set(codes.map(normCode).filter(Boolean))];
+
+  const registry = await queryRead(`SELECT i.item_key, i.item_code FROM dbo.stock_item i WHERE ${ACTIVE_ITEM}`);
+  const keyOf = new Map();
+  for (const r of registry) {
+    keyOf.set(normCode(r.item_key), str(r.item_key));
+    keyOf.set(normCode(r.item_code), str(r.item_key));
+  }
+  const keys = [...new Set(wanted.map((c) => keyOf.get(c)).filter(Boolean))];
+  const unknown = wanted.filter((c) => !keyOf.has(c));
+
+  const shop = await findShop(String(no.value));
+  if (!shop) throw bad(`ไม่พบร้านรหัส ${no.value}`);
+
+  await withTransaction(async (run) => {
+    await run(`DELETE dbo.order_shop_item WHERE shop_no = @no`, { no });
+    // ทีละ 500 แถว — INSERT ... VALUES รับได้ไม่เกิน 1000 แถวต่อคำสั่ง และพารามิเตอร์ไม่เกิน 2100 ตัว
+    for (let i = 0; i < keys.length; i += 500) {
+      const chunk = keys.slice(i, i + 500);
+      const params = { no };
+      const values = chunk.map((k, j) => {
+        params[`k${j}`] = { type: sql.NVarChar(50), value: k };
+        return `(@no, @k${j})`;
+      });
+      await run(`INSERT dbo.order_shop_item (shop_no, item_key) VALUES ${values.join(', ')}`, params);
+    }
+  });
+
+  return {
+    count: keys.length,
+    unknown,
+    message: `บันทึกรายการที่ร้าน ${shop.branch_code} เบิกได้ ${keys.length} รายการ`,
   };
 }
 
@@ -205,4 +284,6 @@ export const ORDER_SHOP_ACTIONS = {
   orderShopList,
   orderShopSave,
   orderShopItems,
+  orderShopGetItems,
+  orderShopSetItems,
 };
