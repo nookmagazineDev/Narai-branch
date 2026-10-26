@@ -128,6 +128,20 @@ async function hasOrderEventTable() {
   return orderEventReady;
 }
 
+/** มีตาราง/คอลัมน์ของเหลือจากการผลิตแล้วหรือยัง (sql/kitchen-009-leftover.sql) — จำเฉพาะตอนที่มีแล้ว */
+let leftoverReady = false;
+async function hasLeftoverTables() {
+  if (leftoverReady) return true;
+  const rows = await runSql(
+    `SELECT OBJECT_ID(N'dbo.kitchen_menu_leftover', N'U') AS t,
+            COL_LENGTH(N'dbo.kitchen_material_receipt', N'receipt_kind') AS c;`
+  );
+  const r = rows?.[0] || {};
+  leftoverReady = r.t !== null && r.t !== undefined && r.c !== null && r.c !== undefined;
+  return leftoverReady;
+}
+const leftoverMissing = () => badRequest('ยังไม่มีตารางของเหลือจากการผลิต — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
+
 
 /* ==========================================================================
    รายการสินค้า/วัตถุดิบ — ใช้เติมช่องเลือกของทุกหน้า
@@ -1751,8 +1765,14 @@ async function saveProductionRun(body, session) {
 
   const recorder = recorderOf(body, session);
   const produceDate = ymd(body?.produceDate) || bangkokNow().date;
+  // ของเหลือจากการผลิตรอบนี้ (เช่น เศษลูกชิ้น) — เข้าสต๊อกครัวเป็นใบรับเข้าใน transaction เดียวกัน
+  const leftovers = (Array.isArray(body?.leftovers) ? body.leftovers : [])
+    .map((l) => ({ key: normCode(l?.itemKey || l?.itemCode), qty: num(l?.qty) }))
+    .filter((l) => l.key && l.qty > 0);
+  if (leftovers.length > 0 && !(await hasLeftoverTables())) throw leftoverMissing();
 
   return withTransaction(async (run) => {
+    let orderDocNo = '';
     let productKey = normCode(body?.productKey || body?.productCode);
     let productCode = str(body?.productCode) || productKey;
     let productName = str(body?.productName).slice(0, 255);
@@ -1762,12 +1782,13 @@ async function saveProductionRun(body, session) {
       // ผลิตตามคำสั่ง — เอาข้อมูลสินค้าจากใบสั่ง ไม่เชื่อสิ่งที่หน้าเว็บส่งมา
       // ไม่งั้นบันทึกผลิตของสินค้า A ใส่ใบสั่งของสินค้า B ได้โดยไม่มีอะไรทัก
       const found = await run(
-        `SELECT product_key, product_code, product_name, unit, order_qty
+        `SELECT doc_no, product_key, product_code, product_name, unit, order_qty
            FROM dbo.kitchen_production_order WHERE order_id = @order_id;`,
         { order_id: { type: sql.BigInt, value: orderId } }
       );
       const o = found?.recordset?.[0];
       if (!o) throw badRequest('ไม่พบคำสั่งผลิต');
+      orderDocNo = o.doc_no;
       productKey = o.product_key;
       productCode = o.product_code;
       productName = o.product_name;
@@ -1813,7 +1834,43 @@ async function saveProductionRun(body, session) {
       );
     }
 
-    return { message: `บันทึกการผลิต ${productName || productKey} จำนวน ${qtyProduced} แล้ว` };
+    let leftoverDoc = '';
+    if (leftovers.length > 0) {
+      leftoverDoc = await nextDocNo(run, 'dbo.kitchen_material_receipt', 'MR', produceDate);
+      const merged = new Map();
+      for (const l of leftovers) merged.set(l.key, (merged.get(l.key) || 0) + l.qty);
+      for (const [key, qty] of merged) {
+        const it = (await run(
+          `SELECT item_key, item_code, item_name, unit FROM dbo.stock_item WHERE item_key = @k;`,
+          { k: { type: sql.NVarChar(50), value: key } }
+        ))?.recordset?.[0];
+        if (!it) throw badRequest(`ไม่พบไอเทมของเหลือรหัส ${key} ในทะเบียนสินค้า`);
+        await run(
+          `INSERT INTO dbo.kitchen_material_receipt
+             (doc_no, receive_date, item_key, item_code, item_name, qty, unit, source_name, note, recorder, order_id, receipt_kind)
+           VALUES (@doc_no, CONVERT(DATE, @d, 23), @item_key, @item_code, @item_name, @qty, @unit,
+                   @source_name, NULL, @recorder, @order_id, N'leftover');`,
+          {
+            doc_no: { type: sql.NVarChar(50), value: leftoverDoc },
+            d: { type: sql.NVarChar(10), value: produceDate },
+            item_key: { type: sql.NVarChar(50), value: it.item_key },
+            item_code: { type: sql.NVarChar(50), value: it.item_code },
+            item_name: { type: sql.NVarChar(255), value: it.item_name },
+            qty: { type: sql.Decimal(18, 3), value: qty },
+            unit: { type: sql.NVarChar(50), value: it.unit },
+            source_name: { type: sql.NVarChar(255), value: `ของเหลือจาก ${orderDocNo || productName || productKey}`.slice(0, 255) },
+            recorder: { type: sql.NVarChar(255), value: recorder },
+            order_id: { type: sql.BigInt, value: hasOrder ? orderId : null },
+          }
+        );
+      }
+    }
+
+    return {
+      leftoverDoc,
+      message: `บันทึกการผลิต ${productName || productKey} จำนวน ${qtyProduced} แล้ว`
+        + (leftoverDoc ? ` · ของเหลือเข้าสต๊อกครัว ${leftoverDoc}` : ''),
+    };
   });
 }
 
@@ -2135,6 +2192,130 @@ async function setKitchenMenuHidden(body, session) {
   }
 }
 
+/* ==========================================================================
+   ของเหลือจากการผลิต — หน้าเมนูครัวกลาง (ผูก/สร้างไอเทม) + ฟอร์มผลิต (ใช้ / บันทึกของเหลือ)
+   ตาราง sql/kitchen-009-leftover.sql
+========================================================================== */
+
+/** การผูกของเหลือทั้งหมด (เมนู → ไอเทม) พร้อมชื่อ/หน่วยจากทะเบียนสินค้า */
+async function getLeftoverLinks() {
+  if (!(await hasLeftoverTables())) return { links: [], ready: false };
+  const links = await runSql(
+    `SELECT l.product_key, l.product_name, l.item_key, l.sort_order,
+            COALESCE(i.item_code, l.item_key) AS item_code, COALESCE(i.item_name, l.item_key) AS item_name,
+            i.unit, i.price
+       FROM dbo.kitchen_menu_leftover l
+       LEFT JOIN dbo.stock_item i ON i.item_key = l.item_key
+      ORDER BY l.product_key, l.sort_order, i.item_name;`
+  );
+  return { links, ready: true };
+}
+
+/** ตั้งไอเทมของเหลือของเมนูหนึ่ง — แทนที่ชุดเดิมทั้งชุด (ส่ง itemKeys ว่าง = เลิกผูกทั้งหมด) */
+async function saveMenuLeftovers(body, session) {
+  const productKey = normCode(body?.productKey || body?.productCode);
+  if (!productKey) throw badRequest('ไม่ระบุเมนู');
+  if (!(await hasLeftoverTables())) throw leftoverMissing();
+  const keys = [...new Set((Array.isArray(body?.itemKeys) ? body.itemKeys : []).map(normCode).filter(Boolean))];
+  const recorder = recorderOf(body, session);
+  return withTransaction(async (run) => {
+    await run(`DELETE FROM dbo.kitchen_menu_leftover WHERE product_key = @p;`,
+      { p: { type: sql.NVarChar(50), value: productKey } });
+    for (const [idx, key] of keys.entries()) {
+      const ok = (await run(`SELECT 1 AS ok FROM dbo.stock_item WHERE item_key = @k;`,
+        { k: { type: sql.NVarChar(50), value: key } }))?.recordset?.[0];
+      if (!ok) throw badRequest(`ไม่พบรหัส ${key} ในทะเบียนสินค้า`);
+      await run(
+        `INSERT INTO dbo.kitchen_menu_leftover (product_key, product_name, item_key, sort_order, recorder)
+         VALUES (@p, @n, @k, @s, @r);`,
+        {
+          p: { type: sql.NVarChar(50), value: productKey },
+          n: { type: sql.NVarChar(255), value: orNull(body?.productName) && str(body.productName).slice(0, 255) },
+          k: { type: sql.NVarChar(50), value: key },
+          s: { type: sql.Int, value: idx },
+          r: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
+    }
+    return { count: keys.length, message: keys.length ? `ผูกของเหลือ ${keys.length} รายการกับเมนูแล้ว` : 'เลิกผูกของเหลือของเมนูนี้แล้ว' };
+  });
+}
+
+/**
+ * สร้างไอเทมของเหลือใหม่ใน dbo.stock_item — รหัส LO-0001, LO-0002 … (ไม่ชนรหัสตัวเลขของฝ่ายจัดซื้อ)
+ * ติ๊กสาขาครัว (KITCHEN_ITEM_BRANCH) ให้เลย → ขึ้นในวัตถุดิบคงเหลือของครัว ไม่ขึ้นในหน้านับสต๊อกของสาขาอื่น
+ * ไม่มี pos_item_id = สั่งผ่านใบเบิกสาขาไม่ได้ (ตั้งใจ — เป็นของที่ครัวผลิตเอง)
+ * ซิงก์ทะเบียนจากชีท (item-sync) ไม่ลบ/ไม่ทับรหัสที่ไม่มีในชีท จึงไม่หาย
+ */
+async function createLeftoverItem(body) {
+  const name = str(body?.name).slice(0, 255);
+  const unit = orNull(body?.unit);
+  const price = num(body?.price) > 0 ? num(body.price) : null;
+  if (!name) throw badRequest('ใส่ชื่อไอเทม');
+  if (!unit) throw badRequest('ใส่หน่วย');
+  const branch = kitchenItemBranches()[0];
+  return withTransaction(async (run) => {
+    const dup = (await run(
+      `SELECT TOP 1 item_code FROM dbo.stock_item WHERE item_name = @n AND (status IS NULL OR status <> N'ปิดการใช้งาน');`,
+      { n: { type: sql.NVarChar(255), value: name } }
+    ))?.recordset?.[0];
+    if (dup) throw badRequest(`มีไอเทมชื่อ "${name}" อยู่แล้ว (รหัส ${dup.item_code}) — เลือกไอเทมนั้นแทน`);
+    const last = (await run(
+      `SELECT MAX(TRY_CONVERT(INT, SUBSTRING(item_code, 4, 10))) AS n
+         FROM dbo.stock_item WITH (UPDLOCK, HOLDLOCK)
+        WHERE item_code LIKE N'LO-%';`
+    ))?.recordset?.[0]?.n;
+    const code = `LO-${String((Number(last) || 0) + 1).padStart(4, '0')}`;
+    const key = normCode(code).toLowerCase();
+    await run(
+      `INSERT INTO dbo.stock_item (item_key, item_code, item_name, unit, price, status, store_cat, plan_only, sort_order)
+       VALUES (@k, @c, @n, @u, @p, NULL, N'ของเหลือครัวกลาง', 0, 999999);
+       INSERT INTO dbo.stock_item_branch (item_key, branch) VALUES (@k, @b);`,
+      {
+        k: { type: sql.NVarChar(50), value: key },
+        c: { type: sql.NVarChar(50), value: code },
+        n: { type: sql.NVarChar(255), value: name },
+        u: { type: sql.NVarChar(50), value: unit },
+        p: { type: sql.Decimal(18, 4), value: price },
+        b: { type: sql.NVarChar(50), value: branch },
+      }
+    );
+    return {
+      item: { item_key: key, item_code: code, item_name: name, unit, price },
+      message: `สร้างไอเทม ${code} ${name} แล้ว`,
+    };
+  });
+}
+
+/**
+ * ของเหลือที่ใช้กับเมนูนี้ได้ + คงเหลือในครัวตอนนี้ (กติกาเดียวกับ getKitchenBalance) + ที่มาล่าสุด
+ * ฟอร์มผลิตใช้ขึ้นกรอบ "มีของเหลือจากครั้งก่อน" และช่องบันทึกของเหลือตอนปิดงาน
+ */
+async function getMenuLeftovers(body) {
+  const productKey = normCode(body?.productKey || body?.productCode);
+  if (!productKey) throw badRequest('ไม่ระบุเมนู');
+  if (!(await hasLeftoverTables())) return { items: [], ready: false };
+  const links = await runSql(
+    `SELECT l.item_key, COALESCE(i.item_code, l.item_key) AS item_code, COALESCE(i.item_name, l.item_key) AS item_name,
+            i.unit, i.price,
+            src.doc_no AS last_doc_no, src.receive_date AS last_date, o.doc_no AS last_order_doc_no
+       FROM dbo.kitchen_menu_leftover l
+       LEFT JOIN dbo.stock_item i ON i.item_key = l.item_key
+       OUTER APPLY (SELECT TOP 1 m.doc_no, CONVERT(NVARCHAR(10), m.receive_date, 23) AS receive_date, m.order_id
+                      FROM dbo.kitchen_material_receipt m
+                     WHERE m.item_key = l.item_key AND m.receipt_kind = N'leftover'
+                     ORDER BY m.receive_date DESC, m.receipt_id DESC) src
+       LEFT JOIN dbo.kitchen_production_order o ON o.order_id = src.order_id
+      WHERE l.product_key = @p
+      ORDER BY l.sort_order, i.item_name;`,
+    { p: { type: sql.NVarChar(50), value: productKey } }
+  );
+  if (links.length === 0) return { items: [], ready: true };
+  const bal = await getKitchenBalance({});
+  const byKey = new Map((bal.items || []).map((r) => [r.item_key, Number(r.balance) || 0]));
+  return { items: links.map((l) => ({ ...l, balance: byKey.get(l.item_key) ?? 0 })), ready: true };
+}
+
 export const KITCHEN_ACTIONS = {
   getKitchenItems,
   getKitchenRecipes,
@@ -2173,6 +2354,10 @@ export const KITCHEN_ACTIONS = {
   getProductionReport,
   getKitchenMenuSettings,
   setKitchenMenuHidden,
+  getLeftoverLinks,
+  saveMenuLeftovers,
+  createLeftoverItem,
+  getMenuLeftovers,
 };
 
 /** action ที่อ่านอย่างเดียว — ปลอดภัยที่จะลองใหม่เมื่อเน็ตสะดุด (ดู READ_ONLY ใน api/schedule.js) */
@@ -2192,4 +2377,6 @@ export const KITCHEN_READ_ONLY = [
   'getKitchenStockCard',
   'getProductionReport',
   'getProductionRunHistory',
+  'getLeftoverLinks',
+  'getMenuLeftovers',
 ];
