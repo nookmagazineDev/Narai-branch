@@ -119,6 +119,15 @@ async function hasRunEditTable() {
   return runEditReady;
 }
 
+/** มีตารางประวัติการเลื่อนวัน/ยกเลิกคำสั่งผลิตแล้วหรือยัง (sql/kitchen-008-order-event.sql) — จำเฉพาะตอนที่มีแล้ว */
+let orderEventReady = false;
+async function hasOrderEventTable() {
+  if (orderEventReady) return true;
+  const rows = await runSql(`SELECT OBJECT_ID(N'dbo.kitchen_production_order_event', N'U') AS id;`);
+  orderEventReady = rows?.[0]?.id !== null && rows?.[0]?.id !== undefined;
+  return orderEventReady;
+}
+
 
 /* ==========================================================================
    รายการสินค้า/วัตถุดิบ — ใช้เติมช่องเลือกของทุกหน้า
@@ -573,10 +582,26 @@ async function getProductionOrders(body) {
 
   // สูตร ณ วันผลิต (ถ้าเก็บไว้แล้ว) — ฟอร์มบันทึกผลใช้สูตรนี้แทนสูตรปัจจุบันของ QC/RD
   const snapCols = (await hasRecipeSnapshot()) ? 'o.recipe_snapshot, o.recipe_snapshot_at,' : '';
+  // การเลื่อนวันล่าสุด / การยกเลิกล่าสุด — หน้าเว็บโชว์ "เลื่อนจาก …" ใต้วันที่ และเหตุผลใต้สถานะยกเลิก
+  const eventReady = await hasOrderEventTable();
+  const eventCols = eventReady
+    ? `mv.old_date AS moved_from, mv.reason AS move_reason, mv.created_at AS moved_at,
+            cx.reason AS cancel_reason, cx.created_at AS cancelled_at, cx.recorder AS cancelled_by,`
+    : '';
+  const eventJoins = eventReady
+    ? `OUTER APPLY (SELECT TOP 1 CONVERT(NVARCHAR(10), e.old_date, 23) AS old_date, e.reason, e.created_at
+                        FROM dbo.kitchen_production_order_event e
+                       WHERE e.order_id = o.order_id AND e.action = N'move'
+                       ORDER BY e.created_at DESC, e.event_id DESC) mv
+       OUTER APPLY (SELECT TOP 1 e.reason, e.created_at, e.recorder
+                        FROM dbo.kitchen_production_order_event e
+                       WHERE e.order_id = o.order_id AND e.action = N'cancel'
+                       ORDER BY e.created_at DESC, e.event_id DESC) cx`
+    : '';
   const rows = await runSql(
     `SELECT o.order_id, o.doc_no, o.produce_date, o.product_key, o.product_code, o.product_name,
             o.order_qty, o.produced_qty, o.unit, o.status, o.source, o.plan_id,
-            o.note, o.recorder, o.created_at, o.updated_at, ${snapCols}
+            o.note, o.recorder, o.created_at, o.updated_at, ${snapCols} ${eventCols}
             CASE WHEN r.recipe_id IS NULL THEN 0 ELSE 1 END AS has_recipe,
             c.issue_count, c.no_price_count, c.material_cost
        FROM dbo.kitchen_production_order o
@@ -590,6 +615,7 @@ async function getProductionOrders(body) {
            FROM dbo.kitchen_material_issue mi
           WHERE mi.order_id = o.order_id
        ) c
+       ${eventJoins}
       WHERE o.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
         AND (@status IS NULL OR o.status = @status)
       ORDER BY o.produce_date DESC, o.doc_no;`,
@@ -719,25 +745,128 @@ async function saveOrderRecipeSnapshot(body) {
     : { saved: false, message: 'คำสั่งนี้เก็บสูตรไว้แล้ว (หรือไม่พบคำสั่ง) — ไม่ทับของเดิม' };
 }
 
-async function updateProductionOrderStatus(body) {
+/**
+ * เปลี่ยนสถานะคำสั่งผลิต — reason (ไม่บังคับฝั่งนี้ หน้าเว็บบังคับตอนยกเลิก) เก็บลงประวัติ
+ * มีตาราง kitchen_production_order_event = เก็บทุกครั้งที่สถานะเปลี่ยนจริง ('cancel' เมื่อเป็นยกเลิก ที่เหลือ 'status')
+ */
+async function updateProductionOrderStatus(body, session) {
   const orderId = Number(body?.orderId);
   const status = str(body?.status);
   const allowed = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
   if (!Number.isFinite(orderId)) throw badRequest('ไม่ระบุคำสั่งผลิต');
   if (!allowed.includes(status)) throw badRequest(`สถานะต้องเป็นหนึ่งใน: ${allowed.join(', ')}`);
+  const logEvent = await hasOrderEventTable();
+  const recorder = recorderOf(body, session);
 
-  const updated = await runSql(
-    `UPDATE dbo.kitchen_production_order
-        SET status = @status, updated_at = SYSDATETIME()
-      OUTPUT inserted.doc_no
-      WHERE order_id = @order_id;`,
-    {
-      order_id: { type: sql.BigInt, value: orderId },
-      status: { type: sql.NVarChar(50), value: status },
+  return withTransaction(async (run) => {
+    const updated = await run(
+      `UPDATE dbo.kitchen_production_order
+          SET status = @status, updated_at = SYSDATETIME()
+        OUTPUT inserted.doc_no, deleted.status AS old_status
+        WHERE order_id = @order_id;`,
+      {
+        order_id: { type: sql.BigInt, value: orderId },
+        status: { type: sql.NVarChar(50), value: status },
+      }
+    );
+    const row = updated?.recordset?.[0];
+    if (!row) throw badRequest('ไม่พบคำสั่งผลิตที่ต้องการแก้สถานะ');
+    if (logEvent && row.old_status !== status) {
+      await run(
+        `INSERT INTO dbo.kitchen_production_order_event (order_id, action, old_status, new_status, reason, recorder)
+         VALUES (@order_id, @action, @old_status, @new_status, @reason, @recorder);`,
+        {
+          order_id: { type: sql.BigInt, value: orderId },
+          action: { type: sql.NVarChar(10), value: status === 'ยกเลิก' ? 'cancel' : 'status' },
+          old_status: { type: sql.NVarChar(50), value: row.old_status },
+          new_status: { type: sql.NVarChar(50), value: status },
+          reason: { type: sql.NVarChar(500), value: orNull(body?.reason) && str(body.reason).slice(0, 500) },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
     }
-  );
-  if (updated.length === 0) throw badRequest('ไม่พบคำสั่งผลิตที่ต้องการแก้สถานะ');
-  return { message: `เปลี่ยนสถานะ ${updated[0].doc_no} เป็น "${status}" แล้ว` };
+    return { message: `เปลี่ยนสถานะ ${row.doc_no} เป็น "${status}" แล้ว` };
+  });
+}
+
+/**
+ * เลื่อนวันผลิตของคำสั่ง (เช่น วัตถุดิบไม่ครบ) — เลขที่ใบไม่เปลี่ยน · ใบเบิกที่เบิกไปแล้วไม่เปลี่ยน
+ * movePlan = ย้ายแผนในปฏิทินแพลนผลิต (plan_day_id ที่ผูกไว้) ไปวันใหม่ด้วย ไม่งั้นปฏิทินยังโชว์งานที่วันเดิม
+ * ต้องมีตาราง kitchen_production_order_event — เลื่อนวันแล้วต้องตามรอยได้ว่าเดิมวันไหน เพราะอะไร
+ */
+async function rescheduleProductionOrder(body, session) {
+  const orderId = Number(body?.orderId);
+  const produceDate = ymd(body?.produceDate);
+  if (!Number.isFinite(orderId) || orderId <= 0) throw badRequest('ไม่ระบุคำสั่งผลิต');
+  if (!produceDate) throw badRequest('ระบุวันผลิตใหม่ (YYYY-MM-DD)');
+  if (!(await hasOrderEventTable())) {
+    throw badRequest('ยังไม่มีตารางเก็บประวัติการเลื่อนวัน — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
+  }
+  const movePlan = body?.movePlan !== false;
+  const recorder = recorderOf(body, session);
+
+  try {
+    return await withTransaction(async (run) => {
+      const found = await run(
+        `SELECT order_id, doc_no, status, plan_day_id, CONVERT(NVARCHAR(10), produce_date, 23) AS produce_date
+           FROM dbo.kitchen_production_order WITH (UPDLOCK, ROWLOCK)
+          WHERE order_id = @order_id;`,
+        { order_id: { type: sql.BigInt, value: orderId } }
+      );
+      const o = found?.recordset?.[0];
+      if (!o) throw badRequest('ไม่พบคำสั่งผลิต');
+      if (o.status === 'ผลิตเสร็จ' || o.status === 'ยกเลิก') {
+        throw badRequest(`คำสั่ง ${o.doc_no} ${o.status}แล้ว เลื่อนวันไม่ได้`);
+      }
+      if (o.produce_date === produceDate) return { changed: false, message: 'วันผลิตเท่าเดิม ไม่ได้เลื่อน' };
+
+      const params = {
+        order_id: { type: sql.BigInt, value: orderId },
+        new_date: { type: sql.NVarChar(10), value: produceDate },
+      };
+      await run(
+        `UPDATE dbo.kitchen_production_order
+            SET produce_date = CONVERT(DATE, @new_date, 23), updated_at = SYSDATETIME()
+          WHERE order_id = @order_id;`,
+        params
+      );
+      let planMoved = false;
+      if (movePlan && o.plan_day_id) {
+        const moved = await run(
+          `UPDATE dbo.kitchen_production_plan_day
+              SET plan_date = CONVERT(DATE, @new_date, 23), updated_at = SYSDATETIME()
+            WHERE plan_day_id = @plan_day_id;`,
+          { ...params, plan_day_id: { type: sql.Int, value: o.plan_day_id } }
+        );
+        planMoved = (moved?.rowsAffected?.[0] || 0) > 0;
+      }
+      await run(
+        `INSERT INTO dbo.kitchen_production_order_event
+           (order_id, action, old_date, new_date, old_status, new_status, plan_moved, reason, recorder)
+         VALUES (@order_id, N'move', CONVERT(DATE, @old_date, 23), CONVERT(DATE, @new_date, 23),
+                 @status, @status, @plan_moved, @reason, @recorder);`,
+        {
+          ...params,
+          old_date: { type: sql.NVarChar(10), value: o.produce_date },
+          status: { type: sql.NVarChar(50), value: o.status },
+          plan_moved: { type: sql.Bit, value: planMoved },
+          reason: { type: sql.NVarChar(500), value: orNull(body?.reason) && str(body.reason).slice(0, 500) },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
+      return {
+        changed: true,
+        planMoved,
+        message: `เลื่อน ${o.doc_no} จาก ${o.produce_date} ไป ${produceDate} แล้ว${planMoved ? ' (ย้ายแผนในปฏิทินด้วย)' : ''}`,
+      };
+    });
+  } catch (err) {
+    // UX_kitchen_order_day_auto: คำสั่งจากยอดสาขามีได้ใบเดียวต่อสินค้าต่อวัน
+    if (err?.number === 2601 || err?.number === 2627) {
+      throw badRequest('วันนั้นมีคำสั่งผลิตจากยอดสาขาของสินค้านี้อยู่แล้ว — แก้จำนวนที่ใบนั้นแทน หรือเลือกวันอื่น');
+    }
+    throw err;
+  }
 }
 
 /**
@@ -2007,6 +2136,7 @@ export const KITCHEN_ACTIONS = {
   saveProductionOrder,
   saveOrderRecipeSnapshot,
   updateProductionOrderStatus,
+  rescheduleProductionOrder,
   getBranchDemand,
   createOrdersFromDemand,
   createOrdersFromPlan,

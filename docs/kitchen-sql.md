@@ -55,6 +55,7 @@
 | `kitchen_production_plan` | แผนประจำรอบ (รายวัน/รายสัปดาห์) — เลิกใช้จากหน้าเว็บแล้ว ข้อมูลเดิมยังอยู่ |
 | `kitchen_production_order` | คำสั่งผลิต — `recipe_snapshot` สูตร QC/RD ณ วันผลิต (JSON เก็บครั้งเดียวด้วย `saveOrderRecipeSnapshot` เพิ่มด้วย `office-server/sql/kitchen-006-order-recipe-snapshot.sql`) · รายงานการผลิตคิด "ตามสูตร" จากตัวนี้ แก้สูตรทีหลังตัวเลขย้อนหลังไม่ขยับ |
 | `kitchen_production_run` | บันทึกการผลิตจริง ทีละครั้ง |
+| `kitchen_production_order_event` | ประวัติคำสั่งผลิต: เลื่อนวันผลิต (`move` วันเดิม → ใหม่ · ย้ายแผนในปฏิทินด้วยไหม) / ยกเลิก (`cancel` + เหตุผล) / เปลี่ยนสถานะ (`status`) — `rescheduleProductionOrder` / `updateProductionOrderStatus` เขียน · `getProductionOrders` ส่ง `moved_from`/`move_reason`/`cancel_reason` (สร้างด้วย `office-server/sql/kitchen-008-order-event.sql`) |
 | `kitchen_production_run_edit` | ประวัติการแก้/ลบบันทึกการผลิต (ยอดผลิตได้/ของเสีย ก่อน-หลัง ผู้แก้ เหตุผล) — `updateProductionRun` / `deleteProductionRun` เขียน · `getProductionRunHistory` อ่าน (สร้างด้วย `office-server/sql/kitchen-007-production-run-edit.sql`) |
 | `kitchen_material_issue` | ใบเบิกวัตถุดิบออกไปใช้ผลิต — `unit_price` ราคา ณ ตอนเบิก (เติมจาก `stock_item.price` ใน `saveMaterialIssue`) และ `loss_qty` ส่วนที่เป็นของสูญเสีย (เพิ่มด้วย `office-server/sql/kitchen-003-issue-cost.sql`) · `getProductionReport` คิดต้นทุนการผลิตจากสองคอลัมน์นี้ |
 | `kitchen_material_receipt` | ใบรับวัตถุดิบเข้าครัว |
