@@ -2288,6 +2288,53 @@ async function createLeftoverItem(body) {
 }
 
 /**
+ * แก้ชื่อ / หน่วย (/ ราคา) ของไอเทมของเหลือ — เฉพาะรหัส LO- ที่สร้างจากหน้าเมนูครัวกลาง
+ * วัตถุดิบอื่นในทะเบียนเป็นของฝ่ายจัดซื้อ/QC/RD แก้จากที่นี่ไม่ได้
+ * ใบรับเข้า/ใบเบิกเก่าเก็บชื่อ ณ ตอนบันทึกไว้แล้ว ไม่เปลี่ยนตาม (เหมือนวัตถุดิบอื่น)
+ */
+async function updateLeftoverItem(body) {
+  const key = normCode(body?.itemKey || body?.itemCode);
+  const name = str(body?.name).slice(0, 255);
+  const unit = orNull(body?.unit);
+  const hasPrice = body?.price !== undefined && body?.price !== null && str(body.price) !== '';
+  const price = hasPrice && num(body.price) > 0 ? num(body.price) : null;
+  if (!key) throw badRequest('ไม่ระบุไอเทม');
+  if (!name) throw badRequest('ใส่ชื่อไอเทม');
+  if (!unit) throw badRequest('ใส่หน่วย');
+  return withTransaction(async (run) => {
+    const it = (await run(
+      `SELECT item_key, item_code, item_name, unit FROM dbo.stock_item WITH (UPDLOCK) WHERE item_key = @k;`,
+      { k: { type: sql.NVarChar(50), value: key } }
+    ))?.recordset?.[0];
+    if (!it) throw badRequest('ไม่พบไอเทมในทะเบียนสินค้า');
+    if (!/^LO-/i.test(str(it.item_code))) {
+      throw badRequest(`${it.item_code} ไม่ใช่ไอเทมของเหลือ (รหัส LO-) — แก้ที่ QC/RD > วัตถุดิบ`);
+    }
+    const dup = (await run(
+      `SELECT TOP 1 item_code FROM dbo.stock_item
+        WHERE item_name = @n AND item_key <> @k AND (status IS NULL OR status <> N'ปิดการใช้งาน');`,
+      { n: { type: sql.NVarChar(255), value: name }, k: { type: sql.NVarChar(50), value: key } }
+    ))?.recordset?.[0];
+    if (dup) throw badRequest(`มีไอเทมชื่อ "${name}" อยู่แล้ว (รหัส ${dup.item_code})`);
+    await run(
+      `UPDATE dbo.stock_item
+          SET item_name = @n, unit = @u, ${hasPrice ? 'price = @p,' : ''} updated_at = SYSDATETIME()
+        WHERE item_key = @k;`,
+      {
+        k: { type: sql.NVarChar(50), value: key },
+        n: { type: sql.NVarChar(255), value: name },
+        u: { type: sql.NVarChar(50), value: unit },
+        ...(hasPrice ? { p: { type: sql.Decimal(18, 4), value: price } } : {}),
+      }
+    );
+    return {
+      item: { item_key: it.item_key, item_code: it.item_code, item_name: name, unit, ...(hasPrice ? { price } : {}) },
+      message: `แก้ไอเทม ${it.item_code} แล้ว`,
+    };
+  });
+}
+
+/**
  * ของเหลือที่ใช้กับเมนูนี้ได้ + คงเหลือในครัวตอนนี้ (กติกาเดียวกับ getKitchenBalance) + ที่มาล่าสุด
  * ฟอร์มผลิตใช้ขึ้นกรอบ "มีของเหลือจากครั้งก่อน" และช่องบันทึกของเหลือตอนปิดงาน
  */
@@ -2357,6 +2404,7 @@ export const KITCHEN_ACTIONS = {
   getLeftoverLinks,
   saveMenuLeftovers,
   createLeftoverItem,
+  updateLeftoverItem,
   getMenuLeftovers,
 };
 
