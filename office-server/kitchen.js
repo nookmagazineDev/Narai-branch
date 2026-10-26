@@ -119,6 +119,43 @@ async function hasRunEditTable() {
   return runEditReady;
 }
 
+/** มีคอลัมน์วันที่ผลิตเสร็จ (sql/kitchen-012-finish-date.sql) แล้วหรือยัง — ทั้งรอบผลิตและคำสั่ง */
+let finishDateReady = false;
+async function hasFinishDate() {
+  if (finishDateReady) return true;
+  const rows = await runSql(
+    `SELECT COL_LENGTH(N'dbo.kitchen_production_run', N'finish_date') AS r,
+            COL_LENGTH(N'dbo.kitchen_production_order', N'finish_date') AS o,
+            COL_LENGTH(N'dbo.kitchen_production_run_edit', N'old_finish_date') AS e;`
+  );
+  const c = rows?.[0] || {};
+  finishDateReady = c.r != null && c.o != null && c.e != null;
+  return finishDateReady;
+}
+/** วันที่ที่ยอดผลิตเข้าสต๊อก/รายงาน = วันที่เสร็จจริง (ข้อมูลก่อน kitchen-012 ใช้วันผลิต) */
+const runDateSql = async (alias = 'p') => ((await hasFinishDate())
+  ? `COALESCE(${alias}.finish_date, ${alias}.produce_date)` : `${alias}.produce_date`);
+
+/**
+ * วันที่ผลิตเสร็จของคำสั่งให้ตรงกับสถานะ — "ผลิตเสร็จ" = ตั้ง (force = ทับค่าเดิม · ไม่งั้นคงค่าเดิมไว้) · สถานะอื่น = NULL
+ * เรียกหลังทุกจุดที่สถานะเปลี่ยนได้ (บันทึก/แก้/ลบยอดผลิต · เปลี่ยนสถานะ)
+ */
+async function syncOrderFinish(run, orderId, finishDate, force = false) {
+  if (!(await hasFinishDate())) return;
+  await run(
+    `UPDATE dbo.kitchen_production_order
+        SET finish_date = CASE WHEN status <> N'ผลิตเสร็จ' THEN NULL
+                               WHEN @force = 1 OR finish_date IS NULL THEN CONVERT(DATE, @d, 23)
+                               ELSE finish_date END
+      WHERE order_id = @order_id;`,
+    {
+      order_id: { type: sql.BigInt, value: orderId },
+      d: { type: sql.NVarChar(10), value: finishDate || bangkokNow().date },
+      force: { type: sql.Bit, value: force ? 1 : 0 },
+    }
+  );
+}
+
 /** มีตารางประวัติการเลื่อนวัน/ยกเลิกคำสั่งผลิตแล้วหรือยัง (sql/kitchen-008-order-event.sql) — จำเฉพาะตอนที่มีแล้ว */
 let orderEventReady = false;
 async function hasOrderEventTable() {
@@ -634,6 +671,7 @@ async function getProductionOrders(body) {
 
   // สูตร ณ วันผลิต (ถ้าเก็บไว้แล้ว) — ฟอร์มบันทึกผลใช้สูตรนี้แทนสูตรปัจจุบันของ QC/RD
   const snapCols = (await hasRecipeSnapshot()) ? 'o.recipe_snapshot, o.recipe_snapshot_at,' : '';
+  const finishCols = (await hasFinishDate()) ? 'CONVERT(NVARCHAR(10), o.finish_date, 23) AS finish_date,' : '';
   // การเลื่อนวันล่าสุด / การยกเลิกล่าสุด — หน้าเว็บโชว์ "เลื่อนจาก …" ใต้วันที่ และเหตุผลใต้สถานะยกเลิก
   const eventReady = await hasOrderEventTable();
   const eventCols = eventReady
@@ -653,7 +691,7 @@ async function getProductionOrders(body) {
   const rows = await runSql(
     `SELECT o.order_id, o.doc_no, o.produce_date, o.product_key, o.product_code, o.product_name,
             o.order_qty, o.produced_qty, o.unit, o.status, o.source, o.plan_id,
-            o.note, o.recorder, o.created_at, o.updated_at, ${snapCols} ${eventCols}
+            o.note, o.recorder, o.created_at, o.updated_at, ${snapCols} ${finishCols} ${eventCols}
             CASE WHEN r.recipe_id IS NULL THEN 0 ELSE 1 END AS has_recipe,
             c.issue_count, c.no_price_count, c.material_cost
        FROM dbo.kitchen_production_order o
@@ -826,6 +864,9 @@ async function updateProductionOrderStatus(body, session) {
     );
     const row = updated?.recordset?.[0];
     if (!row) throw badRequest('ไม่พบคำสั่งผลิตที่ต้องการแก้สถานะ');
+    // ปิดงาน: วันที่เสร็จที่กรอกมา (ไม่กรอก = วันนี้ ถ้ายังไม่มี) · เปลี่ยนเป็นสถานะอื่น = ล้างวันที่เสร็จ
+    const finishDate = ymd(body?.finishDate);
+    await syncOrderFinish(run, orderId, finishDate, Boolean(finishDate));
     if (logEvent && row.old_status !== status) {
       await run(
         `INSERT INTO dbo.kitchen_production_order_event (order_id, action, old_status, new_status, reason, recorder)
@@ -1397,6 +1438,8 @@ async function getKitchenBalance(body) {
   const branch = str(body?.branch) || kitchenBranch();
   const asOf = ymd(body?.asOf);
 
+  // ยอดผลิตเข้าสต๊อกครัววันที่ผลิตเสร็จ (ไม่ใช่วันผลิตตามคำสั่ง)
+  const pDate = await runDateSql('p');
   const rows = await runSql(
     `WITH last_count AS (
         SELECT c.item_key, c.remaining, CAST(c.counted_at AS DATE) AS count_date,
@@ -1464,8 +1507,8 @@ async function getKitchenBalance(body) {
        OUTER APPLY (
          SELECT SUM(p.qty_produced) AS qty FROM dbo.kitchen_production_run p
           WHERE p.product_key = s.item_key
-            AND p.produce_date > COALESCE(lc.count_date, '19000101')
-            AND (@as_of IS NULL OR p.produce_date <= CONVERT(DATE, @as_of, 23))
+            AND ${pDate} > COALESCE(lc.count_date, '19000101')
+            AND (@as_of IS NULL OR ${pDate} <= CONVERT(DATE, @as_of, 23))
        ) pr
       -- ไม่มีในทะเบียนสินค้าและไม่เคยนับที่ครัว (เช่นรหัสเมนูในสูตรเก่า) = ไม่ใช่วัตถุดิบที่แสดงได้ ตัดออกเหมือนเดิม
       WHERE i.item_key IS NOT NULL OR kc.item_key IS NOT NULL
@@ -1494,6 +1537,7 @@ async function getKitchenStockCard(body) {
   if (!itemKey) throw badRequest('ไม่ระบุวัตถุดิบ');
   if (!from || !to || from > to) throw badRequest('ช่วงวันที่ไม่ถูกต้อง');
   const branch = kitchenBranch();
+  const pDate = await runDateSql('p'); // ยอดผลิตลงการ์ดวันที่ผลิตเสร็จ
   const params = {
     item_key: { type: sql.NVarChar(50), value: itemKey },
     branch: { type: sql.NVarChar(50), value: branch },
@@ -1523,8 +1567,8 @@ async function getKitchenStockCard(body) {
                          WHERE m.item_key = @item_key AND m.issue_date <= @open
                            AND m.issue_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0)
             + COALESCE((SELECT SUM(p.qty_produced) FROM dbo.kitchen_production_run p
-                         WHERE p.product_key = @item_key AND p.produce_date <= @open
-                           AND p.produce_date > COALESCE((SELECT count_date FROM lc), '19000101')), 0) AS balance;`,
+                         WHERE p.product_key = @item_key AND ${pDate} <= @open
+                           AND ${pDate} > COALESCE((SELECT count_date FROM lc), '19000101')), 0) AS balance;`,
     params
   );
 
@@ -1552,11 +1596,11 @@ async function getKitchenStockCard(body) {
        LEFT JOIN dbo.kitchen_production_order o ON o.order_id = m.order_id
       WHERE m.item_key = @item_key AND ${range('m.issue_date')}
      UNION ALL
-     SELECT 'produce', CONVERT(NVARCHAR(10), p.produce_date, 23), CONVERT(NVARCHAR(19), p.recorded_at, 120),
+     SELECT 'produce', CONVERT(NVARCHAR(10), ${pDate}, 23), CONVERT(NVARCHAR(19), p.recorded_at, 120),
             COALESCE(o.doc_no, N''), N'', p.qty_produced, p.qty_waste
        FROM dbo.kitchen_production_run p
        LEFT JOIN dbo.kitchen_production_order o ON o.order_id = p.order_id
-      WHERE p.product_key = @item_key AND ${range('p.produce_date')}
+      WHERE p.product_key = @item_key AND ${range(pDate)}
      ORDER BY date, at;`,
     params
   );
@@ -1806,6 +1850,9 @@ async function saveProductionRun(body, session) {
 
   const recorder = recorderOf(body, session);
   const produceDate = ymd(body?.produceDate) || bangkokNow().date;
+  // วันที่ผลิตเสร็จจริงของรอบนี้ (หน้าเว็บตั้งต้นเป็นวันนี้ เลือกใหม่ได้) — ยอดเข้าสต๊อก/รายงานตามวันนี้
+  const finishDate = ymd(body?.finishDate) || bangkokNow().date;
+  const finishCol = await hasFinishDate();
   // ของเหลือจากการผลิตรอบนี้ (เช่น เศษลูกชิ้น) — เข้าสต๊อกครัวเป็นใบรับเข้าใน transaction เดียวกัน
   const leftovers = (Array.isArray(body?.leftovers) ? body.leftovers : [])
     .map((l) => ({ key: normCode(l?.itemKey || l?.itemCode), qty: num(l?.qty) }))
@@ -1841,10 +1888,12 @@ async function saveProductionRun(body, session) {
     await run(
       `INSERT INTO dbo.kitchen_production_run
          (order_id, produce_date, product_key, product_code, product_name,
-          qty_produced, qty_waste, unit, note, recorder, recorded_at)
+          qty_produced, qty_waste, unit, note, recorder, recorded_at ${finishCol ? ', finish_date' : ''})
        VALUES (@order_id, CONVERT(DATE, @produce_date, 23), @product_key, @product_code, @product_name,
-               @qty_produced, @qty_waste, @unit, @note, @recorder, SYSDATETIME());`,
+               @qty_produced, @qty_waste, @unit, @note, @recorder, SYSDATETIME()
+               ${finishCol ? ', CONVERT(DATE, @finish_date, 23)' : ''});`,
       {
+        ...(finishCol ? { finish_date: { type: sql.NVarChar(10), value: finishDate } } : {}),
         order_id: { type: sql.BigInt, value: hasOrder ? orderId : null },
         produce_date: { type: sql.NVarChar(10), value: produceDate },
         product_key: { type: sql.NVarChar(50), value: productKey },
@@ -1874,11 +1923,14 @@ async function saveProductionRun(body, session) {
           WHERE o.order_id = @order_id;`,
         { order_id: { type: sql.BigInt, value: orderId } }
       );
+      await syncOrderFinish(run, orderId, finishDate);
     }
 
+    // ของเหลือเข้าสต๊อกวันที่ผลิตเสร็จ (หน้าเว็บรุ่นก่อนไม่ส่ง finishDate = วันผลิตเหมือนเดิม)
+    const leftoverDate = ymd(body?.finishDate) || produceDate;
     let leftoverDoc = '';
     if (leftovers.length > 0) {
-      leftoverDoc = await nextDocNo(run, 'dbo.kitchen_material_receipt', 'MR', produceDate);
+      leftoverDoc = await nextDocNo(run, 'dbo.kitchen_material_receipt', 'MR', leftoverDate);
       // ต้นทุนต่อหน่วยของการผลิตครั้งนี้ = ต้นทุนวัตถุดิบจริงของคำสั่ง (ใบเบิก × ราคาตอนเบิก) ÷ ยอดผลิตได้ทั้งคำสั่ง
       // ใช้เป็นราคาของของเหลือ (ไอเทม LO- ที่หน่วยตรงกับผลผลิต) → stock_item.price เปลี่ยนตามการผลิตล่าสุดทุกครั้ง
       const costPerUnit = hasOrder ? await orderCostPerUnit(run, orderId) : null;
@@ -1904,7 +1956,7 @@ async function saveProductionRun(body, session) {
           {
             ...(priceCol ? { unit_price: { type: sql.Decimal(18, 4), value: price } } : {}),
             doc_no: { type: sql.NVarChar(50), value: leftoverDoc },
-            d: { type: sql.NVarChar(10), value: produceDate },
+            d: { type: sql.NVarChar(10), value: leftoverDate },
             item_key: { type: sql.NVarChar(50), value: it.item_key },
             item_code: { type: sql.NVarChar(50), value: it.item_code },
             item_name: { type: sql.NVarChar(255), value: it.item_name },
@@ -1930,6 +1982,18 @@ async function saveProductionRun(body, session) {
  * คิด produced_qty ของใบสั่งใหม่หลังแก้ยอด — สถานะ "ผลิตเสร็จ" / "ยกเลิก" ที่ตั้งไว้แล้วไม่เปลี่ยน
  * (ปิดงานได้แม้ผลิตได้น้อยกว่าที่สั่ง แก้ยอดทีหลังต้องไม่เปิดงานกลับมาเอง) ที่เหลือเลื่อนตามยอดเหมือน saveProductionRun
  */
+/** แก้วันที่เสร็จของรอบผลิต — คำสั่งที่ปิดงานแล้วใช้วันเสร็จล่าสุดของรอบผลิต */
+async function syncOrderToLastRun(run, orderId) {
+  await run(
+    `UPDATE o
+        SET finish_date = CASE WHEN o.status = N'ผลิตเสร็จ' THEN COALESCE(r.last_finish, o.finish_date) ELSE NULL END
+       FROM dbo.kitchen_production_order o
+       OUTER APPLY (SELECT MAX(p.finish_date) AS last_finish FROM dbo.kitchen_production_run p WHERE p.order_id = o.order_id) r
+      WHERE o.order_id = @order_id;`,
+    { order_id: { type: sql.BigInt, value: orderId } }
+  );
+}
+
 const RECOMPUTE_ORDER_KEEP_CLOSED = `
   UPDATE o
      SET produced_qty = t.total,
@@ -1960,28 +2024,40 @@ async function updateProductionRun(body, session) {
     throw badRequest('ยังไม่มีตารางเก็บประวัติการแก้ยอด — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
   }
   const recorder = recorderOf(body, session);
+  const finishCol = await hasFinishDate();
+  const newFinish = finishCol ? ymd(body?.finishDate) : '';
 
   return withTransaction(async (run) => {
     const found = await run(
       `SELECT run_id, order_id, product_name, qty_produced, qty_waste
+              ${finishCol ? ', CONVERT(NVARCHAR(10), finish_date, 23) AS finish_date' : ''}
          FROM dbo.kitchen_production_run WITH (UPDLOCK, ROWLOCK)
         WHERE run_id = @run_id;`,
       { run_id: { type: sql.BigInt, value: runId } }
     );
     const old = found?.recordset?.[0];
     if (!old) throw badRequest('ไม่พบรายการที่ต้องการแก้');
-    if (Number(old.qty_produced) === qtyProduced && Number(old.qty_waste) === qtyWaste) {
+    const finish = newFinish || old.finish_date || null; // ไม่ส่งวันที่มา = คงวันที่เดิม
+    const dateChanged = finishCol && finish !== (old.finish_date || null);
+    if (Number(old.qty_produced) === qtyProduced && Number(old.qty_waste) === qtyWaste && !dateChanged) {
       return { changed: false, message: 'ยอดเท่าเดิม ไม่ได้แก้อะไร' };
     }
 
     await run(
       `UPDATE dbo.kitchen_production_run
           SET qty_produced = @qty_produced, qty_waste = @qty_waste
+              ${finishCol ? ', finish_date = CONVERT(DATE, @finish, 23)' : ''}
         WHERE run_id = @run_id;
        INSERT INTO dbo.kitchen_production_run_edit
-         (run_id, order_id, action, old_qty_produced, new_qty_produced, old_qty_waste, new_qty_waste, reason, recorder)
-       VALUES (@run_id, @order_id, N'edit', @old_produced, @qty_produced, @old_waste, @qty_waste, @reason, @recorder);`,
+         (run_id, order_id, action, old_qty_produced, new_qty_produced, old_qty_waste, new_qty_waste, reason, recorder
+          ${finishCol ? ', old_finish_date, new_finish_date' : ''})
+       VALUES (@run_id, @order_id, N'edit', @old_produced, @qty_produced, @old_waste, @qty_waste, @reason, @recorder
+               ${finishCol ? ', CONVERT(DATE, @old_finish, 23), CONVERT(DATE, @finish, 23)' : ''});`,
       {
+        ...(finishCol ? {
+          finish: { type: sql.NVarChar(10), value: finish },
+          old_finish: { type: sql.NVarChar(10), value: old.finish_date || null },
+        } : {}),
         run_id: { type: sql.BigInt, value: runId },
         order_id: { type: sql.BigInt, value: old.order_id ?? null },
         qty_produced: { type: sql.Decimal(18, 3), value: qtyProduced },
@@ -1994,10 +2070,13 @@ async function updateProductionRun(body, session) {
     );
     if (old.order_id) {
       await run(RECOMPUTE_ORDER_KEEP_CLOSED, { order_id: { type: sql.BigInt, value: old.order_id } });
+      if (dateChanged) await syncOrderToLastRun(run, old.order_id);
+      else await syncOrderFinish(run, old.order_id, finish);
     }
     return {
       changed: true,
-      message: `แก้ยอด ${old.product_name}: ผลิตได้ ${Number(old.qty_produced)} → ${qtyProduced} · ของเสีย ${Number(old.qty_waste)} → ${qtyWaste}`,
+      message: `แก้ยอด ${old.product_name}: ผลิตได้ ${Number(old.qty_produced)} → ${qtyProduced} · ของเสีย ${Number(old.qty_waste)} → ${qtyWaste}`
+        + (dateChanged ? ` · เสร็จวันที่ ${old.finish_date || '-'} → ${finish}` : ''),
     };
   });
 }
@@ -2010,8 +2089,10 @@ async function getProductionRunHistory(body) {
   const orderId = Number(body?.orderId);
   if (!Number.isFinite(orderId) || orderId <= 0) throw badRequest('ไม่ระบุคำสั่งผลิต');
   const params = { order_id: { type: sql.BigInt, value: orderId } };
+  const finishCol = await hasFinishDate();
   const runs = await runSql(
     `SELECT run_id, order_id, produce_date, product_name, qty_produced, qty_waste, unit, note, recorder, recorded_at
+            ${finishCol ? ', CONVERT(NVARCHAR(10), finish_date, 23) AS finish_date' : ''}
        FROM dbo.kitchen_production_run
       WHERE order_id = @order_id
       ORDER BY recorded_at, run_id;`,
@@ -2022,6 +2103,8 @@ async function getProductionRunHistory(body) {
     ? await runSql(
       `SELECT edit_id, run_id, action, old_qty_produced, new_qty_produced, old_qty_waste, new_qty_waste,
               reason, recorder, edited_at
+              ${finishCol ? `, CONVERT(NVARCHAR(10), old_finish_date, 23) AS old_finish_date,
+                 CONVERT(NVARCHAR(10), new_finish_date, 23) AS new_finish_date` : ''}
          FROM dbo.kitchen_production_run_edit
         WHERE order_id = @order_id
         ORDER BY edited_at DESC, edit_id DESC;`,
@@ -2068,7 +2151,7 @@ async function getProductionRunHistory(body) {
   }
   return {
     runs, edits, historyReady: ready, events, eventsReady,
-    leftovers, leftoverItems, leftoverReady: lReady, leftoverEditReady: leftoverEdit,
+    leftovers, leftoverItems, leftoverReady: lReady, leftoverEditReady: leftoverEdit, finishDateReady: finishCol,
   };
 }
 
@@ -2218,6 +2301,7 @@ async function deleteProductionRun(body, session) {
           WHERE o.order_id = @order_id;`,
         { order_id: { type: sql.BigInt, value: row.order_id } }
       );
+      if (await hasFinishDate()) await syncOrderToLastRun(run, row.order_id);
     }
     return { message: `ลบบันทึกการผลิต ${row.product_name} (${row.qty_produced}) แล้ว` };
   });
@@ -2242,6 +2326,11 @@ async function getProductionReport(body) {
 
   // สูตร ณ วันผลิตของคำสั่ง — หน้าเว็บคิด "ตามสูตร" จากตัวนี้ · NULL = คำสั่งรุ่นก่อนเก็บสูตร
   const snapCols = (await hasRecipeSnapshot()) ? 'o.recipe_snapshot,' : '';
+  // dateBasis: 'finish' = กรองตามวันที่ผลิตเสร็จ (ตั้งต้นของหน้ารายงาน) · อื่น ๆ = วันผลิตตามคำสั่ง
+  const finishCol = await hasFinishDate();
+  const byFinish = body?.dateBasis === 'finish';
+  const dateCol = byFinish ? await runDateSql('p') : 'p.produce_date';
+  const finishSel = finishCol ? 'CONVERT(NVARCHAR(10), COALESCE(p.finish_date, p.produce_date), 23) AS finish_date,' : '';
 
   const params = {
     from: { type: sql.NVarChar(10), value: from },
@@ -2251,6 +2340,7 @@ async function getProductionReport(body) {
   // ใช้ร่วมกันทั้งรายการดิบและยอดรวม ให้สองตารางคิดต้นทุนแบบเดียวกันเสมอ
   const costedRuns = `
     SELECT p.run_id, p.order_id, o.doc_no AS order_doc_no, o.order_qty, ${snapCols}
+           o.created_at AS ordered_at, ${finishSel} ${dateCol} AS report_date,
            p.produce_date, p.product_key, p.product_code, p.product_name,
            p.qty_produced, p.qty_waste, p.unit, p.note, p.recorder, p.recorded_at,
            c.issue_lines, c.no_price_count,
@@ -2271,11 +2361,11 @@ async function getProductionReport(body) {
           FROM dbo.kitchen_production_run r
          WHERE r.order_id = p.order_id
       ) t
-     WHERE p.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)`;
+     WHERE ${dateCol} BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)`;
 
   const runs = await runSql(
     `${costedRuns}
-      ORDER BY p.produce_date DESC, p.recorded_at DESC;`,
+      ORDER BY ${dateCol} DESC, p.recorded_at DESC;`,
     params
   );
 
@@ -2299,7 +2389,7 @@ async function getProductionReport(body) {
     params
   );
 
-  return { dateFrom: from, dateTo: to, runs, summary };
+  return { dateFrom: from, dateTo: to, dateBasis: byFinish ? 'finish' : 'produce', finishDateReady: finishCol, runs, summary };
 }
 
 
