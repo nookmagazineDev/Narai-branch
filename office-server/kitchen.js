@@ -491,10 +491,13 @@ async function getDatedPlans(body) {
          LEFT JOIN dbo.kitchen_production_order o
            ON o.plan_day_id = d.plan_day_id
         WHERE d.plan_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
+           -- carryActive: แผนก่อนช่วงที่คำสั่งยัง "กำลังผลิต" — ปฏิทินแสดงซ้ำทุกวันจนถึงวันนี้ (ค้างจาก …)
+           OR (@carry = 1 AND d.plan_date < CONVERT(DATE, @from, 23) AND o.status = N'กำลังผลิต')
         ORDER BY d.plan_date, d.product_code, d.plan_day_id;`,
       {
         from: { type: sql.NVarChar(10), value: from },
         to: { type: sql.NVarChar(10), value: to },
+        carry: { type: sql.Bit, value: body?.carryActive ? 1 : 0 },
       }
     );
     return { plans: rows };
@@ -665,13 +668,16 @@ async function getProductionOrders(body) {
           WHERE mi.order_id = o.order_id
        ) c
        ${eventJoins}
-      WHERE o.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
+      WHERE (o.produce_date BETWEEN CONVERT(DATE, @from, 23) AND CONVERT(DATE, @to, 23)
+             -- includeActive: งานที่ยังไม่เสร็จ (รอผลิต/กำลังผลิต) ขึ้นเสมอ แม้วันผลิตอยู่นอกช่วง — หน้าสถานะการผลิต
+             OR (@active = 1 AND o.status IN (N'รอผลิต', N'กำลังผลิต')))
         AND (@status IS NULL OR o.status = @status)
       ORDER BY o.produce_date DESC, o.doc_no;`,
     {
       from: { type: sql.NVarChar(10), value: from },
       to: { type: sql.NVarChar(10), value: to },
       status: { type: sql.NVarChar(50), value: orNull(body?.status) },
+      active: { type: sql.Bit, value: body?.includeActive ? 1 : 0 },
     }
   );
   return { orders: rows };
