@@ -140,6 +140,14 @@ async function hasLeftoverTables() {
   leftoverReady = r.t !== null && r.t !== undefined && r.c !== null && r.c !== undefined;
   return leftoverReady;
 }
+/** มีคอลัมน์ต้นทุนของของเหลือ (kitchen_material_receipt.unit_price · sql/kitchen-010) แล้วหรือยัง */
+let receiptPriceReady = false;
+async function hasReceiptPrice() {
+  if (receiptPriceReady) return true;
+  const rows = await runSql(`SELECT COL_LENGTH(N'dbo.kitchen_material_receipt', N'unit_price') AS c;`);
+  receiptPriceReady = rows?.[0]?.c !== null && rows?.[0]?.c !== undefined;
+  return receiptPriceReady;
+}
 const leftoverMissing = () => badRequest('ยังไม่มีตารางของเหลือจากการผลิต — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
 
 
@@ -1770,6 +1778,7 @@ async function saveProductionRun(body, session) {
     .map((l) => ({ key: normCode(l?.itemKey || l?.itemCode), qty: num(l?.qty) }))
     .filter((l) => l.key && l.qty > 0);
   if (leftovers.length > 0 && !(await hasLeftoverTables())) throw leftoverMissing();
+  const priceCol = leftovers.length > 0 && (await hasReceiptPrice());
 
   return withTransaction(async (run) => {
     let orderDocNo = '';
@@ -1837,6 +1846,19 @@ async function saveProductionRun(body, session) {
     let leftoverDoc = '';
     if (leftovers.length > 0) {
       leftoverDoc = await nextDocNo(run, 'dbo.kitchen_material_receipt', 'MR', produceDate);
+      // ต้นทุนต่อหน่วยของการผลิตครั้งนี้ = ต้นทุนวัตถุดิบจริงของคำสั่ง (ใบเบิก × ราคาตอนเบิก) ÷ ยอดผลิตได้ทั้งคำสั่ง
+      // ใช้เป็นราคาของของเหลือ (ไอเทม LO- ที่หน่วยตรงกับผลผลิต) → stock_item.price เปลี่ยนตามการผลิตล่าสุดทุกครั้ง
+      let costPerUnit = null;
+      if (hasOrder) {
+        const c = (await run(
+          `SELECT (SELECT SUM(mi.qty * mi.unit_price) FROM dbo.kitchen_material_issue mi
+                    WHERE mi.order_id = @order_id AND mi.unit_price IS NOT NULL) AS cost,
+                  (SELECT SUM(p.qty_produced) FROM dbo.kitchen_production_run p WHERE p.order_id = @order_id) AS produced;`,
+          { order_id: { type: sql.BigInt, value: orderId } }
+        ))?.recordset?.[0];
+        if (Number(c?.cost) > 0 && Number(c?.produced) > 0) costPerUnit = Number(c.cost) / Number(c.produced);
+      }
+      const sameUnit = (a, b) => str(a).replace(/\s+/g, '') === str(b).replace(/\s+/g, '');
       const merged = new Map();
       for (const l of leftovers) merged.set(l.key, (merged.get(l.key) || 0) + l.qty);
       for (const [key, qty] of merged) {
@@ -1845,12 +1867,21 @@ async function saveProductionRun(body, session) {
           { k: { type: sql.NVarChar(50), value: key } }
         ))?.recordset?.[0];
         if (!it) throw badRequest(`ไม่พบไอเทมของเหลือรหัส ${key} ในทะเบียนสินค้า`);
+        // เฉพาะไอเทม LO- (ของเหลือที่ครัวสร้างเอง) — วัตถุดิบของฝ่ายจัดซื้อที่ผูกเป็นของเหลือไม่ถูกแก้ราคา
+        const price = costPerUnit !== null && /^LO-/i.test(str(it.item_code)) && sameUnit(it.unit, unit)
+          ? Math.round(costPerUnit * 10000) / 10000 : null;
+        if (price !== null) {
+          await run(`UPDATE dbo.stock_item SET price = @p, updated_at = SYSDATETIME() WHERE item_key = @k;`,
+            { p: { type: sql.Decimal(18, 4), value: price }, k: { type: sql.NVarChar(50), value: it.item_key } });
+        }
         await run(
           `INSERT INTO dbo.kitchen_material_receipt
-             (doc_no, receive_date, item_key, item_code, item_name, qty, unit, source_name, note, recorder, order_id, receipt_kind)
+             (doc_no, receive_date, item_key, item_code, item_name, qty, unit, source_name, note, recorder, order_id, receipt_kind
+              ${priceCol ? ', unit_price' : ''})
            VALUES (@doc_no, CONVERT(DATE, @d, 23), @item_key, @item_code, @item_name, @qty, @unit,
-                   @source_name, NULL, @recorder, @order_id, N'leftover');`,
+                   @source_name, NULL, @recorder, @order_id, N'leftover' ${priceCol ? ', @unit_price' : ''});`,
           {
+            ...(priceCol ? { unit_price: { type: sql.Decimal(18, 4), value: price } } : {}),
             doc_no: { type: sql.NVarChar(50), value: leftoverDoc },
             d: { type: sql.NVarChar(10), value: produceDate },
             item_key: { type: sql.NVarChar(50), value: it.item_key },
@@ -2245,12 +2276,14 @@ async function saveMenuLeftovers(body, session) {
  * สร้างไอเทมของเหลือใหม่ใน dbo.stock_item — รหัส LO-0001, LO-0002 … (ไม่ชนรหัสตัวเลขของฝ่ายจัดซื้อ)
  * ติ๊กสาขาครัว (KITCHEN_ITEM_BRANCH) ให้เลย → ขึ้นในวัตถุดิบคงเหลือของครัว ไม่ขึ้นในหน้านับสต๊อกของสาขาอื่น
  * ไม่มี pos_item_id = สั่งผ่านใบเบิกสาขาไม่ได้ (ตั้งใจ — เป็นของที่ครัวผลิตเอง)
+ * ราคา (stock_item.price) เริ่มว่าง แล้วเปลี่ยนเป็นต้นทุนต่อหน่วยของการผลิตล่าสุดทุกครั้งที่บันทึกของเหลือ
  * ซิงก์ทะเบียนจากชีท (item-sync) ไม่ลบ/ไม่ทับรหัสที่ไม่มีในชีท จึงไม่หาย
  */
 async function createLeftoverItem(body) {
   const name = str(body?.name).slice(0, 255);
   const unit = orNull(body?.unit);
-  const price = num(body?.price) > 0 ? num(body.price) : null;
+  // ราคาไม่รับจากหน้าเว็บ — ตั้งเองจากต้นทุนการผลิตทุกครั้งที่บันทึกของเหลือ (saveProductionRun)
+  const price = null;
   if (!name) throw badRequest('ใส่ชื่อไอเทม');
   if (!unit) throw badRequest('ใส่หน่วย');
   const branch = kitchenItemBranches()[0];
