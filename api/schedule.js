@@ -66,6 +66,7 @@ const READ_ONLY = new Set([
   'getKitchenCountHistory',
   'getKitchenStockCard',
   'getProductionReport',
+  'getProductionRunHistory',
 ]);
 
 /** host ของ office-server ที่ deployment นี้ชี้ไป — ค่าเสียรูปก็ต้องไม่ทำให้คำขอล้ม */

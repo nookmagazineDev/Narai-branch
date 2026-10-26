@@ -110,6 +110,15 @@ async function hasRecipeSnapshot() {
   return recipeSnapshotReady;
 }
 
+/** มีตารางประวัติการแก้ยอดผลิตแล้วหรือยัง (sql/kitchen-007-production-run-edit.sql) — จำเฉพาะตอนที่มีแล้ว */
+let runEditReady = false;
+async function hasRunEditTable() {
+  if (runEditReady) return true;
+  const rows = await runSql(`SELECT OBJECT_ID(N'dbo.kitchen_production_run_edit', N'U') AS id;`);
+  runEditReady = rows?.[0]?.id !== null && rows?.[0]?.id !== undefined;
+  return runEditReady;
+}
+
 
 /* ==========================================================================
    รายการสินค้า/วัตถุดิบ — ใช้เติมช่องเลือกของทุกหน้า
@@ -1679,20 +1688,140 @@ async function saveProductionRun(body, session) {
   });
 }
 
-/** ลบบันทึกการผลิตหนึ่งแถว แล้วคิด produced_qty ของใบสั่งใหม่ */
-async function deleteProductionRun(body) {
+/**
+ * คิด produced_qty ของใบสั่งใหม่หลังแก้ยอด — สถานะ "ผลิตเสร็จ" / "ยกเลิก" ที่ตั้งไว้แล้วไม่เปลี่ยน
+ * (ปิดงานได้แม้ผลิตได้น้อยกว่าที่สั่ง แก้ยอดทีหลังต้องไม่เปิดงานกลับมาเอง) ที่เหลือเลื่อนตามยอดเหมือน saveProductionRun
+ */
+const RECOMPUTE_ORDER_KEEP_CLOSED = `
+  UPDATE o
+     SET produced_qty = t.total,
+         status = CASE WHEN o.status IN (N'ยกเลิก', N'ผลิตเสร็จ') THEN o.status
+                       WHEN t.total >= o.order_qty THEN N'ผลิตเสร็จ'
+                       WHEN t.total > 0 THEN N'กำลังผลิต'
+                       ELSE N'รอผลิต' END,
+         updated_at = SYSDATETIME()
+    FROM dbo.kitchen_production_order o
+   CROSS APPLY (
+     SELECT COALESCE(SUM(qty_produced), 0) AS total
+       FROM dbo.kitchen_production_run WHERE order_id = o.order_id
+   ) t
+   WHERE o.order_id = @order_id;`;
+
+/**
+ * แก้ยอดผลิตได้ / ของเสีย ของบันทึกการผลิตหนึ่งแถว (หน้าสถานะการผลิต) แล้วเก็บประวัติไว้ทุกครั้ง
+ * ต้องมีตาราง kitchen_production_run_edit ก่อน — ไม่มีที่เก็บประวัติ = ไม่ให้แก้ (แก้แล้วไม่มีร่องรอยไม่ได้)
+ */
+async function updateProductionRun(body, session) {
+  const runId = Number(body?.runId);
+  if (!Number.isFinite(runId) || runId <= 0) throw badRequest('ไม่ระบุรายการที่จะแก้');
+  const qtyProduced = num(body?.qtyProduced);
+  const qtyWaste = num(body?.qtyWaste);
+  if (qtyProduced <= 0) throw badRequest('ยอดผลิตได้ต้องมากกว่า 0 — ถ้าไม่ได้ผลิตจริงให้ลบรายการนี้แทน');
+  if (qtyWaste < 0) throw badRequest('ของเสียติดลบไม่ได้');
+  if (!(await hasRunEditTable())) {
+    throw badRequest('ยังไม่มีตารางเก็บประวัติการแก้ยอด — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน');
+  }
+  const recorder = recorderOf(body, session);
+
+  return withTransaction(async (run) => {
+    const found = await run(
+      `SELECT run_id, order_id, product_name, qty_produced, qty_waste
+         FROM dbo.kitchen_production_run WITH (UPDLOCK, ROWLOCK)
+        WHERE run_id = @run_id;`,
+      { run_id: { type: sql.BigInt, value: runId } }
+    );
+    const old = found?.recordset?.[0];
+    if (!old) throw badRequest('ไม่พบรายการที่ต้องการแก้');
+    if (Number(old.qty_produced) === qtyProduced && Number(old.qty_waste) === qtyWaste) {
+      return { changed: false, message: 'ยอดเท่าเดิม ไม่ได้แก้อะไร' };
+    }
+
+    await run(
+      `UPDATE dbo.kitchen_production_run
+          SET qty_produced = @qty_produced, qty_waste = @qty_waste
+        WHERE run_id = @run_id;
+       INSERT INTO dbo.kitchen_production_run_edit
+         (run_id, order_id, action, old_qty_produced, new_qty_produced, old_qty_waste, new_qty_waste, reason, recorder)
+       VALUES (@run_id, @order_id, N'edit', @old_produced, @qty_produced, @old_waste, @qty_waste, @reason, @recorder);`,
+      {
+        run_id: { type: sql.BigInt, value: runId },
+        order_id: { type: sql.BigInt, value: old.order_id ?? null },
+        qty_produced: { type: sql.Decimal(18, 3), value: qtyProduced },
+        qty_waste: { type: sql.Decimal(18, 3), value: qtyWaste },
+        old_produced: { type: sql.Decimal(18, 3), value: old.qty_produced },
+        old_waste: { type: sql.Decimal(18, 3), value: old.qty_waste },
+        reason: { type: sql.NVarChar(500), value: orNull(body?.reason) && str(body.reason).slice(0, 500) },
+        recorder: { type: sql.NVarChar(255), value: recorder },
+      }
+    );
+    if (old.order_id) {
+      await run(RECOMPUTE_ORDER_KEEP_CLOSED, { order_id: { type: sql.BigInt, value: old.order_id } });
+    }
+    return {
+      changed: true,
+      message: `แก้ยอด ${old.product_name}: ผลิตได้ ${Number(old.qty_produced)} → ${qtyProduced} · ของเสีย ${Number(old.qty_waste)} → ${qtyWaste}`,
+    };
+  });
+}
+
+/** บันทึกการผลิตทั้งหมดของคำสั่งหนึ่ง + ประวัติการแก้ (ใหม่สุดก่อน) — ป๊อปอัพแก้ยอดของหน้าสถานะการผลิต */
+async function getProductionRunHistory(body) {
+  const orderId = Number(body?.orderId);
+  if (!Number.isFinite(orderId) || orderId <= 0) throw badRequest('ไม่ระบุคำสั่งผลิต');
+  const params = { order_id: { type: sql.BigInt, value: orderId } };
+  const runs = await runSql(
+    `SELECT run_id, order_id, produce_date, product_name, qty_produced, qty_waste, unit, note, recorder, recorded_at
+       FROM dbo.kitchen_production_run
+      WHERE order_id = @order_id
+      ORDER BY recorded_at, run_id;`,
+    params
+  );
+  const ready = await hasRunEditTable();
+  const edits = ready
+    ? await runSql(
+      `SELECT edit_id, run_id, action, old_qty_produced, new_qty_produced, old_qty_waste, new_qty_waste,
+              reason, recorder, edited_at
+         FROM dbo.kitchen_production_run_edit
+        WHERE order_id = @order_id
+        ORDER BY edited_at DESC, edit_id DESC;`,
+      params
+    )
+    : [];
+  return { runs, edits, historyReady: ready };
+}
+
+/** ลบบันทึกการผลิตหนึ่งแถว แล้วคิด produced_qty ของใบสั่งใหม่ (มีตารางประวัติ = เก็บไว้ว่าใครลบ) */
+async function deleteProductionRun(body, session) {
   const runId = Number(body?.runId);
   if (!Number.isFinite(runId)) throw badRequest('ไม่ระบุรายการที่จะลบ');
+  const logDelete = await hasRunEditTable();
+  const recorder = recorderOf(body, session);
 
   return withTransaction(async (run) => {
     const gone = await run(
       `DELETE FROM dbo.kitchen_production_run
-        OUTPUT deleted.order_id, deleted.product_name, deleted.qty_produced
+        OUTPUT deleted.order_id, deleted.product_name, deleted.qty_produced, deleted.qty_waste
         WHERE run_id = @run_id;`,
       { run_id: { type: sql.BigInt, value: runId } }
     );
     const row = gone?.recordset?.[0];
     if (!row) throw badRequest('ไม่พบรายการที่ต้องการลบ');
+
+    if (logDelete) {
+      await run(
+        `INSERT INTO dbo.kitchen_production_run_edit
+           (run_id, order_id, action, old_qty_produced, old_qty_waste, reason, recorder)
+         VALUES (@run_id, @order_id, N'delete', @old_produced, @old_waste, @reason, @recorder);`,
+        {
+          run_id: { type: sql.BigInt, value: runId },
+          order_id: { type: sql.BigInt, value: row.order_id ?? null },
+          old_produced: { type: sql.Decimal(18, 3), value: row.qty_produced },
+          old_waste: { type: sql.Decimal(18, 3), value: row.qty_waste },
+          reason: { type: sql.NVarChar(500), value: orNull(body?.reason) && str(body.reason).slice(0, 500) },
+          recorder: { type: sql.NVarChar(255), value: recorder },
+        }
+      );
+    }
 
     if (row.order_id) {
       await run(
@@ -1893,6 +2022,8 @@ export const KITCHEN_ACTIONS = {
   saveKitchenCount,
   saveKitchenCounts,
   saveProductionRun,
+  updateProductionRun,
+  getProductionRunHistory,
   deleteProductionRun,
   getProductionReport,
   getKitchenMenuSettings,
@@ -1915,4 +2046,5 @@ export const KITCHEN_READ_ONLY = [
   'getKitchenCountHistory',
   'getKitchenStockCard',
   'getProductionReport',
+  'getProductionRunHistory',
 ];
