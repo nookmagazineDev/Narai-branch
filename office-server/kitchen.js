@@ -1893,7 +1893,10 @@ async function updateProductionRun(body, session) {
   });
 }
 
-/** บันทึกการผลิตทั้งหมดของคำสั่งหนึ่ง + ประวัติการแก้ (ใหม่สุดก่อน) — ป๊อปอัพแก้ยอดของหน้าสถานะการผลิต */
+/**
+ * บันทึกการผลิตทั้งหมดของคำสั่งหนึ่ง + ประวัติการแก้ยอด + ประวัติเลื่อนวัน/ยกเลิก/เปลี่ยนสถานะ (ใหม่สุดก่อน)
+ * ใช้ทั้งป๊อปอัพแก้ยอดและป๊อปอัพประวัติของหน้าสถานะการผลิต
+ */
 async function getProductionRunHistory(body) {
   const orderId = Number(body?.orderId);
   if (!Number.isFinite(orderId) || orderId <= 0) throw badRequest('ไม่ระบุคำสั่งผลิต');
@@ -1916,7 +1919,19 @@ async function getProductionRunHistory(body) {
       params
     )
     : [];
-  return { runs, edits, historyReady: ready };
+  // ประวัติของตัวคำสั่ง (เลื่อนวัน / ยกเลิก / เปลี่ยนสถานะ) — หน้าประวัติของ storefct รวมกับข้างบนเป็นไทม์ไลน์เดียว
+  const eventsReady = await hasOrderEventTable();
+  const events = eventsReady
+    ? await runSql(
+      `SELECT event_id, action, CONVERT(NVARCHAR(10), old_date, 23) AS old_date, CONVERT(NVARCHAR(10), new_date, 23) AS new_date,
+              old_status, new_status, plan_moved, reason, recorder, created_at
+         FROM dbo.kitchen_production_order_event
+        WHERE order_id = @order_id
+        ORDER BY created_at DESC, event_id DESC;`,
+      params
+    )
+    : [];
+  return { runs, edits, historyReady: ready, events, eventsReady };
 }
 
 /** ลบบันทึกการผลิตหนึ่งแถว แล้วคิด produced_qty ของใบสั่งใหม่ (มีตารางประวัติ = เก็บไว้ว่าใครลบ) */
