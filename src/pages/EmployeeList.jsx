@@ -59,7 +59,7 @@ export default function EmployeeList() {
      ไม่มีช่องเลือกไซซ์โดยตั้งใจ — ทะเบียนสินค้าแยกไซซ์ไว้เป็นคนละรหัสอยู่แล้ว (เสื้อไซซ์ M
      กับ L คนละ item_code) การให้เลือกไซซ์ซ้ำอีกชั้นทำให้เลือกขัดกับรหัสที่เลือกไปได้      */
   const [uniformTarget, setUniformTarget] = useState(null);   // พนักงานที่เปิดกล่องอยู่
-  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000*/80001*/8001* (โหลดครั้งเดียวใช้ซ้ำ)
+  const [uniformCatalog, setUniformCatalog] = useState(null); // รายการไอเทม 80000xxx (โหลดครั้งเดียวใช้ซ้ำ)
   const [uniformLoading, setUniformLoading] = useState(false);
   const [uniformError, setUniformError] = useState('');
   const [uniformQuery, setUniformQuery] = useState('');
@@ -138,7 +138,7 @@ export default function EmployeeList() {
     resetUniformForm();
   };
 
-  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัสขึ้นต้น 80000 / 80001 / 8001 มาให้แล้ว
+  /* ค้นได้ทั้งรหัสและชื่อ — ฝั่งเซิร์ฟเวอร์กรองเหลือเฉพาะรหัส 80000xxx มาให้แล้ว
      ตรงนี้จึงเหลือแค่กรองตามคำค้น ไม่ต้องกรองรหัสซ้ำอีก */
   const uniformMatches = (() => {
     const q = uniformQuery.trim().toLowerCase();
@@ -1002,14 +1002,14 @@ export default function EmployeeList() {
                       type="text"
                       value={uniformQuery}
                       onChange={(e) => { setUniformQuery(e.target.value); setUniformPicked(null); }}
-                      placeholder={uniformLoading ? 'กำลังโหลดรายการ...' : '8000001 หรือ เสื้อ'}
+                      placeholder={uniformLoading ? 'กำลังโหลดรายการ...' : '80000018 หรือ เสื้อ'}
                       disabled={uniformLoading}
                       className="w-full pl-9 pr-3 py-2 bg-white border border-violet-200 rounded-xl text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
                     />
                     {uniformQuery.trim() && !uniformPicked && (
                       <div className="absolute left-0 right-0 top-[70px] z-10 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
                         <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 text-[11px] text-gray-400">
-                          แสดงเฉพาะรหัสที่ขึ้นต้นด้วย 80000, 80001 และ 8001 · พบ {uniformMatches.length} รายการ
+                          แสดงเฉพาะรหัส 80000xxx · พบ {uniformMatches.length} รายการ
                         </div>
                         {uniformMatches.length === 0 ? (
                           <div className="px-3 py-3 text-xs text-gray-400">ไม่พบไอเทมที่ตรงกับคำค้น</div>
