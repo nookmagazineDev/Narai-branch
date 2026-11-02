@@ -191,7 +191,7 @@ export async function fetchWithdrawals({ branch, outletId, startDate, endDate, s
 }
 
 // ดึงยอดคงเหลือสต๊อกล่าสุด (จากชีท "ข้อมูลนับสตอค") — เลือกวันนับล่าสุดที่ <= endDate ของสาขานั้น
-// พร้อมรายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ในช่วง [startDate, endDate]
+// พร้อมรายจ่ายจาก Supplier (หน้ากรอกรายจ่าย — SQL) ในช่วง [startDate, endDate]
 export async function fetchStockCount({ branch, startDate, endDate, signal }) {
   const params = new URLSearchParams();
   if (branch) params.set('branch', String(branch).toLowerCase());

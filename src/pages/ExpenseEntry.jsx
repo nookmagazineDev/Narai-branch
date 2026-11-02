@@ -1,7 +1,8 @@
 // กรอกรายจ่าย (ต้นทุนจาก Supplier) — รายการคงที่ กรอกแค่ "จำนวน"
 //   ชื่อ/หน่วย/ราคา ดึงจากทะเบียนสินค้าใน SQL Server (InventoryNarai.dbo.stock_item)
 //   ผ่าน /api/stockcount?prices=1&branch=... -> มูลค่า = จำนวน x ราคา
-//   บันทึกลงชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA...) ผ่าน Apps Script action saveSupCost
+//   บันทึกลง SQL dbo.stock_sup_cost ผ่าน office-server (saveSupCost/getSupCost ดู office-server/supcost.js)
+//   เดิมเป็นชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA...) ผ่าน Apps Script — ย้ายข้อมูลเก่าเข้าตารางแล้ว
 //
 // รายการเป็นของ "สาขาที่เลือก" (ทะเบียนแยกสินค้าตามสาขา) จึงต้องโหลดใหม่ทุกครั้งที่เปลี่ยนสาขา
 // ยกเว้นรายการคงที่ของหมวดซัพพลายเออร์ (SUP_ITEMS) ที่ทุกสาขาต้องกรอกเหมือนกัน — ส่งรหัสไปกับ
@@ -13,7 +14,7 @@
 //   • ผัก, ผลไม้   — รายการไม่คงที่ ดึงจากทะเบียนตามช่วงรหัส (ผักเพิ่ม/เลิกขายได้เรื่อยๆ จึงไม่ฮาร์ดโค้ด)
 //                    ราคา/หน่วยกรอกเองได้ทุกแถว เพราะราคาผักขึ้นลงรายวัน โชว์ราคาในทะเบียนใต้ช่องให้เทียบ
 // ทั้งสองหมวดใช้ช่องกรอก/ปุ่มบันทึกชุดเดียวกัน กดบันทึกครั้งเดียวได้ทั้งสองหมวด
-// (ฝั่งชีทแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว จึงไม่ต้องแก้ Apps Script)
+// (ฝั่งตารางแยกแถวตาม "วันที่+สาขา+รหัส" อยู่แล้ว)
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Wallet, RefreshCw, Save, Store, Truck, Carrot, Search, AlertTriangle } from 'lucide-react';
@@ -199,7 +200,7 @@ export default function ExpenseEntry() {
   //
   // ราคา/หน่วยของผักกรอกเองได้ทุกแถว (ราคาผักขึ้นลงรายวัน ราคาในทะเบียนเป็นแค่ค่าตั้งต้น)
   //   ไม่ได้แตะช่อง = ใช้ราคาในทะเบียน / พิมพ์ทับ = ใช้ราคาที่พิมพ์ / ลบจนว่าง = ถือว่ายังไม่กรอกราคา
-  // ทุกแถวส่ง manualPrice: true เสมอ ไม่งั้นฝั่งชีทจะเอาราคากลางมาทับราคาที่พิมพ์
+  // ทุกแถวส่ง manualPrice: true เสมอ ไม่งั้นฝั่งเซิร์ฟเวอร์จะเอาราคาในทะเบียนมาทับราคาที่พิมพ์
   const vegRows = useMemo(() => {
     if (!prices) return [];
     return Object.keys(prices)
@@ -234,7 +235,7 @@ export default function ExpenseEntry() {
   const allRows = useMemo(() => [...supRows, ...vegRows], [supRows, vegRows]);
   const filledRows = allRows.filter((r) => r.qty > 0);
   /* แถวที่เคยบันทึกไว้แล้ว แต่ตอนนี้เป็น 0 หรือลบจนว่าง — เดิมส่งเฉพาะแถวที่จำนวน > 0
-     แถวเดิมในชีทจึงไม่ถูกแก้ พอโหลดใหม่ค่าเก่าก็กลับมา (บั๊ก "กรอก 0 แล้วไม่บันทึก")
+     แถวเดิมจึงไม่ถูกแก้ พอโหลดใหม่ค่าเก่าก็กลับมา (บั๊ก "กรอก 0 แล้วไม่บันทึก")
      ส่งไปเป็น 0 ให้ทับแถวเดิม */
   const zeroedRows = allRows.filter((r) => !(r.qty > 0) && savedCodes.has(r.code));
   const total = filledRows.reduce((s, r) => s + r.amount, 0);
@@ -291,7 +292,7 @@ export default function ExpenseEntry() {
                 <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700">แก้ไขข้อมูลเดิม ({existingCount} รายการ)</span>
               )}
             </h1>
-            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • รายการ/ราคาจากทะเบียนสินค้า SQL ตามสาขา (หมวดผักแก้ราคาเองได้) • บันทึกลงชีท "ต้นทุนจากsup"</p>
+            <p className="text-sm text-gray-500">ต้นทุนจาก Supplier + ผัก,ผลไม้ • รายการ/ราคาจากทะเบียนสินค้า SQL ตามสาขา (หมวดผักแก้ราคาเองได้) • บันทึกลงฐานข้อมูล SQL</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

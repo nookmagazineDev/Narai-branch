@@ -61,3 +61,25 @@ Invoke-WebRequest "http://localhost:3102/api/pending_orders?outletId=1" -UseBasi
 (Invoke-WebRequest http://localhost:8787/health -UseBasicParsing).Content
 Get-Content C:\narai-local\narai-branch\local-err.log -Tail 15
 ```
+
+## กรอกรายจ่ายย้ายเข้า SQL (พ.ย. 2026)
+
+เดิมหน้ากรอกรายจ่ายบันทึกลงชีท "ต้นทุนจากsup" ผ่าน Apps Script ตอนนี้อยู่ที่ `InventoryNarai.dbo.stock_sup_cost`
+(`office-server/supcost.js`) ทั้งหน้ากรอกรายจ่าย สรุปกำไร และยอดรับในหน้านับสต๊อก (`/api/stockcount`)
+
+ขั้นตอนย้าย (ทำครั้งเดียว ตามลำดับ):
+
+1. `update-office-server.bat` (Run as administrator) — สร้างตารางจาก `office-server/sql/supcost-001-table.sql` + เพิ่ม action
+2. `update-web.bat` (Run as administrator) — หน้าเว็บเปลี่ยนไปบันทึก/อ่าน SQL
+3. ย้ายข้อมูลเก่า (PowerShell ในโฟลเดอร์ `D:\Narai-branch-main\office-server`):
+
+```powershell
+node scripts/import-sup-cost.mjs            # รายงานอย่างเดียว ตรวจจำนวน/ยอดเงินรายสาขาก่อน
+node scripts/import-sup-cost.mjs --apply    # เขียนจริง
+```
+
+รันซ้ำได้ — เติมเฉพาะ (วันที่+สาขา+สินค้า) ที่ยังไม่มี ไม่แตะแถวที่สาขากรอกผ่านเว็บหลังย้าย
+ถ้ามีเครื่องที่ยังถือหน้าเว็บรุ่นเก่าบันทึกลงชีทตามมาอีก รันซ้ำก็เก็บตกให้
+
+ไม่บังคับ: deploy `apps-script.js` ใหม่ (มี `saveSupCost`/`getSupCost` ใน `MOVED_TO_SQL`) ให้เครื่องที่ถือหน้าเว็บรุ่นเก่า
+ได้ข้อความให้รีเฟรช แทนที่จะบันทึกลงชีทเงียบ ๆ
