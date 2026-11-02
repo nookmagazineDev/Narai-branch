@@ -38,6 +38,8 @@ const READ_ONLY = new Set([
   'getClosingItems',
   'getMonthEndClosing',
   'getMonthEndRows',
+  'getSupCost',
+  'getSupCostRows',
   'getStockCountRows',
   // ยูนิฟอร์มพนักงาน (ดู office-server/uniform.js)
   'getUniformItems',

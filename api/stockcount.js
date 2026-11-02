@@ -1,7 +1,8 @@
-import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
+import { USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 // มูลค่าสต๊อกคงเหลือรายเดือน
 //   - ยอดนับ + ยอดปิดรอบสิ้นเดือน + ราคาต่อหน่วย: อ่านจาก SQL Server (InventoryNarai) ผ่าน office-server
-//   - รายจ่าย Supplier (ชีท "ต้นทุนจากsup"): ยังเป็นชีทที่คนกรอกเอง
+//   - รายจ่าย Supplier (หน้ากรอกรายจ่าย): SQL dbo.stock_sup_cost ผ่าน office-server (getSupCostRows)
+//     เดิมอ่านชีท "ต้นทุนจากsup" — ย้ายข้อมูลเก่าเข้าตารางแล้ว (office-server/scripts/import-sup-cost.mjs)
 //   GET /api/stockcount?branch=<code>&end=<YYYY-MM-DD>
 //   -> { status, branch, current:{countDate,total,data}, previous:{countDate,total,data}, supCost }
 //   current  = ยอดนับล่าสุด "ภายในเดือนของ end" (และ <= end) — ถ้าเดือนนั้นยังไม่มีการนับ = ว่าง (มูลค่า 0)
@@ -12,10 +13,6 @@ import { fetchSheet, USAGE_API_BASE, fetchUpstream } from '../lib/upstream.js';
 //   previous = ยอดปิดรอบสิ้นเดือนที่บันทึกไว้อย่างเป็นทางการของเดือนก่อนหน้า
 //     ถ้าเดือนนั้นยังไม่มีใครกดปิดยอดเลย fallback ไปใช้ยอดนับสต๊อกล่าสุดในเดือนนั้นแทน
 //     กันหน้า dashboard โชว์ 0 เปล่าๆ ระหว่างรอทีมงานกดปิดยอด (ปกติบันทึกกันภายในต้นเดือนถัดไป ไม่เกินวันที่ 5)
-
-// ชีทรายจ่ายจาก Supplier (คนละสเปรดชีต) — [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
-const SUP_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
-const SUP_SHEET = 'ต้นทุนจากsup';
 
 /**
  * เรียก action ของหน้านับสต๊อกที่ office-server (ตัวเดียวกับที่ /api/schedule ใช้)
@@ -46,23 +43,6 @@ async function callOffice(action, payload) {
 // normalize รหัส: ตัด .0 ท้าย + เลข 0 นำหน้า ให้ตรงกันทุกชีท
 const normCode = (c) => String(c == null ? '' : c).replace(/\.0+$/, '').replace(/^0+/, '').trim();
 
-// normalize เซลล์วันที่ให้เป็น "YYYY-MM-DD" — รองรับทั้ง Date(...), "YYYY-MM-DD", "DD/MM/YYYY"
-function cellYmd(c) {
-  if (!c) return '';
-  const v = c.v;
-  const s = String(v == null ? '' : v).trim();
-  let m = s.match(/Date\((\d+),(\d+),(\d+)/);
-  if (m) return `${m[1]}-${String(+m[2] + 1).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
-  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-  // เผื่อกรณี gviz คืน type date แต่ v ว่าง ใช้ค่า formatted (f) เช่น "09/07/2026"
-  const f = String(c.f == null ? '' : c.f).trim();
-  m = f.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-  return s.slice(0, 10);
-}
 // "2026-06" -> "2026-05"
 function prevMonth(ym) {
   const [y, m] = String(ym).split('-').map(Number);
@@ -154,14 +134,6 @@ async function itemPriceMap() {
   const map = {};
   for (const code of Object.keys(reg)) map[code] = reg[code].price;
   return map;
-}
-
-async function fetchGviz(url) {
-  const r = await fetchSheet(url);
-  const text = await r.text();
-  if (text.startsWith('<')) throw new Error('อ่านชีทไม่ได้ (ต้องตั้งแชร์ "ใครมีลิงก์ก็ดูได้")');
-  const a = text.indexOf('{'), b = text.lastIndexOf('}');
-  return JSON.parse(text.substring(a, b + 1));
 }
 
 export default async function handler(req, res) {
@@ -280,21 +252,16 @@ export default async function handler(req, res) {
     const en = String(req.query.end || '9999-12-31');
     if (!brK) return res.status(400).json({ status: 'error', message: 'ระบุสาขา' });
     try {
-      const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SUP_SHEET)}`);
-      const text = await r.text();
-      if (text.startsWith('<')) return res.status(200).json({ status: 'success', data: {} });
-      const a = text.indexOf('{'), b = text.lastIndexOf('}');
-      const j = JSON.parse(text.substring(a, b + 1));
+      const rows = await callOffice('getSupCostRows', { branch: brK, from: st, to: en });
       const map = {};
-      for (const rw of (j.table.rows || [])) {
-        const c = rw.c || [];
-        if (String((c[1] && c[1].v) || '').toLowerCase().trim() !== brK) continue; // [1]สาขา
-        const ds = cellYmd(c[0]); // [0]วันที่
-        if (!ds || ds < st || ds > en) continue;
-        const code = normCode(c[2] && c[2].v); // [2]รหัส
+      for (const rw of (rows || [])) {
+        const ds = rw.date;
+        if (!ds) continue;
+        const code = normCode(rw.code);
         if (!code) continue;
-        const qty = Number(c[5] && c[5].v) || 0; // [5]จำนวน
-        const e = map[code] || (map[code] = { total: 0, details: {}, unit: (c[4] && c[4].v) || '' });
+        const qty = Number(rw.qty) || 0;
+        if (!(qty > 0)) continue; // แถวที่แก้เป็น 0 = ยกเลิกรายจ่าย ไม่ใช่ของที่รับเข้า
+        const e = map[code] || (map[code] = { total: 0, details: {}, unit: rw.unit || '' });
         e.total += qty;
         e.details[ds] = (e.details[ds] || 0) + qty;
       }
@@ -315,12 +282,10 @@ export default async function handler(req, res) {
 
   const curMonth = endStr.slice(0, 7);
   const preMonth = prevMonth(curMonth);
-  const supBase = `https://docs.google.com/spreadsheets/d/${SUP_SHEET_ID}/gviz/tq?tqx=out:json`;
 
   try {
-    // ยอดนับ ยอดปิดรอบ และราคาต่อหน่วย มาจาก SQL (ผ่าน office-server)
-    // เหลือรายจ่าย Supplier ที่ยังเป็นชีทที่คนกรอกเอง จึงยังอ่านจากชีทเหมือนเดิม
-    const [stockRows, priceMap, supJ, closingRows] = await Promise.all([
+    // ยอดนับ ยอดปิดรอบ ราคาต่อหน่วย และรายจ่าย Supplier มาจาก SQL (ผ่าน office-server) ทั้งหมด
+    const [stockRows, priceMap, supRows, closingRows] = await Promise.all([
       // ดึงเฉพาะช่วงที่ใช้จริง: ตั้งแต่ต้นเดือนก่อนหน้า ถึงวันที่เลือก
       callOffice('getStockCountRows', {
         branch: branchKey,
@@ -328,8 +293,12 @@ export default async function handler(req, res) {
         to: /^\d{4}-\d{2}-\d{2}$/.test(endStr) ? endStr : null,
       }),
       itemPriceMap(),
-      // ชีทรายจ่ายจาก Supplier "ต้นทุนจากsup" (คนละไฟล์) — ไม่มี/อ่านไม่ได้ก็คิดเป็น 0
-      fetchGviz(`${supBase}&sheet=${encodeURIComponent(SUP_SHEET)}`).catch(() => null),
+      // รายจ่ายจาก Supplier ในช่วง [start, end] — อ่านไม่ได้ก็คิดเป็น 0 เหมือนตอนอ่านชีท
+      callOffice('getSupCostRows', {
+        branch: branchKey,
+        from: /^\d{4}-\d{2}-\d{2}$/.test(startStr) ? startStr : null,
+        to: /^\d{4}-\d{2}-\d{2}$/.test(endStr) ? endStr : null,
+      }).catch(() => []),
       // ยอดปิดรอบสิ้นเดือน — ใช้เป็นแหล่งหลักของ "เดือนที่แล้ว" ไม่มีข้อมูลก็ถอยไปใช้ยอดนับแทน
       callOffice('getMonthEndRows', { branch: branchKey }).catch(() => []),
     ]);
@@ -382,25 +351,21 @@ export default async function handler(req, res) {
       ? { ...closingPrev, source: 'closing' }
       : { ...pick(preMonth, null), source: 'count' };
 
-    // รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ของสาขานี้ ในช่วง [start, end]
-    // คอลัมน์: [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม
+    // รายจ่ายจาก Supplier ของสาขานี้ ในช่วง [start, end] — office-server กรองสาขา/ช่วงวันที่มาให้แล้ว
+    // แถวที่แก้เป็น 0 (ยกเลิกรายจ่าย) ไม่ต้องแสดงในรายการ
     const supItems = [];
     let supTotal = 0;
-    for (const rw of (supJ?.table?.rows || [])) {
-      const c = rw.c || [];
-      if (String(c[1]?.v ?? '').toLowerCase().trim() !== branchKey) continue;
-      const ds = cellYmd(c[0]);
-      if (startStr && ds && ds < startStr) continue;
-      if (endStr && ds && ds > endStr) continue;
-      const amount = Number(c[7]?.v) || 0;
+    for (const rw of (supRows || [])) {
+      if (!(Number(rw.qty) > 0)) continue;
+      const amount = Number(rw.amount) || 0;
       supTotal += amount;
       supItems.push({
-        date: ds,
-        code: c[2]?.v != null ? String(c[2].v) : '',
-        name: c[3]?.v != null ? String(c[3].v) : '',
-        unit: c[4]?.v != null ? String(c[4].v) : '',
-        qty: Number(c[5]?.v) || 0,
-        unitPrice: Number(c[6]?.v) || 0,
+        date: rw.date,
+        code: rw.code,
+        name: rw.name,
+        unit: rw.unit,
+        qty: Number(rw.qty) || 0,
+        unitPrice: Number(rw.unitPrice) || 0,
         amount,
       });
     }

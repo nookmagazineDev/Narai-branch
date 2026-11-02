@@ -220,7 +220,7 @@ function StockModal({ open, onClose, title, rows, countDate, source, total }) {
   );
 }
 
-// ───────── Modal: รายจ่ายจาก Supplier (ชีท "ต้นทุนจากsup") ─────────
+// ───────── Modal: รายจ่ายจาก Supplier (หน้ากรอกรายจ่าย — SQL dbo.stock_sup_cost) ─────────
 function SupCostModal({ open, onClose, items, total }) {
   if (!open) return null;
   const rows = items || [];
@@ -230,7 +230,7 @@ function SupCostModal({ open, onClose, items, total }) {
         <div className="px-6 py-4 bg-gray-900 text-white flex items-center justify-between shrink-0">
           <div>
             <h3 className="text-base font-bold flex items-center gap-2"><Wallet className="w-4 h-4 text-rose-300" /> รายจ่ายจาก Supplier</h3>
-            <p className="text-xs text-gray-400 mt-0.5">ชีท "ต้นทุนจากsup" • {rows.length} รายการ • รวม {baht(total)}</p>
+            <p className="text-xs text-gray-400 mt-0.5">จากหน้ากรอกรายจ่าย • {rows.length} รายการ • รวม {baht(total)}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-800"><X className="w-5 h-5" /></button>
         </div>
@@ -308,7 +308,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [openCat, setOpenCat] = useState(null);
   const [stock, setStock] = useState(null);       // { current:{countDate,source,data}, previous:{countDate,source,data} }
   const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, source, total } | null
-  const [supCost, setSupCost] = useState(null);   // { total, count, items:[...] } — รายจ่ายจากชีท "ต้นทุนจากsup"
+  const [supCost, setSupCost] = useState(null);   // { total, count, items:[...] } — รายจ่ายจากหน้ากรอกรายจ่าย (SQL)
   const [supModal, setSupModal] = useState(false);
 
   const rangeKey = `${startDate}~${endDate}`;
@@ -396,7 +396,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const prevStockValue = useMemo(() => prevStock.reduce((s, r) => s + (r.value || 0), 0), [prevStock]);
   const curUnpriced = useMemo(() => curStock.filter((r) => r.qty > 0 && !r.priced).length, [curStock]);
 
-  // รายจ่ายจากชีท "ต้นทุนจากsup" (Supplier) ในช่วงวันที่เดียวกัน
+  // รายจ่ายจาก Supplier (หน้ากรอกรายจ่าย) ในช่วงวันที่เดียวกัน
   const supCostValue = Number(supCost?.total || 0);
 
   // Total Food Cost (COGS) = ต้นทุนจากใบเบิก + รายจ่ายจาก Supplier + ยอดยกมาเดือนที่แล้ว − ยอดมูลค่าสตอคปัจจุบัน

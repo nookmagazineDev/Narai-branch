@@ -92,6 +92,11 @@ const SQL_ACTIONS = new Set([
   'saveMonthEndClosing',        // MonthEndClosing
   'saveWaste',                  // Waste
 
+  // กลุ่มที่ 3.01 — กรอกรายจ่าย (ต้นทุนจาก Supplier) ย้ายจากชีท "ต้นทุนจากsup" (ดู office-server/supcost.js)
+  // อ่านกับเขียนต้องสลับพร้อมกัน ไม่งั้นบันทึกลง SQL แล้วโหลดกลับจากชีท เหมือนบันทึกไม่ติด
+  'getSupCost',                 // ExpenseEntry
+  'saveSupCost',                // ExpenseEntry
+
   // กลุ่มที่ 3.05 — ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน)
   //
   // ทั้งชุดเป็นของใหม่ ไม่เคยมีใน Apps Script จึงไม่มีทางถอยไปชีท — เครื่องที่ถือไฟล์เก่า

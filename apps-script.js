@@ -195,7 +195,9 @@ function doPost(e) {
       getStockItems: 1, getStockTotal: 1, getClosingItems: 1, getMonthEndClosing: 1,
       saveStock: 1, saveMonthEndClosing: 1, saveWaste: 1, updateStorageCategory: 1,
       saveAvgPerHead: 1, saveBranchPercentagesBulk: 1, saveBranchPercentage: 1,
-      deleteBranchPercentage: 1
+      deleteBranchPercentage: 1,
+      // กรอกรายจ่ายย้ายไป SQL (dbo.stock_sup_cost) — ดู office-server/supcost.js
+      saveSupCost: 1, getSupCost: 1
     };
     if (MOVED_TO_SQL[action]) {
       return ContentService.createTextOutput(JSON.stringify({
