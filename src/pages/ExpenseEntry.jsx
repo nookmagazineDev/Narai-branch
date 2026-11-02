@@ -119,10 +119,13 @@ export default function ExpenseEntry() {
   // ดึงข้อมูลที่บันทึกไว้ของ (สาขา+วันที่) มาแสดงเพื่อแก้ไข — บันทึกซ้ำจะทับแถวเดิม
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [existingCount, setExistingCount] = useState(0);
+  // รหัสที่มีแถวบันทึกไว้แล้วของ (สาขา+วันที่) — แก้เป็น 0 หรือลบจนว่างต้องส่งไปทับแถวเดิมด้วย
+  const [savedCodes, setSavedCodes] = useState(() => new Set());
   useEffect(() => {
     if (!branch || !date) return;
     let alive = true;
     setLoadingExisting(true);
+    setSavedCodes(new Set());
     apiCall('getSupCost', { branch, date })
       .then((res) => {
         if (!alive || res?.status !== 'success') return;
@@ -145,6 +148,7 @@ export default function ExpenseEntry() {
         });
         setQty(q);
         setManualPrice(mp);
+        setSavedCodes(new Set(Object.keys(q)));
         const n = Object.keys(q).length;
         setExistingCount(n);
         if (n > 0) toast(`โหลดข้อมูลที่บันทึกไว้ ${n} รายการ — แก้ไขแล้วกดบันทึกจะอัปเดตรายการเดิม`, { icon: '📝', duration: 4000 });
@@ -229,6 +233,10 @@ export default function ExpenseEntry() {
 
   const allRows = useMemo(() => [...supRows, ...vegRows], [supRows, vegRows]);
   const filledRows = allRows.filter((r) => r.qty > 0);
+  /* แถวที่เคยบันทึกไว้แล้ว แต่ตอนนี้เป็น 0 หรือลบจนว่าง — เดิมส่งเฉพาะแถวที่จำนวน > 0
+     แถวเดิมในชีทจึงไม่ถูกแก้ พอโหลดใหม่ค่าเก่าก็กลับมา (บั๊ก "กรอก 0 แล้วไม่บันทึก")
+     ส่งไปเป็น 0 ให้ทับแถวเดิม */
+  const zeroedRows = allRows.filter((r) => !(r.qty > 0) && savedCodes.has(r.code));
   const total = filledRows.reduce((s, r) => s + r.amount, 0);
   const filledCount = filledRows.length;
   const countOf = (rows) => rows.filter((r) => r.qty > 0).length;
@@ -244,9 +252,9 @@ export default function ExpenseEntry() {
   const viewFilled = countOf(viewRows);
 
   const save = async () => {
-    const items = filledRows;
+    const items = [...filledRows, ...zeroedRows];
     if (!items.length) { toast.error('กรุณากรอกจำนวนอย่างน้อย 1 รายการ'); return; }
-    const missingPrice = items.find((r) => r.manualPrice && !(r.price > 0));
+    const missingPrice = filledRows.find((r) => r.manualPrice && !(r.price > 0));
     if (missingPrice) { toast.error(`กรุณากรอกราคา/หน่วยของ "${missingPrice.name}"`); return; }
     if (!branch) { toast.error('กรุณาเลือกสาขา'); return; }
     if (!date) { toast.error('กรุณาเลือกวันที่'); return; }
@@ -256,11 +264,12 @@ export default function ExpenseEntry() {
         branch,
         date,
         recorder: user?.username || '',
-        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, price: r.price, manualPrice: !!r.manualPrice })),
+        items: items.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty > 0 ? r.qty : 0, price: r.price, manualPrice: !!r.manualPrice })),
       });
       toast.success(res.message || `บันทึกแล้ว ${items.length} รายการ`, { duration: 5000 });
       // คงค่าที่กรอกไว้ (โหมดดู/แก้ไขของวันนั้น) — แก้ต่อแล้วบันทึกซ้ำจะอัปเดตแถวเดิม
       setExistingCount(items.length);
+      setSavedCodes(new Set(items.map((r) => r.code)));
     } catch (e) {
       toast.error(e.message || 'บันทึกไม่สำเร็จ');
     } finally {
@@ -450,7 +459,7 @@ export default function ExpenseEntry() {
                         value={qty[r.code] ?? ''}
                         onChange={(e) => setQty((p) => ({ ...p, [r.code]: e.target.value }))}
                         className="w-full min-w-[96px] px-2 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-center text-base sm:text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        placeholder="0"
+                        placeholder="-"
                       />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono font-semibold text-emerald-700">{r.amount > 0 ? baht(r.amount) : '-'}</td>
