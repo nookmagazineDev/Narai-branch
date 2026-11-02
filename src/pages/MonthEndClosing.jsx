@@ -72,6 +72,7 @@ export default function MonthEndClosing() {
   const [searchTerm, setSearchTerm] = useState('');
   const [closingDate, setClosingDate] = useState(todayYMD());
   const [qtyMap, setQtyMap] = useState({}); // productId -> ยอดคงเหลือสิ้นเดือนที่กรอก (string)
+  const [savedQtyMap, setSavedQtyMap] = useState({}); // productId -> ค่าล่าสุดที่บันทึกไว้ (ใช้จับช่องที่ถูกลบจนว่าง)
   const [historyMap, setHistoryMap] = useState({}); // productId -> [{date, qty, price, amount, recorder, time}]
   const [lastDateMap, setLastDateMap] = useState({}); // productId -> วันที่ของค่าล่าสุดที่โชว์ (อาจไม่ตรงกับ closingDate ที่เลือกอยู่)
   const [historyFor, setHistoryFor] = useState(null); // { name, history }
@@ -148,6 +149,7 @@ export default function MonthEndClosing() {
           dateMap[code] = v.date || '';
         });
         setQtyMap(map);
+        setSavedQtyMap(map);
         setHistoryMap(hist);
         setLastDateMap(dateMap);
       }
@@ -168,11 +170,21 @@ export default function MonthEndClosing() {
 
   const normId = (id) => String(id).replace(/^0+/, '').toLowerCase();
 
+  const isFilled = (q) => q !== undefined && q !== '' && !isNaN(Number(q));
+
+  /* ช่องที่เคยมีค่าบันทึกไว้ แต่สาขาลบตัวเลขออกจนว่าง — ช่องว่างไม่ถูกส่งไปบันทึก
+     เดิม placeholder ของช่องเป็น "0" ช่องที่ลบจนว่างจึงดูเหมือนกรอก 0 แล้ว พอกดบันทึก
+     รายการนั้นไม่ถูกส่ง แล้วโหลดค่าเก่ากลับมาแสดง (บั๊ก "กรอก 0 แล้วไม่บันทึก") */
+  const clearedItems = useMemo(() => items.filter(it => {
+    const key = normId(it.productId);
+    return isFilled(savedQtyMap[key]) && !isFilled(qtyMap[key]);
+  }), [items, qtyMap, savedQtyMap]);
+
   const totals = useMemo(() => {
     let filled = 0, totalValue = 0;
     items.forEach(it => {
       const q = qtyMap[normId(it.productId)];
-      if (q !== undefined && q !== '' && !isNaN(Number(q))) {
+      if (isFilled(q)) {
         filled++;
         totalValue += Number(q) * (Number(it.price) || 0);
       }
@@ -185,18 +197,33 @@ export default function MonthEndClosing() {
       toast.error(`ปิดยอดสิ้นเดือนได้เฉพาะวันที่ ${WINDOW_START_DAY} ถึงวันที่ ${WINDOW_END_DAY} ของเดือนถัดไปเท่านั้น`);
       return;
     }
+    // ช่องที่ลบจนว่าง ถามก่อนว่าตั้งใจให้เป็น 0 ไหม — ยกเลิก = ไม่ส่งรายการนั้น (คงค่าเดิม)
+    let zeroKeys = new Set();
+    if (clearedItems.length > 0) {
+      const names = clearedItems.slice(0, 5).map(it => `- ${it.productId} ${it.name}`).join('\n');
+      const more = clearedItems.length > 5 ? `\nและอีก ${clearedItems.length - 5} รายการ` : '';
+      const asZero = window.confirm(
+        `มี ${clearedItems.length} รายการที่ลบตัวเลขออกจนช่องว่าง:\n${names}${more}\n\n` +
+        'ตกลง = บันทึกรายการเหล่านี้เป็น 0\nยกเลิก = ไม่บันทึกรายการเหล่านี้ (คงค่าเดิมไว้)'
+      );
+      if (asZero) zeroKeys = new Set(clearedItems.map(it => normId(it.productId)));
+    }
+
     const payload = items
       .filter(it => {
-        const q = qtyMap[normId(it.productId)];
-        return q !== undefined && q !== '' && !isNaN(Number(q));
+        const key = normId(it.productId);
+        return isFilled(qtyMap[key]) || zeroKeys.has(key);
       })
-      .map(it => ({
-        productId: it.productId,
-        name: it.name,
-        unit: it.unit,
-        price: Number(it.price) || 0,
-        qty: Number(qtyMap[normId(it.productId)]),
-      }));
+      .map(it => {
+        const key = normId(it.productId);
+        return {
+          productId: it.productId,
+          name: it.name,
+          unit: it.unit,
+          price: Number(it.price) || 0,
+          qty: isFilled(qtyMap[key]) ? Number(qtyMap[key]) : 0,
+        };
+      });
 
     if (payload.length === 0) {
       toast.error('กรุณากรอกยอดคงเหลือสิ้นเดือนอย่างน้อย 1 รายการ');
@@ -288,7 +315,7 @@ export default function MonthEndClosing() {
         </div>
         <button
           onClick={handleSave}
-          disabled={isSaving || loading || totals.filled === 0}
+          disabled={isSaving || loading || (totals.filled === 0 && clearedItems.length === 0)}
           className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm shadow-indigo-200"
         >
           {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -358,7 +385,7 @@ export default function MonthEndClosing() {
                             type="number" min="0" step="any" inputMode="decimal"
                             value={qty}
                             onChange={(e) => handleQtyChange(key, e.target.value)}
-                            placeholder="0"
+                            placeholder="-"
                             className="w-full min-w-0 px-2 py-2 border border-indigo-200 rounded-lg text-center text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <button type="button" title="รวมยอดหลายจุด (เครื่องคิดเลข)"
