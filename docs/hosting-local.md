@@ -35,8 +35,10 @@ USAGE_API_BASE="http://localhost:8787"
 
 1. **office-server** — คลิกขวา `D:\Narai-branch-main\office-server\update-office-server.bat` → Run as administrator
    (git pull + npm install + อัปเดตตาราง + restart service แล้วเช็ค `code_sha` ให้)
-2. **หน้าเว็บ + api/** — ใน `C:\narai-local\narai-branch`: ดึงโค้ดใหม่, `npm install`, `npm run build`
-   แล้ว restart `serve-local.mjs`:
+2. **หน้าเว็บ + api/** — ดับเบิลคลิก `C:\narai-local\narai-branch\update-web.bat`
+   (git pull + npm install เมื่อจำเป็น + build ลงโฟลเดอร์ชั่วคราวก่อนสลับเข้า `dist` + restart `serve-local.mjs` แล้วเช็คว่าตอบ 200)
+   ห้ามรัน `npm install` เองโดยไม่ลงต่อ `npm install express@4 dotenv --no-save` — `serve-local.mjs` จะหา express ไม่เจอ
+   ถ้าต้องทำมือ restart ด้วย:
 
 ```powershell
 Get-Process node | Where-Object { (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "serve-local" } | Stop-Process -Force
