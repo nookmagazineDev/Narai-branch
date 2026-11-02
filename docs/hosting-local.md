@@ -7,12 +7,21 @@ merge เข้า `main` แล้วจะ **ไม่ deploy เอง** ต�
 
 | ตัว | ที่อยู่ | พอร์ต | หน้าที่ |
 |---|---|---|---|
-| `serve-local.mjs` | `C:\narai-local\narai-branch` | 3102 | หน้าเว็บ (`dist/`) + `api/*.js` (แทน Vercel Functions) อ่าน env จาก `.env` ข้างไฟล์ |
+| `serve-local.mjs` (service `NaraiBranchWeb`) | `C:\narai-local\narai-branch` | 3102 | หน้าเว็บ (`dist/`) + `api/*.js` (แทน Vercel Functions) อ่าน env จาก `.env` ข้างไฟล์ |
 | office-server (service `NaraiUsageAPI`) | `D:\Narai-branch-main\office-server` | 8787 | ตารางงาน, ยูนิฟอร์ม, สต๊อก, ยอดขาย/แดชบอร์ด |
 | MySQL 5.0 (AppServ, service `mysql`) | `C:\AppServ\MySQL` | 3306 | ใบเบิก/ใบรับ (`myfbdata`, `myfbdata<สาขา>`) |
 | SQL Server | — | 1433 | `narai_hr`, `InventoryNarai` (office-server ต่อผ่าน localhost) |
 
 `serve-local.mjs` ไม่ได้อยู่ใน repo นี้ (อยู่บนเครื่องเท่านั้น ต้นฉบับที่ `C:\narai-local\setup\`)
+
+## ให้เว็บเปิดเองหลังรีบูต (ทำครั้งเดียว)
+
+คลิกขวา `C:\narai-local\narai-branch\install-web-service.bat` → Run as administrator
+ตั้ง `serve-local.mjs` เป็น Windows Service `NaraiBranchWeb` ผ่าน NSSM (`C:\tools\nssm.exe`) แบบเดียวกับ office-server:
+สตาร์ทเองตอนเปิดเครื่อง, สตาร์ทใหม่เมื่อโปรเซสตาย, log ยังอยู่ที่ `local-out.log` / `local-err.log` — รันซ้ำได้
+
+หลังตั้ง service แล้ว `update-web.bat` ต้องเปิดแบบ **Run as administrator** (ต้องใช้สิทธิ์รีสตาร์ต service)
+และห้ามเปิด `serve-local.mjs` ด้วย `Start-Process` ซ้อนอีกตัว — พอร์ต 3102 จะชนกับ service
 
 ## `.env` ของเว็บ (`C:\narai-local\narai-branch\.env`)
 
@@ -35,10 +44,10 @@ USAGE_API_BASE="http://localhost:8787"
 
 1. **office-server** — คลิกขวา `D:\Narai-branch-main\office-server\update-office-server.bat` → Run as administrator
    (git pull + npm install + อัปเดตตาราง + restart service แล้วเช็ค `code_sha` ให้)
-2. **หน้าเว็บ + api/** — ดับเบิลคลิก `C:\narai-local\narai-branch\update-web.bat`
+2. **หน้าเว็บ + api/** — คลิกขวา `C:\narai-local\narai-branch\update-web.bat` → Run as administrator
    (git pull + npm install เมื่อจำเป็น + build ลงโฟลเดอร์ชั่วคราวก่อนสลับเข้า `dist` + restart `serve-local.mjs` แล้วเช็คว่าตอบ 200)
    ห้ามรัน `npm install` เองโดยไม่ลงต่อ `npm install express@4 dotenv --no-save` — `serve-local.mjs` จะหา express ไม่เจอ
-   ถ้าต้องทำมือ restart ด้วย:
+   ถ้าต้องทำมือ: ตั้ง service แล้วใช้ `Restart-Service NaraiBranchWeb` · ยังไม่ตั้ง service ใช้:
 
 ```powershell
 Get-Process node | Where-Object { (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "serve-local" } | Stop-Process -Force

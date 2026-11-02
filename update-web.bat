@@ -30,6 +30,7 @@ if /i not "%~1"=="--from-temp" (
 set "ROOT=%~2"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "PORT=3102"
+set "SVC=NaraiBranchWeb"
 title Narai web - อัปเดตจาก GitHub
 color 0B
 
@@ -56,6 +57,23 @@ if errorlevel 1 (
   popd
   pause
   exit /b 1
+)
+
+rem ติดตั้งเป็น service แล้ว (install-web-service.bat) — รีสตาร์ต service ต้องใช้สิทธิ์ผู้ดูแลระบบ
+rem เช็คตั้งแต่ต้น ไม่ให้ build เสร็จแล้วค่อยมาติดตอนรีสตาร์ต
+set "HASSVC="
+sc query %SVC% >nul 2>&1
+if not errorlevel 1 set "HASSVC=1"
+if defined HASSVC (
+  net session >nul 2>&1
+  if errorlevel 1 (
+    echo [ผิดพลาด] เว็บรันเป็น service %SVC% แล้ว ต้องเปิดไฟล์นี้ด้วยสิทธิ์ผู้ดูแลระบบ
+    echo คลิกขวาที่ไฟล์ update-web.bat แล้วเลือก "Run as administrator"
+    echo.
+    popd
+    pause
+    exit /b 1
+  )
 )
 
 for /f %%i in ('git rev-parse HEAD') do set "OLDREV=%%i"
@@ -129,10 +147,21 @@ if exist "dist-old" rmdir /s /q "dist-old"
 echo.
 
 echo [4/4] รีสตาร์ต serve-local.mjs...
+if defined HASSVC (
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Restart-Service -Name '%SVC%' -Force -ErrorAction Stop"
+  if errorlevel 1 (
+    echo [ผิดพลาด] รีสตาร์ต service %SVC% ไม่สำเร็จ — ดู log: %ROOT%\local-err.log
+    popd
+    pause
+    exit /b 1
+  )
+  goto :waitweb
+)
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -match 'serve-local' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force };" ^
   "Start-Sleep -Seconds 2;" ^
   "Start-Process node -ArgumentList 'serve-local.mjs' -WorkingDirectory '%ROOT%' -RedirectStandardOutput '%ROOT%\local-out.log' -RedirectStandardError '%ROOT%\local-err.log' -WindowStyle Hidden"
+:waitweb
 echo    รอให้เว็บพร้อม...
 ping -n 6 127.0.0.1 >nul
 powershell -NoProfile -Command ^
