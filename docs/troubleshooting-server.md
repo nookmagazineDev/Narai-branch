@@ -1,5 +1,8 @@
 # แก้ปัญหา "ติดต่อเซิร์ฟเวอร์ไม่ได้"
 
+> **ย้ายจาก Vercel แล้ว (30/10/2026):** เว็บ + `api/` รันบนเครื่อง 203.154.185.48 ที่ https://branch.khanoykorshabu.com
+> ต่อ MySQL/office-server ผ่าน localhost — ดู [hosting-local.md](hosting-local.md) ก่อน ส่วนที่พูดถึง Vercel ข้างล่างเป็นของเดิม
+
 ## ระบบนี้พึ่งเซิร์ฟเวอร์ 3 ที่ ไม่ใช่ที่เดียว
 
 | ชั้น | ใช้ทำอะไร | ขึ้นที่หน้าไหน | จุดที่พังบ่อย |
@@ -90,7 +93,7 @@ curl https://usage.khanoykorshabu.com/health
 ```powershell
 # ชั้น 1+2 — หน้าเว็บรุ่นไหน และ Vercel ส่งต่อไปเครื่องไหน
 $b = @{ action='getUniformItems'; _user=@{username='ipr'; branch='ipr'} } | ConvertTo-Json
-try { $r = Invoke-WebRequest -Method Post 'https://narai-branch.vercel.app/api/schedule' -ContentType 'application/json' -Body $b -TimeoutSec 60 -UseBasicParsing }
+try { $r = Invoke-WebRequest -Method Post 'https://branch.khanoykorshabu.com/api/schedule' -ContentType 'application/json' -Body $b -TimeoutSec 60 -UseBasicParsing }
 catch { $r = $_.Exception.Response }
 "x-app-build : " + $r.Headers['x-app-build']    # คอมมิตของหน้าเว็บที่ Vercel ให้บริการอยู่
 "x-upstream  : " + $r.Headers['x-upstream']     # host ของ office-server ที่ deployment นี้ชี้ไป
