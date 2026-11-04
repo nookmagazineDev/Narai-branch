@@ -210,6 +210,31 @@ CREATE TABLE dbo.hr_daily_sales (
 );
 GO
 
+/* ==================== ล็อกตารางงานรายสาขา ====================
+   ตัวเต็มพร้อมคำอธิบายอยู่ที่ docs/hr-schedule-lock.sql (รันแยกได้) */
+IF OBJECT_ID(N'dbo.hr_schedule_lock', N'U') IS NULL
+CREATE TABLE dbo.hr_schedule_lock (
+    branch        NVARCHAR(50)  NOT NULL,
+    locked_until  DATE          NOT NULL,
+    note          NVARCHAR(255) NULL,
+    locked_by     NVARCHAR(100) NULL,
+    locked_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_schedule_lock_at DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_hr_schedule_lock PRIMARY KEY (branch)
+);
+GO
+
+IF OBJECT_ID(N'dbo.hr_schedule_lock_log', N'U') IS NULL
+CREATE TABLE dbo.hr_schedule_lock_log (
+    log_id        BIGINT        IDENTITY(1,1) NOT NULL,
+    logged_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_schedule_lock_log_at DEFAULT (SYSDATETIME()),
+    branch        NVARCHAR(50)  NOT NULL,
+    locked_until  DATE          NULL,
+    actor         NVARCHAR(100) NULL,
+    note          NVARCHAR(255) NULL,
+    CONSTRAINT PK_hr_schedule_lock_log PRIMARY KEY (log_id)
+);
+GO
+
 /* ==========================================================================
    สิทธิ์: แนะนำให้สร้าง login แยกสำหรับเว็บ ไม่ใช้ sa
    (รันบน master ก่อน แล้วค่อยกลับมาที่ narai_hr)
