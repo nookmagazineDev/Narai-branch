@@ -24,6 +24,7 @@ import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
 import { ATTENDANCE_ACTIONS } from './attendance.js';
 import { ORDER_SHOP_ACTIONS } from './ordershop.js';
+import { SCHEDULE_LOCK_ACTIONS, assertNotLocked } from './schedule-lock.js';
 import {
   sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
 } from './hr-session.js';
@@ -796,6 +797,9 @@ async function saveTimesheet(body, session) {
   }
 
   await withTransaction(async (run) => {
+    // วันที่ออฟฟิศล็อกไว้แล้ว (ปิดงวด) — สาขาแก้ไม่ได้ทั้งเขียนและล้าง ปฏิเสธทั้งชุด (ดู schedule-lock.js)
+    await assertNotLocked(run, session, [...upserts, ...clears]);
+
     // ส่งทุกแถวไปเป็น JSON ก้อนเดียวแล้วให้ SQL Server แตกเองด้วย OPENJSON
     //
     // เดิมวนยิงทีละแถว (MERGE + INSERT log = 2 รอบต่อช่อง) บันทึก 15 ช่องกลายเป็น 30 รอบ
@@ -913,6 +917,7 @@ async function updateOTApprovalBulk(body, session) {
 
   let updated = 0;
   await withTransaction(async (run) => {
+    await assertNotLocked(run, session, [{ branch, workDate: dateStr }]);
     for (const u of updates) {
       const hrCode = str(u.hrCode);
       const name = str(u.name);
@@ -963,6 +968,7 @@ async function updateWorkStation(body, session) {
 
   let updated = 0;
   await withTransaction(async (run) => {
+    await assertNotLocked(run, session, [{ branch, workDate: dateStr }]);
     for (const u of updates) {
       const hrCode = str(u.hrCode);
       const name = str(u.name);
@@ -1026,6 +1032,9 @@ const ACTIONS = {
   saveTimesheet,
   updateOTApprovalBulk,
   updateWorkStation,
+
+  // ล็อกตารางงานรายสาขา (ออฟฟิศตั้งจากหน้า "ดูสแกนหน้า") — ดู schedule-lock.js
+  ...SCHEDULE_LOCK_ACTIONS,
 
   // หน้านับสต๊อก — ตรรกะอยู่ที่ stock.js แต่ใช้ endpoint /schedule เดียวกัน
   // เพราะฝั่ง Vercel มีตัวส่งต่ออยู่แล้วที่ /api/schedule ไม่ต้องเพิ่มไฟล์ใหม่บน Vercel
@@ -1101,6 +1110,12 @@ export async function scheduleHandler(req, res) {
   } catch (error) {
     if (error?.badRequest) return res.status(400).json({ status: 'error', message: error.message });
     if (error?.forbidden) return res.status(403).json({ status: 'error', message: error.message });
+    // 423 = ตารางวันนั้นถูกล็อก — ฝั่งเว็บใช้ code นี้แยกจาก error อื่น (ไม่เก็บเป็นร่างรอส่งซ้ำ)
+    if (error?.locked) {
+      return res.status(423).json({
+        status: 'error', code: 'SCHEDULE_LOCKED', message: error.message, locks: error.lockDetails || [],
+      });
+    }
     console.error(`schedule:${action} error:`, error);
     return res.status(500).json({ status: 'error', message: describeDbError(error) });
   }

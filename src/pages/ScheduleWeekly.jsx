@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { apiCall, errMessage, fetchScheduleEmployees } from '../services/api';
-import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { apiCall, errMessage, fetchScheduleEmployees, isScheduleLocked } from '../services/api';
+import { Loader2, ChevronLeft, ChevronRight, Save, Clock, Download, Trash2, AlertTriangle, RefreshCw, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PAID_LEAVE, UNPAID_LEAVE, leaveText } from '../utils/leaveCodes';
 import {
@@ -26,6 +26,33 @@ function formatDateLocal(date) {
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/** '2026-10-20' -> '20/10/2026' */
+const thaiDate = (ds) => {
+  const [y, m, d] = String(ds || '').split('-');
+  return y && m && d ? `${Number(d)}/${Number(m)}/${y}` : String(ds || '');
+};
+
+/**
+ * ล็อกที่ใช้กับสาขานี้ — ออฟฟิศล็อกไว้รายสาขา (รหัสพี่น้อง zjp/sjp นับเป็นร้านเดียวกัน)
+ * มีหลายแถวในกลุ่มเดียวกัน = ใช้วันที่ไกลสุด · '' = ไม่ได้ล็อก
+ */
+const lockDateFor = (rows, branch) => (rows || [])
+  .filter((r) => r?.lockedUntil && sameBranch(r.branch, branch))
+  .reduce((best, r) => (r.lockedUntil > best ? r.lockedUntil : best), '');
+
+/**
+ * ตัดแถวของวันที่ถูกล็อกออกจากร่างที่ค้างส่ง — ใช้ข้อมูลล็อกที่เซิร์ฟเวอร์ส่งมากับ 423
+ * ไม่ตัด = ร่างก้อนนั้นถูกปฏิเสธซ้ำไปตลอดกาล และพาแถวของวันที่ยังไม่ล็อกในก้อนเดียวกันค้างไปด้วย
+ */
+const dropLockedLogs = (logs, branch, locks) => {
+  const until = lockDateFor(locks, branch);
+  if (!until) return { kept: logs, dropped: [] };
+  const kept = [];
+  const dropped = [];
+  for (const l of logs) (String(l.workDate) <= until ? dropped : kept).push(l);
+  return { kept, dropped };
+};
 
 // วันหยุดนักขัตฤกษ์
 // เดิม hardcode ไว้เฉพาะปี 2026 พอขึ้นปีใหม่ดาวจะหายทั้งปีโดยไม่มีใครรู้
@@ -172,6 +199,10 @@ export default function ScheduleWeekly() {
   const [loadingBranches, setLoadingBranches] = useState(isAll);
 
   const [weekStartDate, setWeekStartDate] = useState(getStartOfWeek(new Date()));
+  // ออฟฟิศล็อกตารางของสาขานี้ไว้ถึงวันไหน ('' = ไม่ได้ล็อก) — วันที่ไม่เกินนี้สาขาแก้ไม่ได้
+  // user สิทธิ์ all แก้ข้ามล็อกได้ (ฝั่งเซิร์ฟเวอร์ก็ปล่อยผ่านเหมือนกัน) แต่ยังเห็นป้ายล็อกไว้รู้
+  const [lockedUntil, setLockedUntil] = useState('');
+  const [lockKey, setLockKey] = useState(0); // เพิ่มเลข = อ่านล็อกใหม่ (เช่นเพิ่งโดนปฏิเสธเพราะล็อก)
   const [scheduleData, setScheduleData] = useState({});
   const [isSaving, setIsSaving] = useState(false);
   // แยกสถานะโหลดกะของสัปดาห์ออกจากการโหลดพนักงาน — เปลี่ยนสัปดาห์จะได้ไม่ต้องล้างตารางทั้งหน้า
@@ -355,6 +386,28 @@ export default function ScheduleWeekly() {
       shortDate: `${d.getDate()} ${d.toLocaleDateString('th-TH', { month: 'short' })}`
     };
   });
+
+  /** วันนี้อยู่ในช่วงที่ออฟฟิศล็อกไว้ไหม */
+  const isLockedDay = (ds) => !!lockedUntil && ds <= lockedUntil;
+  /** แก้ช่องของวันนี้ได้ไหม — สิทธิ์ all แก้ได้เสมอ */
+  const canEditDay = (ds) => isAll || !isLockedDay(ds);
+  const weekHasLock = daysOfWeek.some((d) => isLockedDay(d.dateStr));
+
+  // ล็อกตารางงานของสาขาที่เปิดอยู่ — อ่านไม่ได้ก็ไม่เป็นไร (ฝั่งเซิร์ฟเวอร์กันซ้ำอยู่แล้ว)
+  // แค่ช่องจะไม่ขึ้นเป็นสีเทาไว้ก่อน แล้วไปโดนปฏิเสธตอนกดบันทึกแทน
+  useEffect(() => {
+    if (!effectiveBranch) { setLockedUntil(''); return undefined; }
+    let alive = true;
+    const branch = effectiveBranch;
+    apiCall('getScheduleLocks', { branches: [branch] })
+      .then((res) => { if (alive) setLockedUntil(lockDateFor(res.data, branch)); })
+      .catch((err) => {
+        if (!alive) return;
+        setLockedUntil('');
+        console.warn('อ่านล็อกตารางงานไม่สำเร็จ:', err?.message || err);
+      });
+    return () => { alive = false; };
+  }, [effectiveBranch, reloadKey, lockKey]);
 
   // โหลดรายชื่อสาขาสำหรับ user สิทธิ์ all (ใช้ในฟิลเตอร์เลือกสาขา)
   //
@@ -605,6 +658,23 @@ export default function ScheduleWeekly() {
           setDirtyKeys((prev) => new Set([...prev].filter((k) => !done.has(k))));
         }
       } catch (err) {
+        if (isScheduleLocked(err)) {
+          // วันที่ถูกล็อกส่งยังไงก็ไม่ผ่าน — ทิ้งเฉพาะแถวของวันนั้น ที่เหลือเก็บไว้ส่งรอบหน้า
+          const { kept, dropped } = dropLockedLogs(d.pendingLogs, d.branch, err.body?.locks);
+          if (dropped.length) {
+            const gone = keysOfLogs(dropped);
+            const cells = Object.fromEntries(Object.entries(d.cells || {}).filter(([k]) => !gone.has(k)));
+            if (kept.length) savePendingLogs(d.branch, d.weekStart, kept, cells, errMessage(err));
+            else clearDraft(d.branch, d.weekStart);
+            toast.error(`${errMessage(err)} — ทิ้งร่างของวันที่ถูกล็อก ${dropped.length} รายการ`, { duration: 8000 });
+            if (d.branch === effectiveBranch && d.weekStart === currentWeek) {
+              setDirtyKeys((prev) => new Set([...prev].filter((k) => !gone.has(k))));
+              setLockKey((n) => n + 1);
+            }
+            failed += kept.length;
+            continue;
+          }
+        }
         failed += d.pendingLogs.length;
         lastMsg = errMessage(err, 'ส่งร่างขึ้นระบบไม่สำเร็จ');
       }
@@ -638,6 +708,10 @@ export default function ScheduleWeekly() {
   }, [pendingCount, flushPendingDrafts]);
 
   const handleCellClick = (emp, dateStr) => {
+    if (!canEditDay(dateStr)) {
+      toast.error(`ตารางงานถูกออฟฟิศล็อกถึงวันที่ ${thaiDate(lockedUntil)} — แก้วันนี้ไม่ได้ (ติดต่อออฟฟิศหากต้องแก้)`);
+      return;
+    }
     const key = `${emp.hrCode}_${dateStr}`;
     setActiveCell({ ...emp, dateStr, key });
     setCellData(scheduleData[key] || EMPTY_CELL);
@@ -806,11 +880,24 @@ export default function ScheduleWeekly() {
       return;
     }
 
+    // ช่องที่แก้ค้างไว้ก่อนออฟฟิศล็อก (เช่นร่างในเครื่อง) — ส่งไปก็ถูกปฏิเสธทั้งชุด
+    // ตัดทิ้งแล้วบอกผู้ใช้ ช่องของวันที่ยังไม่ล็อกจะได้บันทึกผ่าน
+    const lockedDirty = [...dirtyKeys].filter((k) => !canEditDay(k.slice(-10)));
+    const saveKeys = lockedDirty.length
+      ? new Set([...dirtyKeys].filter((k) => canEditDay(k.slice(-10))))
+      : dirtyKeys;
+    if (lockedDirty.length) {
+      setDirtyKeys(saveKeys);
+      toast.error(`ข้าม ${lockedDirty.length} ช่องที่แก้ไว้ เพราะตารางถูกล็อกถึงวันที่ ${thaiDate(lockedUntil)} แล้ว`, { duration: 6000 });
+      // โหลดสัปดาห์ใหม่ให้ช่องที่ถูกข้ามกลับเป็นค่าในระบบ (ร่างของช่องที่ยังไม่ล็อกถูกคืนให้เองตอนโหลด)
+      if (saveKeys.size === 0) { setReloadKey((k) => k + 1); return; }
+    }
+
     setIsSaving(true);
     try {
       const logs = [];
       // ส่งเฉพาะช่องที่แก้ในรอบนี้ ไม่ส่งช่องที่โหลดมาจากประวัติแล้วไม่ได้แตะ (กันแถวซ้ำในชีท)
-      dirtyKeys.forEach(key => {
+      saveKeys.forEach(key => {
         const data = scheduleData[key];
         if (!data) return;
         // key = `${hrCode}_${YYYY-MM-DD}` — ตัดจากท้ายเสมอ
@@ -898,8 +985,15 @@ export default function ScheduleWeekly() {
       } catch (err) {
         // ส่งไม่ขึ้น = เก็บไว้ในเครื่อง ห้ามทิ้งงานที่ผู้ใช้กรอกมาแล้ว
         // เก็บทั้งแถวที่คิดเสร็จแล้ว (ส่งซ้ำได้เลย) และช่องที่แก้ (คืนหน้าจอได้)
+        // ออฟฟิศเพิ่งล็อกระหว่างที่เปิดหน้าอยู่ — ไม่เก็บเป็นร่างรอส่งซ้ำ (ส่งกี่ครั้งก็ไม่ผ่าน)
+        // อ่านล็อกใหม่ให้ช่องขึ้นสีเทา แล้วให้ผู้ใช้กดบันทึกอีกรอบ ช่องของวันที่ไม่ล็อกจะผ่าน
+        if (isScheduleLocked(err)) {
+          setLockKey((n) => n + 1);
+          toast.error(`${errMessage(err)} — กดบันทึกอีกครั้งเพื่อส่งเฉพาะวันที่ยังไม่ล็อก`, { duration: 8000 });
+          return;
+        }
         const cells = {};
-        dirtyKeys.forEach((k) => { if (scheduleData[k]) cells[k] = scheduleData[k]; });
+        saveKeys.forEach((k) => { if (scheduleData[k]) cells[k] = scheduleData[k]; });
         const msg = errMessage(err, 'เกิดข้อผิดพลาดในการบันทึก');
         savePendingLogs(effectiveBranch, weekKey, logs, cells, msg);
         setPendingCount(countPendingLogs());
@@ -909,6 +1003,7 @@ export default function ScheduleWeekly() {
       toast.error(errMessage(err, 'เกิดข้อผิดพลาดในการบันทึก'));
     } finally {
       setIsSaving(false);
+      if (lockedDirty.length) setReloadKey((k) => k + 1);
     }
   };
 
@@ -1149,6 +1244,19 @@ export default function ScheduleWeekly() {
         </div>
       )}
 
+      {/* ออฟฟิศล็อกตารางของสัปดาห์นี้ไว้ (ทั้งหมดหรือบางวัน) */}
+      {effectiveBranch && weekHasLock && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-gray-300 bg-gray-100 px-4 py-3 flex-shrink-0">
+          <Lock className="mt-0.5 h-5 w-5 flex-shrink-0 text-gray-600" />
+          <span className="text-sm text-gray-800">
+            ตารางงานสาขานี้ถูกออฟฟิศ<strong>ล็อกถึงวันที่ {thaiDate(lockedUntil)}</strong>
+            {isAll
+              ? ' — คุณมีสิทธิ์ all จึงยังแก้วันที่ถูกล็อกได้'
+              : ' — วันที่ถูกล็อกแก้ไม่ได้ ลงตารางได้เฉพาะวันหลังจากนั้น (ติดต่อออฟฟิศหากต้องแก้)'}
+          </span>
+        </div>
+      )}
+
       {/* แถบเตือนร่างที่ค้าง — ต้องเห็นชัดว่า "ข้อมูลไม่หาย" ไม่ใช่ปล่อยให้ผู้ใช้เดาเอง */}
       {pendingCount > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
@@ -1223,6 +1331,11 @@ export default function ScheduleWeekly() {
                       <th key={d.dateStr} className="px-2 py-3 border-b border-r text-center min-w-[120px] align-top">
                         <div className="font-bold">{d.dayName}{d.isHoliday && <span title="วันนักขัตฤกษ์"> ⭐</span>}</div>
                         <div className="text-gray-500 font-normal">{d.shortDate}</div>
+                        {isLockedDay(d.dateStr) && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-gray-600 px-1.5 py-0.5 text-[11px] font-normal text-white" title={`ออฟฟิศล็อกตารางถึง ${thaiDate(lockedUntil)}`}>
+                            <Lock className="h-3 w-3" /> ล็อก
+                          </div>
+                        )}
                         <div className="mt-1 inline-block bg-emerald-500 text-white rounded px-1.5 py-0.5 text-[11px] font-normal">฿ {formatNumber(summary.dailyWage?.[d.dateStr] || 0)}</div>
                         <div className="mt-1"><span className="inline-block bg-cyan-100 text-cyan-700 rounded px-1.5 py-0.5 text-[11px] font-normal">👤 {summary.dailyCount?.[d.dateStr] || 0} คน</span></div>
                       </th>
@@ -1253,7 +1366,12 @@ export default function ScheduleWeekly() {
                     {daysOfWeek.map(d => (
                       <td
                         key={d.dateStr}
-                        className="p-1 border-r cursor-pointer hover:bg-purple-50/50 align-middle"
+                        className={`p-1 border-r align-middle ${
+                          !canEditDay(d.dateStr)
+                            ? 'cursor-not-allowed bg-gray-100/80 opacity-70'
+                            : `cursor-pointer hover:bg-purple-50/50 ${isLockedDay(d.dateStr) ? 'bg-gray-50' : ''}`
+                        }`}
+                        title={isLockedDay(d.dateStr) ? `ออฟฟิศล็อกตารางถึง ${thaiDate(lockedUntil)}${isAll ? ' (สิทธิ์ all ยังแก้ได้)' : ''}` : undefined}
                         onClick={() => handleCellClick(emp, d.dateStr)}
                       >
                         {renderCell(emp, d.dateStr)}

@@ -26,6 +26,8 @@ const READ_ONLY = new Set([
   'getBranchStats',
   'getDailySales',
   'getHistoryData',
+  // ล็อกตารางงานรายสาขา (ดู office-server/schedule-lock.js)
+  'getScheduleLocks',
   // หน้านับสต๊อก (ยังไม่เปิดใช้จากหน้าเว็บ — ดู docs/stock-sql-migration.md)
   'getStockItems',
   'stockPulse',

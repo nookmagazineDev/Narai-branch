@@ -61,6 +61,7 @@ const SQL_ACTIONS = new Set([
   'saveTimesheet',         // ScheduleWeekly
   'updateOTApprovalBulk',  // ScheduleHistory
   'updateWorkStation',     // ยังไม่มีหน้าไหนเรียก
+  'getScheduleLocks',      // ScheduleWeekly (วันที่ออฟฟิศล็อกตารางไว้)
   'getBranchStats',        // ScheduleWeekly (การ์ดเป้าขาย)
   'getDailySales',         // ScheduleHistory (การ์ดยอดขาย)
 
@@ -447,16 +448,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class ApiError extends Error {
   // kind: 'network' = ติดต่อ/อ่านคำตอบไม่ได้ (ลองใหม่ได้), 'server' = เซิร์ฟเวอร์ตอบว่าทำไม่สำเร็จ
-  constructor(message, kind, cause) {
+  // code = รหัสที่เซิร์ฟเวอร์ส่งมา (เช่น 'SCHEDULE_LOCKED') · status = HTTP status · body = คำตอบทั้งก้อน
+  constructor(message, kind, cause, extra = {}) {
     super(message);
     this.name = 'ApiError';
     this.kind = kind;
     this.cause = cause;
+    this.code = extra.code || '';
+    this.status = extra.status || 0;
+    this.body = extra.body || null;
   }
 }
 
 // ข้อความ error ที่เอาไปโชว์ผู้ใช้ได้เลย — ใช้แทนการ hardcode "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ"
 // ซึ่งเดิมกลบข้อความจริงจากเซิร์ฟเวอร์จนหาสาเหตุไม่เจอ
+/** เซิร์ฟเวอร์ปฏิเสธเพราะวันนั้นออฟฟิศล็อกตารางงานไว้แล้ว (HTTP 423) — ลองส่งซ้ำก็ไม่ผ่าน */
+export const isScheduleLocked = (err) => err?.code === 'SCHEDULE_LOCKED' || err?.status === 423;
+
 export const errMessage = (err, fallback = 'เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง') => {
   if (!err) return fallback;
   if (err.name === 'AbortError') return 'ยกเลิกการเชื่อมต่อแล้ว';
@@ -531,6 +539,8 @@ const requestOnce = async (action, payload, timeoutMs, via) => {
     throw new ApiError(
       result.message || `เซิร์ฟเวอร์ตอบกลับผิดพลาด (HTTP ${response.status})`,
       response.status >= 500 ? 'network' : 'server',
+      undefined,
+      { code: result.code, status: response.status, body: result },
     );
   }
 
