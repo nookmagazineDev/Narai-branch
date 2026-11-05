@@ -956,6 +956,182 @@ async function updateOTApprovalBulk(body, session) {
   return { updated };
 }
 
+/**
+ * ค่าแรงของหนึ่งช่อง — สูตรเดียวกับ calculateCellWage ใน src/pages/ScheduleWeekly.jsx ทุกบรรทัด
+ * (ใช้กับ editTimesheetEntry ที่ออฟฟิศแก้เวลา: ค่าแรงของ P/T ขึ้นกับชั่วโมง ต้องคิดใหม่ให้ตรงกับที่สาขาจะคิด)
+ * แก้สูตรที่นั่นเมื่อไหร่ ต้องแก้ที่นี่ด้วย
+ */
+function cellWage({ rate, empType, checkIn, checkOut, leaveNote, unpaidLeave, hourlyLeave, isStop, breakMinutes }) {
+  let wage = 0;
+  const ci = checkIn || '';
+  const co = checkOut || '';
+  const l1 = leaveNote || '';
+  const l2 = unpaidLeave || '';
+  const hl = hourlyLeave || '';
+  if (l2 !== '') {
+    wage = (l2 === 'วันหยุดธรรมดา' && empType === 'F/T') ? rate : 0;
+  } else if (l1 !== '') {
+    wage = empType === 'P/T' ? 0 : rate;
+  } else if (empType === 'F/T') {
+    wage = rate;
+    if (hl !== '') {
+      const h = hl === 'ครึ่งวัน' ? 4 : hl === 'เต็มวัน' ? 8 : parseInt(hl, 10) || 0;
+      if (rate > 0) wage = rate - (rate / 8) * h;
+    }
+  } else if (empType === 'DAY' || empType === 'DAY9') {
+    const baseHours = empType === 'DAY9' ? 9 : 8;
+    if (!isStop && ci) {
+      wage = rate;
+      if (hl !== '') {
+        const h = hl === 'ครึ่งวัน' ? baseHours / 2 : hl === 'เต็มวัน' ? baseHours : parseInt(hl, 10) || 0;
+        if (rate > 0) wage = rate - (rate / baseHours) * h;
+      }
+    }
+  } else if (empType === 'P/T') {
+    if (!isStop && ci && co) {
+      const [h1, m1] = ci.split(':').map(Number);
+      const [h2, m2] = co.split(':').map(Number);
+      const t1 = h1 * 60 + m1;
+      let t2 = h2 * 60 + m2;
+      if (t2 < t1) t2 += 1440;
+      const dur = (t2 - t1) - (parseInt(breakMinutes, 10) || 0);
+      if (dur > 0) wage = (dur / 60) * rate;
+    }
+  }
+  return parseFloat(wage.toFixed(2));
+}
+
+/** 'HH:mm' ที่หน้าลงตารางเลือกได้ (นาทีทีละ 10, ออกงานถึง 24:00) — ไม่ตรง = ช่องในหน้าสาขาขึ้นว่าง */
+const isGridTime = (t, { allow24 = false } = {}) => {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(t || ''));
+  if (!m) return false;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (mi % 10 !== 0 || mi > 50) return false;
+  return allow24 ? (h < 24 || (h === 24 && mi === 0)) : h < 24;
+};
+
+/**
+ * ออฟฟิศแก้ "ตารางงานที่ลงไว้" ของหนึ่งคนหนึ่งวัน (หน้า "ดูสแกนหน้า" ของ naraipizzeria)
+ *
+ *   { workDate, branch, hrCode, checkIn, checkOut, breakMinutes, breakStart, leaveNote, unpaidLeave }
+ *   branch = ค่าที่เก็บจริงในแถว (ไม่แปลงรหัสพ้อง) · breakMinutes '' = ไม่ได้ลงเบรค, 0 = ไม่เบรค
+ *   leaveNote / unpaidLeave = รหัสลา (ว่างทั้งคู่ = มาทำงาน)
+ *
+ * แก้เฉพาะช่องเวลา/สถานะของแถวที่สาขาลงไว้แล้ว ช่องอื่น (OT, ชม.สะสม, หมายเหตุ, ผู้อนุมัติ OT) คงเดิม
+ * ค่าแรงคิดใหม่ด้วยสูตรเดียวกับหน้าลงตาราง แล้วเขียนทับแถวเดิม หน้าสาขาจึงเห็นค่าเดียวกันทันที
+ * ใช้ได้เฉพาะสิทธิ์ all — ไม่ติดล็อกตารางงาน (ออฟฟิศเป็นคนแก้หลังปิดงวด)
+ * เก็บค่าเดิมและค่าใหม่ลง hr_timesheet_log (action = 'office') ไว้ตรวจย้อนหลัง
+ */
+async function editTimesheetEntry(body, session) {
+  if (!session?.isAll) {
+    throw Object.assign(new Error('แก้ตารางงานจากออฟฟิศได้เฉพาะสิทธิ์ all'), { forbidden: true });
+  }
+  const bad = (m) => Object.assign(new Error(m), { badRequest: true });
+  const workDate = str(body.workDate);
+  const branch = str(body.branch);
+  const hrCode = str(body.hrCode);
+  if (!isDateStr(workDate) || !branch || !hrCode) throw bad('ระบุวันที่/สาขา/รหัสพนักงานไม่ครบ');
+
+  const leaveNote = str(body.leaveNote);
+  const unpaidLeave = str(body.unpaidLeave);
+  if (leaveNote && unpaidLeave) throw bad('เลือกได้อย่างเดียว: ลารับค่าแรง หรือ หยุดไม่รับค่าแรง');
+  const off = Boolean(leaveNote || unpaidLeave);
+
+  const checkIn = off ? '' : str(body.checkIn);
+  const checkOut = off ? '' : str(body.checkOut);
+  const breakRaw = off ? '' : str(body.breakMinutes);
+  const breakStart = off ? '' : str(body.breakStart);
+  if (!off) {
+    if (!isGridTime(checkIn)) throw bad('เวลาเข้าต้องเป็น HH:mm นาทีทีละ 10 (เช่น 09:30)');
+    if (checkOut && !isGridTime(checkOut, { allow24: true })) throw bad('เวลาออกต้องเป็น HH:mm นาทีทีละ 10 (ถึง 24:00)');
+    if (breakStart && !isGridTime(breakStart)) throw bad('เวลาเริ่มเบรคต้องเป็น HH:mm นาทีทีละ 10');
+  }
+  let breakMinutes = null;
+  if (breakRaw !== '') {
+    breakMinutes = Number(breakRaw);
+    if (!Number.isInteger(breakMinutes) || breakMinutes < 0 || breakMinutes > 300 || breakMinutes % 30 !== 0) {
+      throw bad('ระยะเบรคต้องเป็น 0–300 นาที ทีละ 30 นาที');
+    }
+  }
+  const breakTime = breakMinutes == null ? null : breakMinutes === 0 ? 'ไม่เบรค' : `${breakMinutes / 60} ชม.`;
+  let breakRange = null;
+  if (breakStart && breakMinutes) {
+    const [h, m] = breakStart.split(':').map(Number);
+    const t = h * 60 + m + breakMinutes;
+    breakRange = `${breakStart}-${String(Math.floor(t / 60) % 24).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  }
+  const actor = textOrNull(session.username);
+
+  return withTransaction(async (run) => {
+    const key = {
+      d: { type: sql.Date, value: workDate },
+      b: { type: sql.NVarChar(50), value: branch },
+      c: { type: sql.NVarChar(30), value: hrCode },
+    };
+    const cur = (await run(
+      `SELECT ${HISTORY_COLUMNS} FROM dbo.hr_timesheet WITH (UPDLOCK, HOLDLOCK)
+        WHERE work_date = @d AND branch = @b AND hr_code = @c`,
+      key
+    )).recordset?.[0];
+    if (!cur) throw bad('ไม่พบแถวตารางงานนี้แล้ว (สาขาอาจล้างข้อมูลไป) — กดโหลดใหม่แล้วลองอีกครั้ง');
+
+    const emp = (await run(
+      'SELECT TOP 1 daily_wage, emp_type FROM dbo.hr_employee WHERE hr_code = @c',
+      { c: key.c }
+    )).recordset?.[0];
+    const empType = str(emp?.emp_type) || str(cur.emp_type);
+    // ไม่มีในทะเบียนพนักงาน = ไม่รู้อัตราค่าแรง จึงคงค่าแรงเดิมไว้ ดีกว่าเขียนเป็น 0
+    const wage = emp
+      ? cellWage({
+        rate: num(emp.daily_wage), empType, checkIn, checkOut, leaveNote, unpaidLeave,
+        hourlyLeave: cur.hourly_leave == null ? '' : String(cur.hourly_leave),
+        isStop: off, breakMinutes: breakMinutes ?? '',
+      })
+      : num(cur.wage);
+
+    await run(
+      `UPDATE dbo.hr_timesheet
+          SET check_in = @ci, check_out = @co, break_time = @bt, break_range = @br,
+              leave_note = @ln, unpaid_leave = @ul, status = @st, wage = @wage,
+              updated_at = SYSDATETIME(), updated_by = @actor
+        WHERE work_date = @d AND branch = @b AND hr_code = @c`,
+      {
+        ...key,
+        ci: { type: sql.VarChar(5), value: checkIn || null },
+        co: { type: sql.VarChar(5), value: checkOut || null },
+        bt: { type: sql.NVarChar(20), value: breakTime },
+        br: { type: sql.VarChar(20), value: breakRange },
+        ln: { type: sql.NVarChar(100), value: leaveNote || null },
+        ul: { type: sql.NVarChar(100), value: unpaidLeave || null },
+        st: { type: sql.NVarChar(20), value: off ? 'หยุด' : 'มาทำงาน' },
+        wage: { type: sql.Decimal(12, 2), value: wage },
+        actor: { type: sql.NVarChar(100), value: actor },
+      }
+    );
+
+    const before = toHistoryRow(cur);
+    const after = (await run(
+      `SELECT ${HISTORY_COLUMNS} FROM dbo.hr_timesheet WHERE work_date = @d AND branch = @b AND hr_code = @c`,
+      key
+    )).recordset?.[0];
+    await run(
+      `INSERT INTO dbo.hr_timesheet_log (action, work_date, branch, hr_code, actor, payload)
+       VALUES ('office', @d, @b, @c, @actor, @payload)`,
+      {
+        ...key,
+        // actor = บัญชีจริง (เหมือน saveTimesheet) · ชื่อคนที่กดในแดชบอร์ดออฟฟิศเก็บไว้ใน payload.by
+        actor: { type: sql.NVarChar(100), value: actor },
+        payload: {
+          type: sql.NVarChar(sql.MAX),
+          value: JSON.stringify({ by: str(session.name), before, after: after ? toHistoryRow(after) : null }),
+        },
+      }
+    );
+    return after ? toHistoryRow(after) : null;
+  });
+}
+
 /** จุดปฏิบัติงานของวัน (ยังไม่มีหน้าไหนเรียก แต่ระบบเดิมมี จึงย้ายมาด้วยกัน) */
 async function updateWorkStation(body, session) {
   const dateStr = str(body.dateStr);
@@ -1032,6 +1208,8 @@ const ACTIONS = {
   saveTimesheet,
   updateOTApprovalBulk,
   updateWorkStation,
+  // ออฟฟิศแก้ตารางงานที่ลงไว้ทีละช่อง (หน้า "ดูสแกนหน้า" ของ naraipizzeria)
+  editTimesheetEntry,
 
   // ล็อกตารางงานรายสาขา (ออฟฟิศตั้งจากหน้า "ดูสแกนหน้า") — ดู schedule-lock.js
   ...SCHEDULE_LOCK_ACTIONS,
