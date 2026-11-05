@@ -38,7 +38,7 @@
 "ล็อกถึงวันที่ X" = สาขาแก้ตารางงาน/อนุมัติ OT ของวันที่ ≤ X ไม่ได้ (ตอบ HTTP 423 · user สิทธิ์ all แก้ได้เสมอ)
 ต้องมีตาราง `dbo.hr_schedule_lock` ในฐาน narai_hr — ถ้า login ของ service สร้างตารางเองไม่ได้
 ให้รัน [docs/hr-schedule-lock.sql](../docs/hr-schedule-lock.sql) ใน SSMS (ด้วย sa) ครั้งเดียว
-แนะนำให้ตั้ง `SCHEDULE_LOCK_KEY` ใน `.env` (และตั้งค่าเดียวกันบน Vercel ของ naraipizzeria) กันสาขาตั้ง/ปลดล็อกเอง
+แนะนำให้ตั้ง `SCHEDULE_LOCK_KEY` ใน `.env` (และตั้งค่าเดียวกันใน `.env.local` ของเว็บ office naraipizzeria แล้วรีสตาร์ต service `NaraiOfficeWeb`) กันสาขาตั้ง/ปลดล็อกเอง
 
 **กล่องยูนิฟอร์ม** (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน) ต้องสร้างตาราง `dbo.UniformBranch` ครั้งเดียวก่อนใช้:
 ```powershell
@@ -142,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cloudflare-tunnel.ps1 -Token 
 ## ตั้งค่า (ไม่บังคับ) — ไฟล์ .env
 - `PORT` (ค่าเริ่มต้น 8787)
 - `API_TOKEN` (ถ้าตั้ง ต้องส่ง header x-api-token ให้ตรง — ปัจจุบันเว้นว่าง)
-- `SCHEDULE_LOCK_KEY` กุญแจของคำสั่ง `setScheduleLock` (ตั้ง/ปลดล็อกตารางงาน) — ต้องตรงกับ env ชื่อเดียวกันบน Vercel ของ naraipizzeria · เว้นว่าง = user สิทธิ์ all ตั้งล็อกได้โดยไม่ต้องมีกุญแจ
+- `SCHEDULE_LOCK_KEY` กุญแจของคำสั่ง `setScheduleLock` (ตั้ง/ปลดล็อกตารางงาน) — ต้องตรงกับ env ชื่อเดียวกันใน `.env.local` ของเว็บ office (naraipizzeria) · เว้นว่าง = user สิทธิ์ all ตั้งล็อกได้โดยไม่ต้องมีกุญแจ
 - `WARM_DAYS` (จำนวนวันที่อุ่น cache, ค่าเริ่มต้น 70)
 - `SALES_BASE` (URL ของ ctranbetweendate)
 - `POS_TIMEOUT_MS` / `POS_RETRIES` (timeout+จำนวนครั้งที่ลองใหม่ตอนเรียก POS API, ค่าเริ่มต้น 60000 / 2)
