@@ -83,3 +83,26 @@ node scripts/import-sup-cost.mjs --apply    # เขียนจริง
 
 ไม่บังคับ: deploy `apps-script.js` ใหม่ (มี `saveSupCost`/`getSupCost` ใน `MOVED_TO_SQL`) ให้เครื่องที่ถือหน้าเว็บรุ่นเก่า
 ได้ข้อความให้รีเฟรช แทนที่จะบันทึกลงชีทเงียบ ๆ
+
+## ค่าใช้จ่ายอื่น ๆ ในตารางสรุปกำไร บันทึกลง SQL (พ.ย. 2026)
+
+ช่องกรอกเองในตารางสรุปกำไร/ขาดทุนบน Dashboard (Petty Cash, ค่าเช่าพื้นที่, ค่าน้ำ, ค่าไฟ, ค่าน้ำแข็ง, ค่าโทรศัพท์,
+ค่าแก๊ส, ค่าประกันภัย + ยอดขาย Member / Delivery) เดิมไม่ได้บันทึกที่ไหนเลย รีเฟรชแล้วหาย ตอนนี้เก็บที่
+`InventoryNarai.dbo.profit_expense` ต่อเดือนต่อสาขา (`office-server/profitexpense.js`) ทุกสาขากรอกของตัวเองได้
+บันทึกให้เองทันทีที่ออกจากช่อง/กด Enter · ช่วงวันที่ต้องอยู่ในเดือนเดียวถึงแก้ได้ (คร่อมหลายเดือนแสดงยอดรวม)
+
+ขั้นตอน (ตามลำดับ):
+
+1. `update-office-server.bat` (Run as administrator) — สร้างตารางจาก `office-server/sql/profitexp-001-table.sql` + เพิ่ม action
+2. `update-web.bat` (Run as administrator) — หน้าเว็บโหลด/บันทึกค่าใช้จ่ายผ่าน SQL
+3. ย้ายข้อมูลเดิมจาก Google Sheet (PowerShell ในโฟลเดอร์ `D:\Narai-branch-main\office-server`)
+   ตั้งแชร์ชีทเป็น "ทุกคนที่มีลิงก์ • ผู้อ่าน" ก่อน แล้วก๊อป URL ของแท็บนั้นมาวาง:
+
+```powershell
+node scripts/import-profit-expense.mjs --url="https://docs.google.com/spreadsheets/d/.../edit#gid=..."            # รายงานอย่างเดียว
+node scripts/import-profit-expense.mjs --url="https://docs.google.com/spreadsheets/d/.../edit#gid=..." --apply    # เขียนจริง
+```
+
+สคริปต์อ่านหัวตารางแล้วเดารูปแบบให้เอง (แถวละเดือน / รายการเป็นแถว-เดือนเป็นคอลัมน์ / แถวละรายจ่าย) ดูบรรทัด
+"รูปแบบชีท" กับตารางตัวเลขที่พิมพ์ออกมาให้ตรงกับชีทก่อนใส่ `--apply` · แท็บที่เป็นของสาขาเดียวใส่ `--branch=crm`
+แท็บที่เป็นของเดือนเดียวใส่ `--month=2026-10` · รันซ้ำได้ ไม่แตะค่าที่สาขากรอกผ่านเว็บ

@@ -98,6 +98,11 @@ const SQL_ACTIONS = new Set([
   'getSupCost',                 // ExpenseEntry
   'saveSupCost',                // ExpenseEntry
 
+  // กลุ่มที่ 3.02 — ค่าใช้จ่ายอื่น ๆ ในตารางสรุปกำไร (Dashboard) ต่อเดือนต่อสาขา (ดู office-server/profitexpense.js)
+  // ของใหม่ ไม่เคยมีใน Apps Script — เดิมช่องพวกนี้ไม่ได้บันทึกที่ไหนเลย
+  'getProfitExpenses',          // ProfitSummary
+  'saveProfitExpenses',         // ProfitSummary
+
   // กลุ่มที่ 3.05 — ยูนิฟอร์มพนักงาน (ปุ่มรูปเสื้อในหน้ารายชื่อพนักงาน)
   //
   // ทั้งชุดเป็นของใหม่ ไม่เคยมีใน Apps Script จึงไม่มีทางถอยไปชีท — เครื่องที่ถือไฟล์เก่า

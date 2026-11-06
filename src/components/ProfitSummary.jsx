@@ -2,11 +2,15 @@
 //   รายรับ: Gross Sales / Tax / Sub Total / Net Sale (จากแดชบอร์ด = cpaidbetweendate)
 //   ต้นทุน (Total Food Cost): ดึงจาก "ใบเบิก" (TRF/RCV) แยกหมวดตามช่วงรหัสสินค้า
 //     กดหมวด → ดูรายการสินค้าในหมวด (มูลค่ารวมแต่ละตัว) → กดรายการ → ดูประวัติเบิก (วันที่/จำนวน/ราคา/หน่วย/มูลค่า)
-//   ค่าใช้จ่ายอื่น (เช่า/น้ำ/ไฟ/…): กรอกเอง (ไม่บันทึกค่า)
+//   ค่าใช้จ่ายอื่น (เช่า/น้ำ/ไฟ/…) + Member/Delivery: กรอกเอง เก็บใน SQL dbo.profit_expense ต่อเดือนต่อสาขา
+//     (office-server/profitexpense.js) บันทึกเองทันทีที่กรอกเสร็จ (ออกจากช่อง/กด Enter)
+//     ช่วงวันที่ต้องอยู่ในเดือนเดียวถึงแก้ได้ — คร่อมหลายเดือนแสดงยอดรวมของทุกเดือนแบบอ่านอย่างเดียว
 //   กำไร = Net Sale − (Total Food Cost + ค่าใช้จ่ายรวม)
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { RefreshCw, X, Eye, Wallet, AlertCircle, ChevronRight, PieChart, Boxes } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import toast from 'react-hot-toast';
+import { RefreshCw, X, Eye, Wallet, AlertCircle, ChevronRight, PieChart, Boxes, Check } from 'lucide-react';
 import { fetchWithdrawals, fetchStockCount } from '../services/dashboardApi';
+import { apiCall } from '../services/api';
 
 const baht = (n) =>
   '฿' + Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -46,6 +50,34 @@ const EXPENSES = [
   { key: 'gas', label: 'ค่าแก๊ส' },
   { key: 'insurance', label: 'ค่าประกันภัย' },
 ];
+// ช่องที่กรอกเองทั้งหมด (ค่าใช้จ่าย + ยอด Member/Delivery ฝั่งรายรับ) — ต้องตรงกับ PROFIT_EXPENSE_KEYS ใน office-server/profitexpense.js
+const MANUAL_KEYS = [...EXPENSES.map((e) => e.key), 'member', 'delivery'];
+const emptyManual = () => Object.fromEntries(MANUAL_KEYS.map((k) => [k, '']));
+
+// เดือน 'YYYY-MM' ทุกเดือนที่ช่วงวันที่ครอบ (เพดาน 36 เดือน กันช่วงยาวผิดปกติ)
+function monthsBetween(startDate, endDate) {
+  const a = String(startDate || '').slice(0, 7);
+  const b = String(endDate || startDate || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(a) || !/^\d{4}-\d{2}$/.test(b)) return [];
+  const [from, to] = a <= b ? [a, b] : [b, a];
+  let [y, m] = from.split('-').map(Number);
+  const out = [];
+  while (out.length < 36) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    out.push(key);
+    if (key >= to) break;
+    if (++m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+// เทียบค่าในช่องแบบตัวเลข ('1200' กับ '1200.00' ถือว่าเท่ากัน · ว่าง = ไม่มีค่า)
+const normAmt = (v) => {
+  const t = String(v ?? '').replace(/,/g, '').trim();
+  if (t === '') return '';
+  const n = Number(t);
+  return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : t;
+};
+const toInputs = (values) => Object.fromEntries(MANUAL_KEYS.map((k) => [k, values?.[k] === undefined ? '' : String(values[k])]));
 
 // ───────── Modal: ประวัติการเบิกของสินค้าตัวเดียว ─────────
 function ItemHistoryModal({ item, onClose }) {
@@ -302,9 +334,12 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const [error, setError] = useState('');
   const [lines, setLines] = useState(null);     // null = ยังไม่โหลด
   const [loadedRange, setLoadedRange] = useState('');
-  const [expenses, setExpenses] = useState(() => Object.fromEntries(EXPENSES.map((e) => [e.key, ''])));
-  const [member, setMember] = useState('');
-  const [delivery, setDelivery] = useState('');
+  // ช่องกรอกเอง (ค่าใช้จ่ายอื่น + Member/Delivery) — ค่าในช่อง กับค่าที่บันทึกไว้ใน SQL ของเดือนที่แก้อยู่
+  const [expenses, setExpenses] = useState(emptyManual);
+  const [savedExp, setSavedExp] = useState(emptyManual);
+  const [expInfo, setExpInfo] = useState({ key: '', loading: false, error: '', updatedAt: '', updatedBy: '' });
+  const [savingKeys, setSavingKeys] = useState(() => new Set());
+  const [failedKeys, setFailedKeys] = useState(() => new Set());
   const [openCat, setOpenCat] = useState(null);
   const [stock, setStock] = useState(null);       // { current:{countDate,source,data}, previous:{countDate,source,data} }
   const [stockModal, setStockModal] = useState(null); // { title, rows, countDate, source, total } | null
@@ -366,6 +401,91 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
     }
   }, [rangeKey, lines, loadedRange, load]);
 
+  // ───── ค่าใช้จ่ายอื่น: โหลดจาก SQL ตามสาขา + เดือนที่ช่วงวันที่ครอบ ─────
+  const months = useMemo(() => monthsBetween(startDate, endDate), [startDate, endDate]);
+  const editMonth = months.length === 1 ? months[0] : '';      // แก้ได้เฉพาะช่วงที่อยู่ในเดือนเดียว
+  const expKey = branch && months.length ? `${branch}|${months[0]}|${months[months.length - 1]}` : '';
+  const expKeyRef = useRef(expKey);   // ใช้เช็คตอนผลบันทึกกลับมาว่ายังเป็นสาขา/เดือนเดิมไหม
+  useEffect(() => { expKeyRef.current = expKey; }, [expKey]);
+  const [expReload, setExpReload] = useState(0);
+
+  useEffect(() => {
+    if (!expKey) return undefined;
+    let alive = true;
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setExpenses(emptyManual());
+    setSavedExp(emptyManual());
+    setFailedKeys(new Set());
+    setExpInfo({ key: expKey, loading: true, error: '', updatedAt: '', updatedBy: '' });
+    /* eslint-enable react-hooks/set-state-in-effect */
+    apiCall('getProfitExpenses', { branch, from: months[0], to: months[months.length - 1] })
+      .then((res) => {
+        if (!alive) return;
+        const byMonth = res?.data?.months || {};
+        let values = {};
+        let updatedAt = '', updatedBy = '';
+        if (editMonth) {
+          values = byMonth[editMonth]?.values || {};
+          updatedAt = byMonth[editMonth]?.updatedAt || '';
+          updatedBy = byMonth[editMonth]?.updatedBy || '';
+        } else {
+          // คร่อมหลายเดือน: รวมทุกเดือน (อ่านอย่างเดียว)
+          for (const m of Object.values(byMonth)) {
+            for (const [k, v] of Object.entries(m.values || {})) values[k] = Math.round(((values[k] || 0) + Number(v || 0)) * 100) / 100;
+          }
+        }
+        const inputs = toInputs(values);
+        setExpenses(inputs);
+        setSavedExp(inputs);
+        setExpInfo({ key: expKey, loading: false, error: '', updatedAt, updatedBy });
+      })
+      .catch((e) => {
+        if (alive) setExpInfo({ key: expKey, loading: false, error: e.message || 'โหลดค่าใช้จ่ายที่บันทึกไว้ไม่สำเร็จ', updatedAt: '', updatedBy: '' });
+      });
+    return () => { alive = false; };
+    // months/editMonth เปลี่ยนตาม expKey อยู่แล้ว
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expKey, expReload]);
+
+  const expReady = !!expKey && expInfo.key === expKey && !expInfo.loading && !expInfo.error;
+  const canEditExp = expReady && !!editMonth;
+
+  // บันทึกช่องเดียวทันทีที่กรอกเสร็จ (ออกจากช่อง / Enter) — ค่าไม่เปลี่ยนจากที่บันทึกไว้ก็ไม่ส่ง
+  const saveExpense = async (key) => {
+    if (!canEditExp) return;
+    const value = expenses[key];
+    if (normAmt(value) === normAmt(savedExp[key])) return;
+    if (normAmt(value) !== '' && !(Number(normAmt(value)) >= 0)) {
+      setFailedKeys((p) => new Set(p).add(key));
+      return;
+    }
+    const keyAtSave = expKey;
+    setSavingKeys((p) => new Set(p).add(key));
+    try {
+      const res = await apiCall('saveProfitExpenses', { branch, month: editMonth, values: { [key]: normAmt(value) } });
+      if (expKeyRef.current !== keyAtSave) return;   // เปลี่ยนสาขา/เดือนไประหว่างรอ — ผลนี้ไม่ใช่ของหน้าที่เห็นแล้ว
+      const saved = res?.data?.saved || {};
+      setSavedExp((p) => ({ ...p, [key]: saved.values?.[key] === undefined ? '' : String(saved.values[key]) }));
+      setExpInfo((p) => ({ ...p, updatedAt: saved.updatedAt || p.updatedAt, updatedBy: saved.updatedBy || p.updatedBy }));
+      setFailedKeys((p) => { const n = new Set(p); n.delete(key); return n; });
+    } catch (e) {
+      if (expKeyRef.current !== keyAtSave) return;
+      setFailedKeys((p) => new Set(p).add(key));
+      toast.error(`บันทึกค่าใช้จ่ายไม่สำเร็จ: ${e.message || 'เกิดข้อผิดพลาด'}`);
+    } finally {
+      setSavingKeys((p) => { const n = new Set(p); n.delete(key); return n; });
+    }
+  };
+  const dirtyCount = MANUAL_KEYS.filter((k) => normAmt(expenses[k]) !== normAmt(savedExp[k])).length;
+
+  // ปิด/รีเฟรชแท็บทั้งที่ยังมีช่องที่ยังไม่ได้บันทึก — ให้เบราว์เซอร์ถามก่อน
+  useEffect(() => {
+    if (!canEditExp || dirtyCount === 0) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [canEditExp, dirtyCount]);
+
   // รวมต่อหมวด + ต่อ itemCode
   const cats = useMemo(() => {
     const byCat = Object.fromEntries(CATS.map((c) => [c.key, { ...c, total: 0, byItem: {} }]));
@@ -411,12 +531,58 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
   const totalCost = totalFoodCost + expenseTotal;   // สรุปค่าใช้จ่ายรวม
   const profit = netSale - totalCost;
 
-  const moneyInput = (val, set) => (
-    <input
-      type="number" inputMode="decimal" value={val} placeholder="0.00"
-      onChange={(e) => set(e.target.value)}
-      className="w-32 text-right font-mono text-sm px-2 py-1 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none bg-amber-50/40"
-    />
+  // ช่องกรอกเงินของรายการกรอกเอง — บันทึกเมื่อออกจากช่อง/กด Enter · สีบอกสถานะ (กำลังบันทึก/ยังไม่บันทึก/พลาด)
+  const moneyInput = (key) => {
+    const saving = savingKeys.has(key);
+    const failed = failedKeys.has(key);
+    const dirty = normAmt(expenses[key]) !== normAmt(savedExp[key]);
+    const tone = failed
+      ? 'border-rose-400 bg-rose-50'
+      : saving
+        ? 'border-indigo-300 bg-indigo-50/60'
+        : dirty
+          ? 'border-amber-400 bg-amber-50'
+          : 'border-gray-200 bg-amber-50/40';
+    return (
+      <span className="relative inline-flex items-center">
+        <input
+          type="number" inputMode="decimal" min="0" step="0.01" value={expenses[key]}
+          placeholder={expInfo.loading && expInfo.key === expKey ? '…' : '0.00'}
+          disabled={!canEditExp}
+          title={!canEditExp && expReady && !editMonth ? 'เลือกช่วงวันที่ในเดือนเดียวเพื่อแก้ไข' : undefined}
+          onChange={(e) => {
+            const v = e.target.value;
+            setExpenses((p) => ({ ...p, [key]: v }));
+            if (failed) setFailedKeys((p) => { const n = new Set(p); n.delete(key); return n; });
+          }}
+          onBlur={() => saveExpense(key)}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          className={`w-32 text-right font-mono text-sm px-2 py-1 border rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none disabled:text-gray-500 disabled:bg-gray-50 ${tone}`}
+        />
+        {saving && <RefreshCw className="absolute -left-5 w-3.5 h-3.5 animate-spin text-indigo-400" />}
+        {!saving && !dirty && !failed && canEditExp && normAmt(savedExp[key]) !== '' && (
+          <Check className="absolute -left-5 w-3.5 h-3.5 text-emerald-500" />
+        )}
+      </span>
+    );
+  };
+
+  // บรรทัดสถานะใต้ช่องกรอกเอง
+  const expStatus = !expKey ? null : expInfo.key !== expKey || expInfo.loading ? (
+    <span><RefreshCw className="w-3 h-3 animate-spin inline mr-1" />กำลังโหลดค่าใช้จ่ายที่บันทึกไว้…</span>
+  ) : expInfo.error ? (
+    <span className="text-rose-600">
+      โหลดค่าใช้จ่ายที่บันทึกไว้ไม่สำเร็จ ({expInfo.error}) — ยังกรอกไม่ได้{' '}
+      <button type="button" className="underline font-medium" onClick={() => setExpReload((n) => n + 1)}>ลองใหม่</button>
+    </span>
+  ) : !editMonth ? (
+    <span className="text-amber-700">ช่วงวันที่คร่อม {months.length} เดือน ({months[0]} ถึง {months[months.length - 1]}) — แสดงยอดรวมทุกเดือน • เลือกช่วงวันที่ในเดือนเดียวเพื่อกรอก/แก้ไข</span>
+  ) : (
+    <span>
+      ยอดทั้งเดือน {editMonth} ของสาขา {String(branch).toUpperCase()} • บันทึกให้อัตโนมัติเมื่อกรอกเสร็จ (ออกจากช่อง หรือกด Enter)
+      {dirtyCount > 0 ? <span className="text-amber-700"> • ยังไม่บันทึก {dirtyCount} ช่อง</span> : null}
+      {expInfo.updatedAt ? ` • แก้ล่าสุด ${expInfo.updatedAt}${expInfo.updatedBy ? ` โดย ${expInfo.updatedBy}` : ''}` : ' • เดือนนี้ยังไม่มีข้อมูล'}
+    </span>
   );
 
   const notLoaded = lines === null;
@@ -467,8 +633,8 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
           <Row label="Gross Sales" value={grossSales} percent="100%" />
           <Row label="Tax (VAT)" value={tax} percent={pct(tax, grossSales)} accent="text-gray-500" />
           <Row label="Sub Total" value={subTotal} percent={pct(subTotal, grossSales)} bold />
-          <Row label="ยอดขาย Member" percent={pct(parseFloat(member) || 0, grossSales)} input={moneyInput(member, setMember)} />
-          <Row label="Delivery Service" percent={pct(parseFloat(delivery) || 0, grossSales)} input={moneyInput(delivery, setDelivery)} />
+          <Row label="ยอดขาย Member" percent={pct(parseFloat(expenses.member) || 0, grossSales)} input={moneyInput('member')} />
+          <Row label="Delivery Service" percent={pct(parseFloat(expenses.delivery) || 0, grossSales)} input={moneyInput('delivery')} />
           <Row label="Net Sale" value={netSale} percent={pct(netSale, grossSales)} bold accent="text-emerald-700" />
           {stock && (
             <>
@@ -489,7 +655,7 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
               </p>
             </>
           )}
-          <p className="px-3 py-2 text-[11px] text-gray-400">* Member / Delivery เป็นช่องบันทึกอ้างอิง (ยังไม่นำเข้าสูตรกำไร)</p>
+          <p className="px-3 py-2 text-[11px] text-gray-400">* Member / Delivery เป็นช่องบันทึกอ้างอิง (ยังไม่นำเข้าสูตรกำไร) • บันทึกต่อเดือนเหมือนค่าใช้จ่าย</p>
         </div>
 
         {/* ───── ต้นทุน + ค่าใช้จ่าย ───── */}
@@ -532,9 +698,10 @@ export default function ProfitSummary({ branch, outletId, startDate, endDate, da
                 <Row
                   key={e.key} label={e.label} indent
                   percent={pct(parseFloat(expenses[e.key]) || 0, netSale)}
-                  input={moneyInput(expenses[e.key], (v) => setExpenses((p) => ({ ...p, [e.key]: v })))}
+                  input={moneyInput(e.key)}
                 />
               ))}
+              <p className="px-3 py-1.5 text-[11px] text-gray-400">* ค่าใช้จ่ายด้านบน: {expStatus}</p>
               <Row label="สรุปค่าใช้จ่ายรวม" value={totalCost} percent={pct(totalCost, netSale)} bold accent="text-rose-700" />
             </>
           )}
