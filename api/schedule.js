@@ -49,6 +49,8 @@ const READ_ONLY = new Set([
   'getEmployeeUniform',
   // หน้าสแกนเข้า-ออก: เวลาที่แก้ไขแทนเวลาสแกน (ดู office-server/attendance.js)
   'getScanFixes',
+  // หน้ารายชื่อพนักงาน: สัญชาติ + เอกสารพนักงานต่างชาติ (ดู office-server/employee-doc.js)
+  'getEmployeeDocs',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
   'getGoodsToReceive',
   'getStoreReceivingStatus',
