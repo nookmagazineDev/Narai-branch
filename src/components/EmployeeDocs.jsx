@@ -162,16 +162,20 @@ function DocCard({ title, expiryKey, form, children }) {
  * @param {{ hrCode: string, fullName: string }[]} [props.linkCandidates] พนักงานที่ผูกได้ (แถวที่ยังไม่ผูก)
  * @param {(hrCode: string) => Promise<boolean>} [props.onLink]
  * @param {() => Promise<boolean>} [props.onDelete]
+ * @param {boolean} [props.canEdit]      false = ดูอย่างเดียว (สาขา) ไม่มีปุ่มแก้ไข/ผูก/ลบ
+ * @param {boolean} [props.nameEditable] true = โหมดแก้ไขมีช่องแก้ชื่อ-นามสกุล (ค่าใหม่มากับ form.fullName)
  */
-export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidates = [], onLink, onDelete }) {
-  const [form, setForm] = useState(() => ({ ...emptyDoc('thai'), ...(doc || {}) }));
+export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidates = [], onLink, onDelete, canEdit = true, nameEditable = false }) {
+  // fullName ของฟอร์ม = ชื่อที่แสดงอยู่ (ชื่อในระบบของพนักงาน ถ้าไม่มีค่อยใช้ชื่อตามเอกสาร)
+  const initialForm = () => ({ ...emptyDoc('thai'), ...(doc || {}), fullName: employee?.fullName || doc?.fullName || '' });
+  const [form, setForm] = useState(initialForm);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState('');
   const [linkTo, setLinkTo] = useState('');
 
   const set = (key) => (value) => setForm((f) => ({ ...f, [key]: value }));
   const foreign = form.natType !== 'thai';
-  const name = employee?.fullName || form.fullName;
+  const name = form.fullName || employee?.fullName;
   // ชื่อในระบบมักมีคำนำหน้าอยู่แล้ว ('นาย WIN POR') — ไม่ต่อคำนำหน้าจากเอกสารซ้ำอีกรอบ
   const title = form.prefix && !String(name || '').trim().startsWith(form.prefix) ? `${form.prefix} ${name}` : name;
   const initial = (normName(name) || '?').slice(0, 1).toUpperCase();
@@ -184,7 +188,7 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
     setBusy('');
     if (ok) setEditing(false);
   };
-  const cancel = () => { setForm({ ...emptyDoc('thai'), ...(doc || {}) }); setEditing(false); };
+  const cancel = () => { setForm(initialForm()); setEditing(false); };
 
   const f = (key, label, extra = {}) => (
     <Field label={label} value={form[key]} editing={editing} onChange={set(key)} {...extra} />
@@ -215,7 +219,7 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
 
         <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
           {/* แถวจาก Excel ที่หาพนักงานด้วยชื่อไม่เจอ — ให้เลือกผูกเอง */}
-          {unlinked && onLink && (
+          {unlinked && onLink && canEdit && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-2">
               <Link2 className="w-4 h-4 text-amber-700 shrink-0" />
               <span className="text-sm text-amber-900">ชื่อนี้ไม่ตรงกับพนักงานคนไหนในระบบ เลือกพนักงานที่เป็นคนเดียวกัน:</span>
@@ -240,6 +244,14 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
                 </button>
               )}
             </div>
+          )}
+
+          {editing && nameEditable && (
+            <section>
+              <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2">ชื่อ - นามสกุล</h4>
+              <input value={form.fullName || ''} onChange={(e) => set('fullName')(e.target.value)} className={`${INPUT} max-w-md`} placeholder="ชื่อ - นามสกุล" />
+              {employee && <p className="text-xs text-gray-400 mt-1">แก้แล้วชื่อในรายชื่อพนักงานจะเปลี่ยนตาม</p>}
+            </section>
           )}
 
           <section>
@@ -269,7 +281,7 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
               ) : (
                 <span className="text-sm text-gray-500">คนไทยไม่ต้องติดตามเอกสารต่างด้าว — ระบบจะไม่แจ้งเตือน</span>
               )}
-              {!editing && <span className="text-xs text-gray-400 md:ml-auto">กด "แก้ไขข้อมูล" เพื่อเปลี่ยน</span>}
+              {!editing && <span className="text-xs text-gray-400 md:ml-auto">{canEdit ? 'กด "แก้ไขข้อมูล" เพื่อเปลี่ยน' : 'แก้ไขข้อมูลได้ที่ออฟฟิศเท่านั้น'}</span>}
             </div>
           </section>
 
@@ -344,9 +356,11 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
             ) : (
               <>
                 <button onClick={onClose} className="px-4 py-2 bg-white text-gray-600 border border-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-100">ปิด</button>
-                <button onClick={() => setEditing(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700">
-                  <Pencil className="w-4 h-4" /> แก้ไขข้อมูล
-                </button>
+                {canEdit && (
+                  <button onClick={() => setEditing(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-semibold hover:bg-purple-700">
+                    <Pencil className="w-4 h-4" /> แก้ไขข้อมูล
+                  </button>
+                )}
               </>
             )}
           </div>

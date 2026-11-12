@@ -3,8 +3,9 @@
 // ตาราง dbo.employee_doc อยู่ที่ InventoryNarai (sql/employee-doc-001-table.sql) เพราะตัวรัน
 // migration ของ update-office-server.bat รันลงฐานนั้น — ไม่ต้องให้ใครไปสร้างตารางเอง
 //
-// ทุกสาขาแก้ข้อมูลพนักงานของสาขาตัวเองได้ branchFor() กันไว้แล้วว่าสาขาหนึ่งจะไปอ่าน/เขียน
-// ของอีกสาขาไม่ได้ ส่วนการนำเข้าทั้งไฟล์ Excel ทำได้เฉพาะผู้ใช้สิทธิ์ all (ไฟล์มีทุกสาขาปนกัน)
+// สาขา "ดูได้อย่างเดียว" และเฉพาะของสาขาตัวเอง (branchFor() กันการอ่านข้ามสาขา)
+// คำสั่งเขียนทุกตัว (บันทึก/ผูก/ลบ/นำเข้า) ทำได้เฉพาะผู้ใช้สิทธิ์ all — คือออฟฟิศ ทั้งจากเว็บออฟฟิศ
+// (naraipizzeria ส่งต่อมาด้วยสิทธิ์ all) และผู้ใช้ all ของเว็บสาขา หน้าเว็บซ่อนปุ่มไว้แล้ว ตรงนี้กันซ้ำอีกชั้น
 //
 // การแจ้งเตือนล่วงหน้า 120 วันคำนวณที่หน้าเว็บจากวันหมดอายุที่ส่งไป — ที่นี่เก็บ/คืนข้อมูลอย่างเดียว
 
@@ -117,6 +118,11 @@ const SET_FIELDS = FIELD_COLS.map((c) => `${c} = @${c}`).join(', ');
 const INSERT_COLS = FIELD_COLS.join(', ');
 const INSERT_VALS = FIELD_COLS.map((c) => `@${c}`).join(', ');
 
+/** คำสั่งเขียนทุกตัวเรียกตัวนี้ก่อน — สาขาแก้ข้อมูลเอกสารไม่ได้ */
+function requireOffice(session) {
+  if (!session?.isAll) throw forbidden('แก้ไขข้อมูลเอกสารพนักงานได้ที่ออฟฟิศเท่านั้น');
+}
+
 const natTypeOf = (v) => (str(v).toLowerCase() === 'thai' ? 'thai' : 'foreign');
 const who = (session) => str(session?.name) || str(session?.username) || null;
 
@@ -157,6 +163,7 @@ async function loadRow(where, params, session) {
    { branch, hrCode, fullName, natType, ...ช่องข้อมูล }  หรือ { docId, ... } สำหรับแถวที่ยังไม่ผูก
    ส่งช่องข้อมูลมาครบทุกช่องเสมอ (หน้าเว็บส่งทั้งฟอร์ม) ช่องที่ว่างคือถูกล้าง */
 async function saveEmployeeDoc(body, session) {
+  requireOffice(session);
   const hrCode = str(body.hrCode);
   const docId = Number(body.docId) || 0;
   if (!hrCode && !docId) throw badRequest('ไม่ระบุพนักงาน');
@@ -177,9 +184,15 @@ async function saveEmployeeDoc(body, session) {
     if (existing) {
       await queryRead(
         `UPDATE dbo.employee_doc
-            SET ${SET_FIELDS}, nat_type = @nat_type, updated_by = @updated_by, updated_at = SYSDATETIME()
+            SET ${SET_FIELDS}, nat_type = @nat_type, updated_by = @updated_by, updated_at = SYSDATETIME(),
+                full_name = COALESCE(@full_name, full_name)
           WHERE doc_id = @doc_id`,
-        { ...params, doc_id: { type: sql.Int, value: existing.docId } }
+        {
+          ...params,
+          doc_id: { type: sql.Int, value: existing.docId },
+          // ส่งชื่อมา = แก้ชื่อด้วย (ชื่อของแถวที่ยังไม่ผูก หรือชื่อใหม่ของพนักงานที่ออฟฟิศเพิ่งแก้)
+          full_name: { type: sql.NVarChar(150), value: str(body.fullName).slice(0, 150) || null },
+        }
       );
     } else {
       const branch = str(branchFor(session, body.branch)).toLowerCase();
@@ -211,6 +224,7 @@ async function saveEmployeeDoc(body, session) {
 /* ===================== ผูกแถวที่นำเข้าไว้กับพนักงานในระบบ =====================
    { docId, hrCode } — ใช้กับแถวจาก Excel ที่หาพนักงานด้วยชื่อไม่เจอ */
 async function linkEmployeeDoc(body, session) {
+  requireOffice(session);
   const docId = Number(body.docId) || 0;
   const hrCode = str(body.hrCode);
   if (!docId || !hrCode) throw badRequest('ไม่ระบุรายการหรือพนักงานที่จะผูก');
@@ -242,6 +256,7 @@ async function linkEmployeeDoc(body, session) {
 
 /** ลบแถวที่ยังไม่ผูกกับพนักงาน (เช่น คนที่ลาออกไปก่อนนำเข้า) — { docId } */
 async function deleteEmployeeDoc(body, session) {
+  requireOffice(session);
   const docId = Number(body.docId) || 0;
   if (!docId) throw badRequest('ไม่ระบุรายการที่จะลบ');
   try {
@@ -269,7 +284,7 @@ const NAME_PREFIX = /^(นางสาว|นาง|นาย|น\.?\s*ส\.?|�
 export const normName = (v) => str(v).replace(NAME_PREFIX, '').replace(/[\s.\-_/]+/g, '').toLowerCase();
 
 async function importEmployeeDocs(body, session) {
-  if (!session?.isAll) throw forbidden('นำเข้าไฟล์ได้เฉพาะผู้ใช้ที่ดูได้ทุกสาขา');
+  requireOffice(session);
   const input = Array.isArray(body.rows) ? body.rows : [];
   if (input.length === 0) throw badRequest('ไม่มีข้อมูลให้นำเข้า');
   if (input.length > 2000) throw badRequest('ข้อมูลเกิน 2,000 แถวต่อครั้ง');

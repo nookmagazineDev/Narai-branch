@@ -255,7 +255,8 @@ export default function EmployeeList() {
      โหลดทั้งสาขาในคำขอเดียว แล้วจับคู่กับแถวพนักงานด้วยรหัส HR ที่หน้าเว็บ
        ไม่มีแถวเอกสาร        = คนไทย (ค่าเริ่มต้น)
        แถวที่ไม่มีรหัส HR     = นำเข้าจาก Excel แล้วชื่อไม่ตรงกับใคร รอสาขากดผูกเอง
-     ทุกสาขาแก้ของสาขาตัวเองได้ ส่วนปุ่มนำเข้า Excel มีเฉพาะผู้ใช้ที่ดูได้ทุกสาขา */
+     สาขาดูได้อย่างเดียว (เฉพาะของสาขาตัวเอง) แก้ไข/ผูก/ลบ/นำเข้า Excel ทำได้เฉพาะผู้ใช้ที่ดูได้ทุกสาขา
+     — งานแก้ไขหลักอยู่ที่เว็บออฟฟิศ (naraipizzeria หน้า HR → รายชื่อพนักงาน) */
   const [docs, setDocs] = useState([]);
   const [docTarget, setDocTarget] = useState(null);   // { employee | null, doc | null }
   const [importingDocs, setImportingDocs] = useState(false);
@@ -291,6 +292,7 @@ export default function EmployeeList() {
         ...form,
         docId: docTarget?.doc?.docId || 0,
         hrCode: emp?.hrCode || docTarget?.doc?.hrCode || '',
+        // ชื่อของพนักงานในระบบแก้ที่เว็บออฟฟิศ ที่นี่แก้ได้เฉพาะชื่อของแถวที่ยังไม่ผูกกับใคร
         fullName: emp?.fullName || form.fullName,
         branch: emp ? branchOfEmp(emp) : form.branch,
       });
@@ -1038,6 +1040,8 @@ export default function EmployeeList() {
           employee={docTarget.employee ? { ...docTarget.employee, branch: branchOfEmp(docTarget.employee) } : null}
           doc={docTarget.doc}
           onSave={handleDocSave}
+          canEdit={isAdmin}
+          nameEditable={isAdmin && !docTarget.employee}
           onClose={() => setDocTarget(null)}
           linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
           onLink={handleDocLink}
