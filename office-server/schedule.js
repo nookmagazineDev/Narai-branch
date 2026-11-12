@@ -23,6 +23,7 @@ import { KITCHEN_ACTIONS } from './kitchen.js';
 import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
 import { ATTENDANCE_ACTIONS } from './attendance.js';
+import { EMPLOYEE_DOC_ACTIONS } from './employee-doc.js';
 import { ORDER_SHOP_ACTIONS } from './ordershop.js';
 import { SCHEDULE_LOCK_ACTIONS, assertNotLocked } from './schedule-lock.js';
 import {
@@ -1238,6 +1239,9 @@ const ACTIONS = {
 
   // หน้าสแกนเข้า-ออก: เวลาที่สาขา/แอดมินแก้แทนเวลาสแกนจริง (ปุ่ม "แก้ไข") — ดู office-server/attendance.js
   ...ATTENDANCE_ACTIONS,
+
+  // หน้ารายชื่อพนักงาน: สัญชาติ + เอกสารพนักงานต่างชาติและวันหมดอายุ — ดู office-server/employee-doc.js
+  ...EMPLOYEE_DOC_ACTIONS,
 
   // ร้านที่เบิกของของแอป ordernaraipizzeria (ทะเบียนร้าน/ล็อกอินร้าน/สินค้าที่เบิกได้) — ดู ordershop.js
   ...ORDER_SHOP_ACTIONS,

@@ -115,6 +115,14 @@ const SQL_ACTIONS = new Set([
   'saveScanFix',
   'deleteScanFix',
 
+  // กลุ่มที่ 3.07 — หน้ารายชื่อพนักงาน: สัญชาติ (ไทย/ต่างชาติ) + เอกสารพนักงานต่างชาติและวันหมดอายุ
+  // ของใหม่ทั้งชุด ไม่เคยมีใน Apps Script — ดู office-server/employee-doc.js
+  'getEmployeeDocs',
+  'saveEmployeeDoc',
+  'linkEmployeeDoc',
+  'deleteEmployeeDoc',
+  'importEmployeeDocs',
+
   // กลุ่มที่ 3.1 — หน้ารับสินค้า
   //
   // ต้องสลับพร้อมกับที่แอป storefct สลับ STORE_SOURCE=sql เพราะทั้งสองฝั่งอ้างข้อมูลก้อนเดียวกัน:

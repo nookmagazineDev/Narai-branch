@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import { apiCall, fetchEmployees as fetchEmployeesApi } from '../services/api';
 import toast from 'react-hot-toast';
-import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint, Shirt, Plus, Minus, Trash2, ArrowRight } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Camera, Image as ImageIcon, Pencil, Check, X, LogOut, Fingerprint, Shirt, Plus, Minus, Trash2, ArrowRight, Upload } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
 import UniformGuide from '../components/UniformGuide';
 import { uniformSpecImage } from '../utils/uniformSpecs';
+import { NatBadge, DocStatusBadge, DocAlertPanel, EmployeeDocModal } from '../components/EmployeeDocs';
+import { docIssues, isForeign, parseForeignSheet } from '../utils/employeeDocs';
+import { branchGroup } from '../utils/branchAlias';
 
 /* สถานะคำขอเบิกยูนิฟอร์ม — คีย์ตรงกับ UNIFORM_REQUEST_STATUS ใน office-server/uniform.js
    และหน้าอนุมัติของออฟฟิศ (naraipizzeria components/UniformReport.jsx) */
@@ -26,6 +29,7 @@ export default function EmployeeList() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [natFilter, setNatFilter] = useState('');   // '' | 'thai' | 'foreign' | 'alert' (เอกสารใกล้หมดอายุ)
   const [uploadingHr, setUploadingHr] = useState(null);
   const [logaEdits, setLogaEdits] = useState({});   // hrCode -> ค่าที่กำลังแก้
   const [savingLoga, setSavingLoga] = useState(null);
@@ -243,6 +247,125 @@ export default function EmployeeList() {
       toast.error(err?.message || 'บันทึกไม่สำเร็จ');
     } finally {
       setUniformBusy('');
+    }
+  };
+
+  /* ================== สัญชาติ + เอกสารพนักงานต่างชาติ ==================
+     ข้อมูลอยู่ที่ dbo.employee_doc (office-server/employee-doc.js) แยกจากรายชื่อพนักงานที่มาจากชีท
+     โหลดทั้งสาขาในคำขอเดียว แล้วจับคู่กับแถวพนักงานด้วยรหัส HR ที่หน้าเว็บ
+       ไม่มีแถวเอกสาร        = คนไทย (ค่าเริ่มต้น)
+       แถวที่ไม่มีรหัส HR     = นำเข้าจาก Excel แล้วชื่อไม่ตรงกับใคร รอสาขากดผูกเอง
+     ทุกสาขาแก้ของสาขาตัวเองได้ ส่วนปุ่มนำเข้า Excel มีเฉพาะผู้ใช้ที่ดูได้ทุกสาขา */
+  const [docs, setDocs] = useState([]);
+  const [docTarget, setDocTarget] = useState(null);   // { employee | null, doc | null }
+  const [importingDocs, setImportingDocs] = useState(false);
+
+  // เอกสารเป็นข้อมูลเสริมของหน้า โหลดไม่ได้รายชื่อพนักงานยังต้องใช้งานได้ตามปกติ (แค่ไม่มีป้าย/แจ้งเตือน)
+  const loadDocs = async () => {
+    try {
+      const res = await apiCall('getEmployeeDocs', { branch: user?.branch || '' });
+      if (res?.status === 'success') setDocs(res.data?.data || []);
+    } catch (err) {
+      console.warn('โหลดข้อมูลเอกสารพนักงานไม่สำเร็จ:', err?.message || err);
+    }
+  };
+  useEffect(() => {
+    let cancelled = false;
+    apiCall('getEmployeeDocs', { branch: user?.branch || '' })
+      .then((res) => { if (!cancelled && res?.status === 'success') setDocs(res.data?.data || []); })
+      .catch((err) => console.warn('โหลดข้อมูลเอกสารพนักงานไม่สำเร็จ:', err?.message || err));
+    return () => { cancelled = true; };
+  }, [user?.branch]);
+
+  const hrKey = (v) => String(v || '').trim().toLowerCase();
+  const docByHr = new Map(docs.filter((d) => d.hrCode).map((d) => [hrKey(d.hrCode), d]));
+  const docOf = (emp) => (emp?.hrCode ? docByHr.get(hrKey(emp.hrCode)) || null : null);
+  const unlinkedDocs = docs.filter((d) => !d.hrCode);
+
+  const openDocModal = (emp) => setDocTarget({ employee: emp, doc: docOf(emp) });
+
+  const handleDocSave = async (form) => {
+    const emp = docTarget?.employee;
+    try {
+      const res = await apiCall('saveEmployeeDoc', {
+        ...form,
+        docId: docTarget?.doc?.docId || 0,
+        hrCode: emp?.hrCode || docTarget?.doc?.hrCode || '',
+        fullName: emp?.fullName || form.fullName,
+        branch: emp ? branchOfEmp(emp) : form.branch,
+      });
+      const saved = res?.data?.doc;
+      toast.success(res?.message || 'บันทึกแล้ว');
+      if (saved) {
+        setDocs((list) => [...list.filter((d) => d.docId !== saved.docId), saved]);
+        setDocTarget((t) => (t ? { ...t, doc: saved } : t));
+      } else {
+        loadDocs();
+      }
+      return true;
+    } catch (err) {
+      toast.error(err?.message || 'บันทึกไม่สำเร็จ');
+      return false;
+    }
+  };
+
+  const handleDocLink = async (hrCode) => {
+    const doc = docTarget?.doc;
+    if (!doc) return false;
+    try {
+      const res = await apiCall('linkEmployeeDoc', { docId: doc.docId, hrCode });
+      toast.success(res?.message || 'ผูกกับพนักงานแล้ว');
+      const linked = { ...doc, hrCode };
+      setDocs((list) => list.map((d) => (d.docId === doc.docId ? linked : d)));
+      const emp = employees.find((e) => hrKey(e.hrCode) === hrKey(hrCode)) || null;
+      setDocTarget({ employee: emp, doc: linked });
+      return true;
+    } catch (err) {
+      toast.error(err?.message || 'ผูกไม่สำเร็จ');
+      return false;
+    }
+  };
+
+  const handleDocDelete = async () => {
+    const doc = docTarget?.doc;
+    if (!doc) return false;
+    try {
+      const res = await apiCall('deleteEmployeeDoc', { docId: doc.docId });
+      toast.success(res?.message || 'ลบแล้ว');
+      setDocs((list) => list.filter((d) => d.docId !== doc.docId));
+      setDocTarget(null);
+      return true;
+    } catch (err) {
+      toast.error(err?.message || 'ลบไม่สำเร็จ');
+      return false;
+    }
+  };
+
+  /** นำเข้าไฟล์ Excel "DATA พนักงานต่างชาติ" — อ่านในเบราว์เซอร์แล้วส่งเป็นแถวไปให้เซิร์ฟเวอร์จับคู่กับพนักงาน */
+  const handleDocImport = async (file) => {
+    if (!file) return;
+    setImportingDocs(true);
+    const toastId = toast.loading('กำลังอ่านไฟล์...');
+    try {
+      // โหลดตัวอ่าน Excel เฉพาะตอนกดนำเข้า หน้านี้จะได้ไม่หนักขึ้นสำหรับสาขาที่ไม่ได้ใช้ปุ่มนี้
+      const XLSX = await import('xlsx');
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+      const { rows, dateNotes } = parseForeignSheet(aoa, XLSX.SSF.parse_date_code);
+      if (rows.length === 0) throw new Error('ไม่พบข้อมูลพนักงานในไฟล์ (ต้องเป็นไฟล์รูปแบบ DATA พนักงานต่างชาติ)');
+      if (!window.confirm(`พบข้อมูล ${rows.length} คน — นำเข้าเลยไหม?\n(คนที่เคยนำเข้าแล้วจะถูกเขียนทับด้วยข้อมูลในไฟล์นี้)`)) {
+        toast.dismiss(toastId);
+        return;
+      }
+      toast.loading(`กำลังนำเข้า ${rows.length} คน...`, { id: toastId });
+      const res = await apiCall('importEmployeeDocs', { rows }, { timeoutMs: 60000 });
+      const note = dateNotes ? ` · วันที่อ่านไม่ออก ${dateNotes} ช่อง (ดูในหมายเหตุของคนนั้น)` : '';
+      toast.success(`${res?.message || 'นำเข้าแล้ว'}${note}`, { id: toastId, duration: 9000 });
+      await loadDocs();
+    } catch (err) {
+      toast.error(err?.message || 'นำเข้าไม่สำเร็จ', { id: toastId });
+    } finally {
+      setImportingDocs(false);
     }
   };
 
@@ -498,7 +621,13 @@ export default function EmployeeList() {
       ? (emp.branches || []).includes(branchFilter) || emp.branch === branchFilter
       : true;
 
-    return matchesSearch && matchesStatus && matchesType && matchesBranch;
+    const doc = docOf(emp);
+    const matchesNat = natFilter === 'thai' ? !isForeign(doc)
+      : natFilter === 'foreign' ? isForeign(doc)
+        : natFilter === 'alert' ? docIssues(doc).length > 0
+          : true;
+
+    return matchesSearch && matchesStatus && matchesType && matchesBranch && matchesNat;
   }).sort((a, b) => {
     if (a.status === 'ทำงาน' && b.status !== 'ทำงาน') return -1;
     if (a.status !== 'ทำงาน' && b.status === 'ทำงาน') return 1;
@@ -529,6 +658,30 @@ export default function EmployeeList() {
 
   const anniversaryEmployees = getAnniversaryEmployees();
 
+  /* รายการที่เข้ากล่องแจ้งเตือนเอกสาร: พนักงานที่ยังทำงานอยู่ + แถวจาก Excel ที่ยังไม่ผูกกับใคร
+     (ไม่ผูกก็ต้องเตือน ไม่งั้นเอกสารของคนที่ชื่อสะกดไม่ตรงจะหมดอายุไปเงียบๆ)
+     แอดมินที่กรองสาขาอยู่จะเห็นเฉพาะสาขานั้น */
+  const inBranchFilter = (code) => !branchFilter || branchGroup(branchFilter).includes(String(code || '').toLowerCase());
+  const docAlertEntries = [
+    ...employees
+      .filter((emp) => emp.status !== 'ลาออก' && docOf(emp))
+      .filter((emp) => !branchFilter || (emp.branches || []).includes(branchFilter) || emp.branch === branchFilter)
+      .map((emp) => ({ key: `e-${emp.hrCode}`, name: emp.fullName, branch: branchOfEmp(emp), doc: docOf(emp), employee: emp })),
+    ...unlinkedDocs
+      .filter((d) => inBranchFilter(d.branch))
+      .map((d) => ({ key: `d-${d.docId}`, name: d.fullName, branch: d.branch, doc: d, employee: null, unlinked: true })),
+  ];
+
+  /** พนักงานที่ผูกกับแถวเอกสารนี้ได้: ยังทำงานอยู่ ยังไม่มีแถวเอกสาร และอยู่สาขาเดียวกัน (หาไม่เจอเลยค่อยให้เลือกจากทุกคน) */
+  const linkCandidatesFor = (doc) => {
+    const free = employees.filter((emp) => emp.hrCode && emp.status !== 'ลาออก' && !docOf(emp));
+    const group = branchGroup(doc?.branch);
+    const same = free.filter((emp) => [...(emp.branches || []), String(emp.branch || '').toLowerCase()].some((b) => group.includes(b)));
+    return (same.length ? same : free).slice().sort((a, b) => String(a.fullName).localeCompare(String(b.fullName)));
+  };
+
+  const foreignCount = employees.filter((emp) => emp.status !== 'ลาออก' && isForeign(docOf(emp))).length;
+
   return (
     <div className="max-w-[1600px] mx-auto">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -547,6 +700,12 @@ export default function EmployeeList() {
             พนักงานที่ทำงานอยู่ {filteredEmployees.filter(emp => emp.status !== 'ลาออก').length} คน
           </div>
         </div>
+
+        <DocAlertPanel
+          entries={docAlertEntries}
+          showBranch={isAdmin}
+          onOpen={(entry) => setDocTarget({ employee: entry.employee, doc: entry.doc })}
+        />
 
         {/* Anniversary Alert Box */}
         {anniversaryEmployees.length > 0 && (
@@ -593,6 +752,31 @@ export default function EmployeeList() {
           >
             <Fingerprint className="w-4 h-4" /> ดูสแกนเข้า-ออก
           </button>
+          {isAdmin && (
+            <label
+              title="นำเข้าไฟล์ Excel DATA พนักงานต่างชาติ (สัญชาติ + เอกสาร + วันหมดอายุ)"
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border transition-colors shadow-sm ${importingDocs ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait' : 'bg-white text-purple-700 border-purple-200 hover:bg-purple-50 cursor-pointer'}`}
+            >
+              {importingDocs ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              นำเข้า Excel ต่างชาติ
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                disabled={importingDocs}
+                onChange={(e) => { handleDocImport(e.target.files[0]); e.target.value = ''; }}
+              />
+            </label>
+          )}
+          <div className="inline-flex border border-gray-200 rounded-xl overflow-hidden md:ml-auto">
+            {[['', 'ทั้งหมด'], ['thai', 'คนไทย'], ['foreign', `ต่างชาติ${foreignCount ? ` ${foreignCount}` : ''}`], ['alert', 'เอกสารใกล้หมดอายุ']].map(([value, label]) => (
+              <button
+                key={value || 'all'}
+                onClick={() => setNatFilter(value)}
+                className={`px-3.5 py-2 text-sm font-semibold border-l first:border-l-0 border-gray-200 transition-colors ${natFilter === value ? 'bg-purple-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+              >{label}</button>
+            ))}
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -607,6 +791,9 @@ export default function EmployeeList() {
                 </th>
                 <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="flex flex-col gap-1"><span>ชื่อ - นามสกุล</span></div>
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <div className="flex flex-col gap-1"><span>สัญชาติ</span></div>
                 </th>
                 {user?.branch === 'all' && (
                   <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -659,6 +846,9 @@ export default function EmployeeList() {
                   <div className="flex flex-col gap-1"><span>ระยะเวลาทำงาน</span></div>
                 </th>
                 <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  <div className="flex flex-col gap-1"><span>เอกสาร</span></div>
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="flex flex-col gap-1"><span>เลขที่ LOGA</span></div>
                 </th>
                 <th scope="col" className="px-2 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -669,7 +859,7 @@ export default function EmployeeList() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 11 : 10} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 13 : 12} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Loader2 className="w-8 h-8 animate-spin text-purple-500 mb-2" />
                       <p>กำลังโหลดข้อมูล...</p>
@@ -678,7 +868,7 @@ export default function EmployeeList() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={user?.branch === 'all' ? 11 : 10} className="px-6 py-12 text-center">
+                  <td colSpan={user?.branch === 'all' ? 13 : 12} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-gray-500">
                       <Users className="w-12 h-12 text-gray-300 mb-3" />
                       <p className="text-lg font-medium text-gray-900">ไม่พบข้อมูลพนักงาน</p>
@@ -691,7 +881,16 @@ export default function EmployeeList() {
                   <tr key={index} className="hover:bg-gray-50 transition-colors">
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500 text-center font-medium">{index + 1}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-purple-600">{emp.hrCode || '-'}</td>
-                    <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{emp.fullName || '-'}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-sm font-medium">
+                      {/* กดที่ชื่อ = เปิดกล่องข้อมูลพนักงาน (สัญชาติ + เอกสาร + วันหมดอายุ) */}
+                      <button
+                        type="button"
+                        onClick={() => openDocModal(emp)}
+                        title="ดูข้อมูลพนักงาน"
+                        className="text-gray-900 underline decoration-purple-300 underline-offset-4 hover:text-purple-700 text-left"
+                      >{emp.fullName || '-'}</button>
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap text-sm"><NatBadge doc={docOf(emp)} /></td>
                     {user?.branch === 'all' && (
                       <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-indigo-600">
                         {/* คนที่สังกัดหลายสาขาแสดงให้ครบทุกรหัส ไม่ใช่เฉพาะสาขาหลัก */}
@@ -717,6 +916,9 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 text-sm text-gray-500 min-w-[7rem] max-w-[11rem]">{emp.position || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">{formatDate(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900 font-medium">{calculateDuration(emp.startDate)}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-sm">
+                      {emp.status === 'ลาออก' ? <span className="text-xs text-gray-300">—</span> : <DocStatusBadge doc={docOf(emp)} />}
+                    </td>
                     {/* เลขที่ LOGA (คอลัมน์ BR) — แสดงเลข + ปุ่มแก้ไข, กดแก้ไขถึงจะกรอกได้ (เฉพาะพนักงานที่ยังทำงาน) */}
                     <td className="px-2 py-2 whitespace-nowrap text-sm">
                       {emp.status === 'ลาออก' ? (
@@ -828,6 +1030,20 @@ export default function EmployeeList() {
           </table>
         </div>
       </div>
+
+      {/* กล่องข้อมูลพนักงาน — เปิดจากการกดที่ชื่อ หรือกดรายการในกล่องแจ้งเตือนเอกสาร */}
+      {docTarget && (
+        <EmployeeDocModal
+          key={`${docTarget.employee?.hrCode || ''}-${docTarget.doc?.docId || 0}`}
+          employee={docTarget.employee ? { ...docTarget.employee, branch: branchOfEmp(docTarget.employee) } : null}
+          doc={docTarget.doc}
+          onSave={handleDocSave}
+          onClose={() => setDocTarget(null)}
+          linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
+          onLink={handleDocLink}
+          onDelete={handleDocDelete}
+        />
+      )}
 
       {/* Modal: สแกนเข้า-ออกทั้งสาขา ของวันที่เลือก */}
       {scanOpen && (
