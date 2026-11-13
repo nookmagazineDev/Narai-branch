@@ -15,6 +15,7 @@ export default function AddEmployee() {
     department: '',
     type: '',
     position: '',
+    dailyWage: '',
     idCard: '',
     address: '',
     birthday: '',
@@ -112,7 +113,7 @@ export default function AddEmployee() {
         else toast.success(msg);
         // Reset form
         setFormData({
-          hrCode: '', fullName: '', department: '', type: '', position: '',
+          hrCode: '', fullName: '', department: '', type: '', position: '', dailyWage: '',
           idCard: '', address: '', birthday: '', phone: '', lineId: '', loga: '',
           nationality: 'thai', documents: [], documentExpiry: {}, startDate: ''
         });
@@ -278,6 +279,13 @@ export default function AddEmployee() {
             <div>
               <label className={labelClasses}>ตำแหน่ง</label>
               <input type="text" name="position" value={formData.position} onChange={handleChange} className={inputClasses} placeholder="เช่น พนักงานขาย" required />
+            </div>
+
+            <div>
+              {/* ใช้คิดค่าแรงต่อกะในหน้าลงตารางงาน — ไม่กรอกจะได้ 0 แล้วค่าแรงในตารางของคนนี้เป็น 0 ทุกวัน */}
+              <label className={labelClasses}>ค่าแรงต่อวัน (บาท)</label>
+              <input type="number" name="dailyWage" value={formData.dailyWage} onChange={handleChange} className={inputClasses}
+                placeholder="เช่น 400" min="0" step="any" inputMode="decimal" required />
             </div>
 
             <div>

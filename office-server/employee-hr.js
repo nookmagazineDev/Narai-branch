@@ -187,6 +187,10 @@ async function addEmployee(body, session) {
   if (!fullName) throw badRequest('กรอกชื่อ - นามสกุล');
   const startDate = ymdOrNull(body.startDate);
   if (!startDate) throw badRequest('ระบุวันที่เริ่มงานให้ถูกต้อง');
+  // ค่าแรงต่อวัน — หน้าลงตารางงานใช้คิดค่าแรงต่อกะ ว่าง = 0 (ออฟฟิศตั้งทีหลังได้ที่หน้ารายชื่อพนักงาน)
+  const wageText = str(body.dailyWage).replace(/,/g, '');
+  const dailyWage = wageText === '' ? 0 : Number(wageText);
+  if (!Number.isFinite(dailyWage) || dailyWage < 0 || dailyWage > 100000) throw badRequest('ค่าแรงต่อวันต้องเป็นตัวเลข');
 
   // สาขาปกติเพิ่มได้เฉพาะสาขาตัวเอง (ช่อง "สังกัด" ในฟอร์มเป็นข้อความอิสระ จึงไม่เชื่อค่านั้น)
   // ผู้ใช้สิทธิ์ all ต้องกรอกรหัสสาขาในช่องนั้น
@@ -209,7 +213,7 @@ async function addEmployee(body, session) {
       await hrDb.queryRead(
         `INSERT INTO dbo.hr_employee
            (hr_code, full_name, branch, emp_type, position, daily_wage, status, start_date, loga${withList ? ', branches' : ''})
-         VALUES (@hr_code, @full_name, @branch, @emp_type, @position, 0, N'ทำงาน', @start_date, @loga${withList ? ', @branches' : ''})`,
+         VALUES (@hr_code, @full_name, @branch, @emp_type, @position, @daily_wage, N'ทำงาน', @start_date, @loga${withList ? ', @branches' : ''})`,
         {
           hr_code: { type: sql.NVarChar(30), value: hrCode },
           full_name: { type: sql.NVarChar(150), value: fullName.slice(0, 150) },
@@ -217,6 +221,7 @@ async function addEmployee(body, session) {
           emp_type: { type: sql.NVarChar(20), value: str(body.type).slice(0, 20) || null },
           position: { type: sql.NVarChar(100), value: str(body.position).slice(0, 100) || null },
           start_date: { type: sql.Date, value: startDate },
+          daily_wage: { type: sql.Decimal(12, 2), value: dailyWage },
           loga: { type: sql.NVarChar(50), value: str(body.loga).slice(0, 50) || null },
           ...(withList ? { branches: { type: sql.NVarChar(200), value: branchesValue } } : {}),
         }
