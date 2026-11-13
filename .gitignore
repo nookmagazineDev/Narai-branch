@@ -26,3 +26,6 @@ office-server/.env
 *.njsproj
 *.sln
 *.sw?
+
+# ไฟล์แนบ/รูปพนักงานบนเครื่องออฟฟิศ (office-server/employee-hr.js)
+office-server/uploads

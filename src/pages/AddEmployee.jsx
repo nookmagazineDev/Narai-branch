@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiCall } from '../services/api';
+import shrinkImage from '../utils/shrinkImage';
 import toast from 'react-hot-toast';
 import { UserPlus, Save } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -58,6 +59,9 @@ export default function AddEmployee() {
     'สมุดบัญชีธนาคาร'
   ];
 
+  /* ไฟล์แนบส่งไปพร้อมฟอร์มเป็น base64 ผ่าน Vercel (รับ body ได้ไม่เกิน ~4.5 MB) — รูปย่อด้วย shrinkImage
+     ไฟล์อื่น (PDF) ส่งตามเดิม แล้วเช็คขนาดรวมก่อนยิง จะได้บอกผู้ใช้ตรง ๆ ไม่ใช่ error เน็ตกลาง ๆ */
+  const MAX_TOTAL_CHARS = 4_000_000;
   const getBase64 = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -81,13 +85,17 @@ export default function AddEmployee() {
       if (files && files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          const base64 = await getBase64(file);
+          const shrunk = await shrinkImage(file);
           fileDataArray.push({
-            name: file.name,
-            mimeType: file.type,
-            base64: base64
+            name: shrunk ? file.name.replace(/\.[^.]+$/, '') + '.jpg' : file.name,
+            mimeType: shrunk ? 'image/jpeg' : file.type,
+            base64: shrunk || await getBase64(file),
           });
         }
+      }
+      const totalChars = fileDataArray.reduce((sum, f) => sum + f.base64.length, 0);
+      if (totalChars > MAX_TOTAL_CHARS) {
+        throw new Error('ไฟล์แนบรวมกันใหญ่เกินไป (เกินประมาณ 3 MB) — แนบทีละน้อยลง หรือย่อไฟล์ PDF ก่อน');
       }
 
       const payload = {
@@ -98,7 +106,10 @@ export default function AddEmployee() {
       };
       const response = await apiCall('addEmployee', payload);
       if (response.status === 'success') {
-        toast.success(`เพิ่มพนักงานสำเร็จ (รหัส HR: ${response.data?.hrCode || formData.hrCode})`);
+        // ข้อความจากเซิร์ฟเวอร์บอกด้วยถ้าข้อมูลส่วนตัว/ไฟล์แนบบันทึกไม่ครบ (พนักงานเข้ารายชื่อแล้ว)
+        const msg = response.message || `เพิ่มพนักงานสำเร็จ (รหัส HR: ${response.data?.hrCode || formData.hrCode})`;
+        if (response.data?.warning) toast(msg, { icon: '⚠️', duration: 10000 });
+        else toast.success(msg);
         // Reset form
         setFormData({
           hrCode: '', fullName: '', department: '', type: '', position: '',
