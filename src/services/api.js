@@ -1,5 +1,5 @@
 /* global __BUILD_ID__ */
-import { branchGroup, branchCodes } from '../utils/branchAlias';
+import { branchCodes } from '../utils/branchAlias';
 
 export const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwsGv4sz5ljPtdq347Y8zKaDP9FCLKAKKUNCPY5tarhAiAYz8RZdrC_nltVTeT0WWIXjA/exec";
 
@@ -136,60 +136,26 @@ const SQL_ACTIONS = new Set([
   'saveGoodsReceived',          // ReceiveGoods
   'confirmReceivedItem',        // ReceiveGoods
 
+  // กลุ่มที่ 3.08 — พนักงาน: ย้ายจาก Google Sheet มา SQL ทั้งหมด (ดู office-server/employee-hr.js)
+  // ห้ามถอยไปชีท — ชีทไม่ได้เป็นตัวหลักแล้ว เขียนลงชีทเท่ากับข้อมูลหาย
+  'getNextHrCode',             // AddEmployee
+  'addEmployee',               // AddEmployee
+  'resignEmployee',            // EmployeeList
+  'updateEmployeeLoga',        // EmployeeList
+  'uploadEmployeePhoto',       // EmployeeList
+
   // กลุ่มที่ 4 — หน้าล็อกอิน (ผู้ใช้ย้ายจากชีท User ไปตาราง hr_user)
   // ห้ามเรียกด้วย apiCall() ตรงๆ ให้ใช้ loginUser() แทน เพราะมันมีทางถอยเมื่อ office-server ล่ม
   'login',                      // Login
 ]);
 
 // ---------------------------------------------------------------------------
-// รายชื่อพนักงาน: Google Sheet เป็นตัวหลัก SQL คัดลอกตามให้อัตโนมัติ
+// รายชื่อพนักงาน: SQL (hr_employee) เป็นตัวหลัก
 //
-// เพิ่มพนักงาน / ให้ลาออก / แก้ค่าแรง ยังทำที่เดิมทุกอย่าง (หน้ารายชื่อพนักงาน -> ชีท)
-// แล้วทุกครั้งที่หน้าไหนดึงรายชื่อพนักงาน ผลลัพธ์จะถูกส่งไปเก็บใน hr_employee ด้วย
-// ฝั่ง SQL จะปรับตามให้เอง: คนใหม่ -> เพิ่ม, คนที่หายไปจากรายชื่อ -> ตั้งเป็นลาออก
-//
-// ข้อดีที่สำคัญกว่าความสะดวก: SQL จะได้ "รหัสพนักงานชุดเดียวกับที่หน้าเว็บใช้" เป๊ะ
-// ไม่ต้องเดาว่ารหัสในชีท HR (0808001) กับในตารางงาน (740808001) ตัวไหนถูก
-// ซึ่งเป็นปัญหาที่ทำให้ตอนย้ายข้อมูลครั้งแรกกะ 72% หาเจ้าของไม่เจอ
-//
-// ยิงแบบไม่รอผล ถ้าคัดลอกไม่สำเร็จก็ไม่กระทบผู้ใช้ (ชีทเป็นตัวหลักอยู่แล้ว)
+// เดิม Google Sheet เป็นตัวหลักแล้ว SQL คัดลอกตาม (อ่านชีทเบื้องหลังแล้วซิงก์เข้า SQL ทุกครั้งที่เปิดหน้า)
+// ตอนนี้ เพิ่มพนักงาน / แจ้งลาออก / LOGA / รูป เขียน SQL ตรง (office-server/employee-hr.js)
+// จึงเลิกอ่านชีทและเลิกคัดลอก — ชีทที่ไม่มีใครอัปเดตแล้วจะไปเขียนทับข้อมูลใหม่ใน SQL
 // ---------------------------------------------------------------------------
-//
-// ทั้งสอง action คือรายชื่อพนักงานเหมือนกัน ต่างกันแค่ getEmployees (หน้ารายชื่อพนักงาน)
-// เอาคนที่ลาออกแล้วมาด้วย จึงต้องบอกฝั่ง SQL ว่ารายชื่อชุดนี้ "ครบทุกสถานะ" (fullList)
-// ไม่งั้นคนลาออกที่ส่งไปจะถูกตั้งกลับเป็น 'ทำงาน' ทุกครั้งที่เปิดหน้านั้น
-const MIRROR_TO_SQL = new Set(['getScheduleEmployees', 'getEmployees']);
-
-const mirrorToSql = (action, payload, result) => {
-  if (!Array.isArray(result?.data) || result.data.length === 0) return;
-  const branch = String(payload?.branch || '').trim();
-  if (!branch) return;
-
-  fetch(SQL_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'syncEmployees',
-      branch,
-      employees: result.data,
-      fullList: action === 'getEmployees',
-      _user: sessionUser(),
-    }),
-    keepalive: true, // ให้ยิงจบแม้ผู้ใช้เปลี่ยนหน้าไปแล้ว
-  })
-    .then((res) => res.json())
-    .then((res) => {
-      if (res?.status === 'success') {
-        const d = res.data || {};
-        if (d.added || d.resigned) {
-          console.info(`ซิงก์พนักงานสาขา ${branch} -> SQL: เพิ่ม/อัปเดต ${d.upserted ?? 0}, ตั้งเป็นลาออก ${d.resigned ?? 0}`);
-        }
-      } else {
-        console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, res?.message);
-      }
-    })
-    .catch((err) => console.warn(`ซิงก์พนักงานสาขา ${branch} ไม่สำเร็จ:`, err?.message || err));
-};
 
 const BKK_DATE = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -208,6 +174,15 @@ const normalizeDate = (v) => {
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
   const d = new Date(t);
   return Number.isNaN(d.getTime()) ? t : BKK_DATE.format(d);
+};
+
+/**
+ * ลิงก์รูปพนักงาน — รูปที่อัปหลังย้ายมา SQL เก็บบนเครื่องออฟฟิศเป็น 'file:photos/xxx.jpg'
+ * เปิดผ่าน /api/schedule?file=... (Vercel ส่งต่อไป office-server) ส่วนรูปเก่าบน Google Drive เป็นลิงก์ตรงตามเดิม
+ */
+const photoHref = (v) => {
+  const s = String(v ?? '').trim();
+  return s.startsWith('file:') ? `${SQL_ENDPOINT}?file=${encodeURIComponent(s.slice(5))}` : s;
 };
 
 /**
@@ -239,139 +214,26 @@ const normalizeEmployee = (e) => {
     startDate: normalizeDate(e?.startDate),
     loga: e?.loga ?? '',
     newCode: e?.newCode ?? '',
-    photoUrl: e?.photoUrl ?? '',
+    photoUrl: photoHref(e?.photoUrl),
   };
 };
 
-/** รวมรายชื่อจากหลายคำตอบ ตัดคนซ้ำด้วยรหัส HR (คนเดิมอาจมีแถวใต้ทั้งสองรหัสสาขา) */
-const mergeRosters = (responses) => {
-  const seen = new Set();
-  const out = [];
-  for (const res of responses) {
-    if (res?.status !== 'success') continue;
-    for (const emp of res.data || []) {
-      const e = normalizeEmployee(emp);
-      const key = e.hrCode.toLowerCase();
-      if (key) {
-        if (seen.has(key)) continue;
-        seen.add(key);
-      }
-      out.push(e);
-    }
-  }
-  return out;
-};
-
 /**
- * อ่านรายชื่อจากชีท — ยิงทีละรหัสสาขาแล้วรวมกัน
- *
- * สาขาที่มีรหัสสองแบบ (zjp กับ sjp = ร้านเดียวกัน) ต้องถามทีละรหัส เพราะชีท DATA
- * จับคู่สาขาแบบตรงตัว พนักงานที่ลงไว้ใต้อีกรหัสจะไม่ขึ้นเลย
- * (ฝั่ง SQL ไม่ต้องทำแบบนี้ เพราะ branchScope() ขยายเป็น branch IN (...) ให้อยู่แล้ว)
- *
- * รหัสแรกคือสาขาที่ขอมา ถ้าพลาดถือว่าโหลดไม่สำเร็จทั้งคำขอ
- * ส่วนรหัสพี่น้องเป็นของเสริม ชีทตอบไม่ไหวก็ยังเห็นรายชื่อของตัวเองตามปกติ
- */
-const fetchRosterFromSheet = async (branch, action, options = {}) => {
-  const codes = branch.toLowerCase() === 'all' ? [branch] : branchGroup(branch);
-  const opts = { via: 'sheet', ...options };
-  const [main, ...aliases] = await Promise.all([
-    apiCall(action, { branch: codes[0] }, opts),
-    ...codes.slice(1).map((c) => apiCall(action, { branch: c }, opts).catch(() => null)),
-  ]);
-  if (main?.status !== 'success') return main;
-  return { status: 'success', data: mergeRosters([main, ...aliases]) };
-};
-
-/** ฟิลด์ที่ถือว่า "ข้อมูลคนนี้เปลี่ยนไปแล้ว" ถ้าชีทกับ SQL ไม่ตรงกัน */
-const COMPARED_FIELDS = ['name', 'position', 'empType', 'status', 'startDate', 'loga', 'newCode', 'photoUrl'];
-
-/**
- * ชีทกับ SQL ต่างกันหรือยัง — ใช้ตัดสินว่าต้องรีเฟรชหน้าให้ผู้ใช้ไหม
- *
- * ข้ามฟิลด์ที่ชีท "ไม่ได้ส่งมา" (ค่าว่าง) ไม่นับเป็นความต่าง ด้วยเหตุผลเดียวกับที่ฝั่ง SQL
- * ใช้ COALESCE ตอนซิงก์: สองคำสั่งของชีทรู้ข้อมูลคนละส่วน (ตัวหนึ่งมีค่าแรง อีกตัวมี LOGA/รูป)
- * ถ้านับค่าว่างเป็นความต่าง หน้าเว็บจะรีเฟรชตัวเองทุกครั้งที่เปิดโดยไม่มีอะไรเปลี่ยนจริง
- */
-const rosterDiffers = (sheetList, sqlList) => {
-  const sheet = (sheetList || []).map(normalizeEmployee);
-  const bySql = new Map((sqlList || []).map((e) => [String(e.hrCode).toLowerCase(), normalizeEmployee(e)]));
-  if (sheet.length !== bySql.size) return true;
-
-  for (const s of sheet) {
-    const q = bySql.get(s.hrCode.toLowerCase());
-    if (!q) return true;   // มีคนใหม่ในชีทที่ SQL ยังไม่รู้จัก
-    if (COMPARED_FIELDS.some((f) => s[f] !== '' && s[f] !== q[f])) return true;
-    // สาขาที่สังกัดเปลี่ยน (เช่น ชีทเพิ่งเพิ่มให้ดูอีกร้าน) ก็ต้องรีเฟรช ไม่งั้นอีกสาขายังไม่เห็นเขา
-    if (s.branches.length > 0 && s.branches.join(',') !== q.branches.join(',')) return true;
-    const wage = Number(s.dailyWage) || 0;
-    if (wage > 0 && wage !== (Number(q.dailyWage) || 0)) return true;
-  }
-  return false;
-};
-
-/**
- * ดึงรายชื่อพนักงานของสาขา — ทุกหน้าใช้ตัวนี้ตัวเดียว
- *
- * ปัญหาที่ต้องแก้พร้อมกันสองข้อ
- *   1) Apps Script ช้า (เปิดสเปรดชีตทั้งไฟล์ทุกครั้ง) เปิดหน้าลงตารางแล้วรอนาน
- *   2) ถ้าอ่านจาก SQL เฉยๆ การแก้ในชีท (เพิ่มคน/ให้ลาออก/แก้ค่าแรง) จะไม่มีทางเข้า SQL
- *      เพราะตัวซิงก์เดิมทำงานตอนที่หน้าเว็บไปอ่านชีท
- *
- * จึงทำเป็นสองจังหวะ
- *   จังหวะแรก  — อ่านจาก SQL คืนให้หน้าเว็บใช้ทันที (เร็ว)
- *   จังหวะสอง — เช็คชีทเงียบๆ ข้างหลัง ซิงก์เข้า SQL ให้ และถ้ารายชื่อต่างจากเดิม
- *                จะเรียก onRefresh ให้หน้าเว็บอัปเดตตัวเองในการเปิดครั้งนั้นเลย
- *
- * ถ้า SQL ยังไม่มีข้อมูลของสาขานั้น (สาขาใหม่ / ซิงก์ยังไม่ถึง) จะรอผลจากชีทแทน
- * ไม่ปล่อยให้หน้าเว็บขึ้นรายชื่อว่างเปล่า — เคสนี้เคยทำหน้านับสต๊อกใช้งานไม่ได้ทั้งหน้า
+ * ดึงรายชื่อพนักงานของสาขา — ทุกหน้าใช้ตัวนี้ตัวเดียว (อ่าน SQL อย่างเดียว)
  *
  * @param {string} branch
  * @param {object} [options]
  * @param {boolean} [options.includeResigned] เอาคนที่ลาออกแล้วมาด้วย (หน้ารายชื่อพนักงาน)
- * @param {boolean} [options.fresh] ข้าม SQL อ่านจากชีทตรงๆ — ใช้หลังเพิ่งแก้ข้อมูลผ่านหน้าเว็บ
- *        เพราะคำสั่งแก้ไข (แจ้งลาออก/อัปโหลดรูป/แก้ LOGA) เขียนลงชีทอย่างเดียว
- *        ถ้าอ่าน SQL ต่อทันทีจะได้ของเก่ากลับมา เหมือนกดบันทึกแล้วไม่ติด
- * @param {(employees: any[]) => void} [options.onRefresh]
+ * fresh / onRefresh ยังรับไว้ให้หน้าที่ส่งมาไม่พัง แต่ไม่มีผลแล้ว — ไม่มีชีทให้เช็คของใหม่อีก
  */
-export const fetchEmployees = async (branch, { includeResigned = false, fresh = false, onRefresh } = {}) => {
+export const fetchEmployees = async (branch, { includeResigned = false } = {}) => {
   const b = String(branch || '').trim();
   if (!b) return { status: 'success', data: [] };
-
-  // ชีทยังแยกเป็นสองคำสั่ง (คนละชุดฟิลด์) — เลือกตัวที่ให้ข้อมูลตรงกับที่หน้านั้นต้องการ
-  const sheetAction = includeResigned ? 'getEmployees' : 'getScheduleEmployees';
-
-  if (fresh) return await fetchRosterFromSheet(b, sheetAction);
-
-  let sqlRes = null;
-  try {
-    // SQL อ่านตารางเดียวทั้งสองหน้า ต่างกันแค่เอาคนลาออกมาด้วยไหม
-    sqlRes = await apiCall('getEmployees', { branch: b, includeResigned }, { via: 'sql' });
-  } catch (err) {
-    console.warn('อ่านรายชื่อพนักงานจาก SQL ไม่สำเร็จ จะใช้ชีทแทน:', err?.message || err);
-  }
-
-  const fromSql = Array.isArray(sqlRes?.data) ? sqlRes.data.map(normalizeEmployee) : [];
-
-  // SQL ไม่มีข้อมูล -> ต้องได้จากชีทก่อนคืนค่า (mirror จะซิงก์เข้า SQL ให้เอง)
-  if (fromSql.length === 0) {
-    return await fetchRosterFromSheet(b, sheetAction);
-  }
-
-  // มีข้อมูลแล้ว — คืนทันที แล้วค่อยเช็คของใหม่จากชีทข้างหลัง
-  // ไม่ลองใหม่ (retries: 0) เพราะเป็นงานเบื้องหลัง ถ้าพลาดรอบนี้ครั้งหน้าก็เช็คใหม่
-  fetchRosterFromSheet(b, sheetAction, { retries: 0 })
-    .then((sheetRes) => {
-      const freshList = Array.isArray(sheetRes?.data) ? sheetRes.data : [];
-      if (freshList.length === 0) return;
-      if (!rosterDiffers(freshList, fromSql)) return;
-      console.info(`รายชื่อพนักงานสาขา ${b} ในชีทเปลี่ยนไปจากใน SQL — อัปเดตให้แล้ว`);
-      if (typeof onRefresh === 'function') onRefresh(freshList);
-    })
-    .catch((err) => console.warn(`เช็ครายชื่อพนักงานสาขา ${b} จากชีทไม่สำเร็จ:`, err?.message || err));
-
-  return { status: 'success', data: fromSql };
+  const res = await apiCall('getEmployees', { branch: b, includeResigned }, { via: 'sql' });
+  if (res?.status !== 'success') return res;
+  return { status: 'success', data: (Array.isArray(res.data) ? res.data : []).map(normalizeEmployee) };
 };
+
 
 /** ชื่อเดิมของ fetchEmployees() — หน้าลงตารางงานกับหน้านับสต๊อกยังเรียกชื่อนี้อยู่ */
 export const fetchScheduleEmployees = (branch, options) => fetchEmployees(branch, options);
@@ -583,11 +445,6 @@ export const apiCall = async (action, payload, options = {}) => {
         // ทำให้ 3 รอบรวมกันเป็น ~93 วิ ทั้งที่ตั้ง deadline ไว้ 70 วิ (ผู้ใช้นั่งรอค้างเกินจริงเกือบครึ่งนาที)
         const remaining = deadline - Date.now();
         const result = await requestOnce(action, payload, Math.min(timeoutMs, remaining), options.via);
-        // คัดลอกรายชื่อพนักงานไปเก็บใน SQL ด้วย — ไม่รอผล ไม่ให้กระทบเวลาโหลดหน้า
-        // ซิงก์เข้า SQL เมื่อคำขอนี้ไปหยิบมาจากชีทจริงๆ เท่านั้น
-        // (ถ้าอ่านมาจาก SQL อยู่แล้วก็ไม่มีอะไรต้องซิงก์)
-        const cameFromSheet = options.via ? options.via === 'sheet' : !SQL_ACTIONS.has(action);
-        if (MIRROR_TO_SQL.has(action) && cameFromSheet) mirrorToSql(action, payload, result);
         return result;
       } catch (err) {
         // เซิร์ฟเวอร์ตอบมาแล้วว่าทำไม่ได้ (เช่น รหัสผ่านผิด, ไม่พบข้อมูล) — ลองใหม่ก็ได้ผลเดิม

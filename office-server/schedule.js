@@ -24,10 +24,11 @@ import { STOREFCT_AUTH_ACTIONS } from './storefct-auth.js';
 import { UNIFORM_ACTIONS } from './uniform.js';
 import { ATTENDANCE_ACTIONS } from './attendance.js';
 import { EMPLOYEE_DOC_ACTIONS } from './employee-doc.js';
+import { EMPLOYEE_HR_ACTIONS } from './employee-hr.js';
 import { ORDER_SHOP_ACTIONS } from './ordershop.js';
 import { SCHEDULE_LOCK_ACTIONS, assertNotLocked } from './schedule-lock.js';
 import {
-  sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch, branchListValue,
+  sessionOf, branchFor, branchGroup, sameBranch, branchCodes, primaryBranch,
 } from './hr-session.js';
 import { hashPassword, verifyPassword } from './hr-password.js';
 
@@ -126,22 +127,6 @@ const isDateStr = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const BKK_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
 const bangkokDate = (d) => BKK_DATE.format(d);
 
-/**
- * วันที่ที่รับมาจากชีท -> 'YYYY-MM-DD' (คืน null ถ้าอ่านไม่ออก จะได้ไม่ไปทับของเดิม)
- * รับได้ทั้ง ISO ที่ Apps Script ส่งมา, 'YYYY-MM-DD' และ 'DD/MM/YYYY' ที่เป็น พ.ศ. ก็ได้
- */
-const toIsoDate = (v) => {
-  const t = str(v);
-  if (!t) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  const slash = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (slash) {
-    const year = Number(slash[3]) > 2400 ? Number(slash[3]) - 543 : Number(slash[3]);
-    return `${year}-${slash[2].padStart(2, '0')}-${slash[1].padStart(2, '0')}`;
-  }
-  const d = new Date(t);
-  return Number.isNaN(d.getTime()) ? null : bangkokDate(d);
-};
 /** เก็บเวลาเป็นข้อความ 'HH:mm' — ค่า '24:00' ใช้ได้จริงในระบบเดิม จึงไม่แปลงเป็นชนิด TIME */
 const timeOrNull = (v) => (/^\d{1,2}:\d{2}$/.test(str(v)) ? str(v).padStart(5, '0') : null);
 const textOrNull = (v) => (str(v) === '' ? null : str(v));
@@ -502,173 +487,14 @@ async function getEmployees(body, session) {
 }
 
 /**
- * คัดลอกรายชื่อพนักงานของสาขาหนึ่งจาก Google Sheet มาเก็บใน hr_employee
+ * เดิม: คัดลอกรายชื่อพนักงานจาก Google Sheet มาเขียนทับ hr_employee ทุกครั้งที่สาขาเปิดหน้ารายชื่อ
  *
- * Google Sheet เป็นตัวหลัก (เพิ่มคน/ให้ลาออก/แก้ค่าแรง ทำที่หน้ารายชื่อพนักงานเหมือนเดิม)
- * ฝั่งเว็บจะเรียก action นี้ให้เองทุกครั้งที่ดึงรายชื่อพนักงานสำเร็จ (ดู MIRROR_TO_SQL)
- * SQL จึงได้รหัสพนักงานชุดเดียวกับที่หน้าเว็บใช้เป๊ะ ไม่ต้องเดาว่ารหัสไหนถูก
- *
- * คนที่หายไปจากรายชื่อ = ลาออกแล้ว จึงตั้ง status เป็น 'ลาออก' ให้ (ไม่ลบ เพราะกะเก่ายังอ้างอิงอยู่)
- * แต่มีกันพลาดไว้: ถ้ารายชื่อที่ส่งมาน้อยกว่าครึ่งของที่มีอยู่ จะไม่ตั้งใครเป็นลาออกเลย
- * เพราะกรณีนั้นน่าจะเป็นชีทตอบมาไม่ครบ ไม่ใช่คนลาออกยกสาขา
- *
- * body.fullList = true เมื่อรายชื่อที่ส่งมา "รวมคนลาออกด้วย" (มาจากหน้ารายชื่อพนักงาน)
- *   - สถานะยึดตามที่ชีทบอกมาทีละคน ไม่ใช่ตั้งเป็น 'ทำงาน' ให้ทุกคน
- *   - และไม่ต้องเดาว่าใครลาออกจากการที่หายไปจากรายชื่อ เพราะชีทบอกมาตรงๆ อยู่แล้ว
- *
- * ฟิลด์ที่ "ไม่ได้ส่งมา" จะไม่ถูกเขียนทับ (COALESCE/NULLIF) เพราะสองหน้ารู้ข้อมูลคนละส่วน:
- * หน้าลงตารางงานรู้ค่าแรง หน้ารายชื่อรู้วันเริ่มงาน/LOGA/รูป — ถ้าเขียนทับตรงๆ
- * ฝั่งที่เปิดทีหลังจะล้างของอีกฝั่งทิ้งทุกครั้ง กลายเป็นข้อมูลกะพริบไปมา
+ * ตอนนี้ SQL เป็นตัวหลักของรายชื่อแล้ว (เพิ่มพนักงาน/ลาออก/LOGA/รูป เขียน SQL ตรง — ดู employee-hr.js)
+ * ถ้ายังคัดลอกจากชีทต่อ ชีทที่ไม่มีใครอัปเดตแล้วจะเขียนทับสิ่งที่แก้ใน SQL (ชื่อที่ออฟฟิศแก้เด้งกลับ)
+ * จึงเหลือเป็นคำสั่งที่ไม่ทำอะไร — เครื่องที่ยังถือหน้าเว็บรุ่นเก่าเรียกมาก็ไม่พัง และไม่ทับข้อมูล
  */
-async function syncEmployees(body, session) {
-  const branch = branchFor(session, body.branch);
-  const withList = await hasBranchesColumn();
-  const scope = withList ? branchScopeAny(branch) : branchScope(branch);
-  const list = Array.isArray(body.employees) ? body.employees : [];
-  const fullList = body.fullList === true;
-  if (!branch || list.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีข้อมูล' };
-
-  const allBranches = isAllBranches(branch);
-  const rows = list
-    .map((e) => ({
-      hrCode: str(e.hrCode),
-      name: str(e.name || e.fullName),
-      // ทุกสาขาที่ชีทบอกว่าคนนี้สังกัด เก็บเป็น ',sum,ipr,' ให้ฝั่งอ่านค้นด้วย LIKE ได้
-      branches: branchListValue(e.branch),
-      // สังกัดหลายสาขา = ห้ามให้สาขาหลักสลับไปมาตามคนที่เปิดหน้าล่าสุด (ดูเหตุผลใน MERGE)
-      multi: branchCodes(e.branch).length > 1 ? 1 : 0,
-      // สาขาของแต่ละคนตามที่ชีทบอก — ใช้เฉพาะตอนซิงก์จากผู้ใช้สิทธิ์ 'all'
-      // ซึ่งไม่มี "สาขาเดียว" ให้ยึด ถ้าเผลอเขียน @branch ลงไปทุกคนจะกลายเป็นสาขา all ทั้งระบบ
-      //
-      // ยึดรหัสแรกของคนที่สังกัดหลายสาขา ('SUM, IPR' -> 'sum') เพราะคอลัมน์นี้เก็บได้รหัสเดียว
-      // ถ้าเก็บทั้งพวง คนคนนั้นจะหายจากรายชื่อทุกสาขา (ฝั่งอ่านเทียบ branch IN (...) แบบตรงตัว)
-      branch: primaryBranch(e.branch),
-      empType: str(e.type || e.empType),
-      position: str(e.position),
-      dailyWage: num(e.dailyWage),
-      status: str(e.status),
-      startDate: toIsoDate(e.startDate),
-      loga: str(e.loga),
-      newCode: str(e.newCode),
-      photoUrl: str(e.photoUrl),
-    }))
-    // สิทธิ์ 'all': คนที่ชีทไม่ได้บอกสาขามาก็ไม่รู้จะเก็บไว้ใต้สาขาไหน ข้ามไปดีกว่าเดา
-    .filter((e) => e.hrCode && e.name && (!allBranches || e.branch));
-  if (rows.length === 0) return { upserted: 0, resigned: 0, skipped: 'ไม่มีรหัส/ชื่อที่ใช้ได้' };
-
-  // รายชื่อที่รวมคนลาออกมาด้วยไม่ต้องเดาว่าใครลาออก จึงไม่ต้องนับของเดิมมาเทียบ
-  let before = 0;
-  if (!fullList && !allBranches) {
-    const activeNow = await queryRead(
-      `SELECT COUNT(*) AS n FROM dbo.hr_employee WHERE ${scope.clause} AND status = N'ทำงาน'`,
-      scope.params
-    );
-    before = Number(activeNow[0]?.n || 0);
-  }
-  // รายชื่อหดลงเกินครึ่ง = น่าจะได้ข้อมูลมาไม่ครบ อย่าไปตั้งใครเป็นลาออก
-  // 'all' ไม่ใช่สาขาเดียว จะเทียบจำนวนคนหรือตั้งใครเป็นลาออกจากรายชื่อก้อนนี้ไม่ได้
-  const safeToRetire = !fullList && !allBranches && rows.length * 2 >= before;
-
-  let resigned = 0;
-  await withTransaction(async (run) => {
-    // ส่งทั้งรายชื่อไปเป็น JSON ก้อนเดียว ให้ SQL Server แตกเองด้วย OPENJSON
-    // เดิมวนยิง MERGE ทีละคน + สร้างตารางชั่วคราวแล้ว INSERT ทีละแถว
-    // สาขาละ 20 คนกลายเป็น 40+ รอบข้ามประเทศ และ action นี้ทำงานทุกครั้งที่เปิดหน้า
-    // จึงไปแย่งคอนเนคชันกับตอนผู้ใช้กดบันทึกตาราง ทำให้ทั้งสองฝั่งช้าและ timeout
-    const rowsJson = { type: sql.NVarChar(sql.MAX), value: JSON.stringify(rows) };
-
-    // คอลัมน์ branches เพิ่งเพิ่มเข้ามา ฐานข้อมูลที่ยังไม่ได้รัน schema-hr.sql รอบใหม่จะยังไม่มี
-    // จึงต่อท่อนที่อ้างถึงมันเฉพาะตอนที่มีจริง ที่เหลือทำงานแบบเดิมทุกอย่าง
-    const setList = withList ? `branches = COALESCE(NULLIF(s.branches, N''), t.branches),` : '';
-    const insertListCol = withList ? ', branches' : '';
-    const insertListVal = withList ? `, NULLIF(s.branches, N'')` : '';
-
-    await run(
-      `MERGE dbo.hr_employee WITH (HOLDLOCK) AS t
-         USING (
-           SELECT hr_code, full_name, branch, branches, multi, emp_type, position, daily_wage,
-                  start_date, loga, new_code, photo_url,
-                  /* รายชื่อที่รวมคนลาออกมาด้วย = เชื่อสถานะที่ชีทบอก
-                     รายชื่อที่กรองมาเฉพาะคนทำงาน = ทุกคนในนั้นคือคนที่ยังทำงานอยู่ */
-                  CASE WHEN @fullList = 1 AND NULLIF(status, N'') IS NOT NULL
-                       THEN status ELSE N'ทำงาน' END AS new_status
-             FROM OPENJSON(@rows) WITH (
-                  hr_code NVARCHAR(30) '$.hrCode',
-                  full_name NVARCHAR(150) '$.name',
-                  branch NVARCHAR(50) '$.branch',
-                  branches NVARCHAR(200) '$.branches',
-                  multi BIT '$.multi',
-                  emp_type NVARCHAR(20) '$.empType',
-                  position NVARCHAR(100) '$.position',
-                  daily_wage DECIMAL(12,2) '$.dailyWage',
-                  status NVARCHAR(20) '$.status',
-                  start_date DATE '$.startDate',
-                  loga NVARCHAR(50) '$.loga',
-                  new_code NVARCHAR(50) '$.newCode',
-                  photo_url NVARCHAR(500) '$.photoUrl'
-                )
-         ) AS s
-            ON t.hr_code = s.hr_code
-       WHEN MATCHED THEN UPDATE SET
-            full_name = s.full_name,
-            /* สาขาปกติยึด @branch (คนย้ายสาขาจะได้ย้ายตาม) ส่วนสิทธิ์ 'all' ต้องยึดของแต่ละคน
-               ข้อยกเว้น: คนที่สังกัดหลายสาขายึด "รหัสแรกของตัวเอง" เสมอ ไม่งั้นสาขาหลักจะสลับ
-               ไปมาทุกครั้งที่อีกสาขาเปิดหน้ารายชื่อ (คอลัมน์ branches เก็บครบทั้งพวงอยู่แล้ว
-               รายชื่อของทั้งสองสาขาจึงยังเห็นเขาเหมือนกัน) */
-            branch = CASE WHEN @allBranches = 1 OR s.multi = 1 THEN s.branch ELSE @branch END,
-            ${setList}
-            /* ฟิลด์ที่ฝั่งผู้ส่งอาจไม่รู้ = ส่งมาว่าง ให้คงของเดิมไว้ ไม่ล้างทิ้ง */
-            emp_type   = COALESCE(NULLIF(s.emp_type, N''), t.emp_type),
-            position   = COALESCE(NULLIF(s.position, N''), t.position),
-            daily_wage = CASE WHEN s.daily_wage > 0 THEN s.daily_wage ELSE t.daily_wage END,
-            start_date = COALESCE(s.start_date, t.start_date),
-            loga       = COALESCE(NULLIF(s.loga, N''), t.loga),
-            new_code   = COALESCE(NULLIF(s.new_code, N''), t.new_code),
-            photo_url  = COALESCE(NULLIF(s.photo_url, N''), t.photo_url),
-            status = s.new_status,
-            resign_date = CASE WHEN s.new_status = N'ทำงาน' THEN NULL ELSE t.resign_date END,
-            updated_at = SYSDATETIME()
-       WHEN NOT MATCHED THEN
-            INSERT (hr_code, full_name, branch, emp_type, position, daily_wage,
-                    start_date, loga, new_code, photo_url, status${insertListCol})
-            VALUES (s.hr_code, s.full_name,
-                    CASE WHEN @allBranches = 1 OR s.multi = 1 THEN s.branch ELSE @branch END,
-                    s.emp_type, s.position, s.daily_wage,
-                    s.start_date, s.loga, s.new_code, s.photo_url, s.new_status${insertListVal});`,
-      {
-        rows: rowsJson,
-        branch: { type: sql.NVarChar(50), value: branch },
-        fullList: { type: sql.Bit, value: fullList ? 1 : 0 },
-        allBranches: { type: sql.Bit, value: allBranches ? 1 : 0 },
-      }
-    );
-
-    if (safeToRetire) {
-      /* คนที่สังกัดหลายสาขาห้ามตั้งเป็นลาออกจากรายชื่อของสาขาเดียว เพราะ status มีชุดเดียว
-         ทั้งระบบ — หายจากรายชื่อสาขานี้ไม่ได้แปลว่าออกจากอีกสาขาด้วย
-         (',sum,' = 2 จุลภาค = สังกัดสาขาเดียว / ',sum,ipr,' = 3 จุลภาคขึ้นไป = หลายสาขา) */
-      const keepMulti = withList
-        ? `AND (branches IS NULL OR LEN(branches) - LEN(REPLACE(branches, N',', N'')) <= 2)`
-        : '';
-      const r = await run(
-        `UPDATE dbo.hr_employee
-            SET status = N'ลาออก', updated_at = SYSDATETIME()
-          WHERE ${scope.clause} AND status = N'ทำงาน'
-            ${keepMulti}
-            AND hr_code NOT IN (SELECT hr_code FROM OPENJSON(@rows) WITH (hr_code NVARCHAR(30) '$.hrCode'));`,
-        { rows: rowsJson, ...scope.params }
-      );
-      resigned = r.rowsAffected?.[0] || 0;
-    }
-  });
-
-  return {
-    upserted: rows.length,
-    resigned,
-    skippedRetire: (fullList || allBranches || safeToRetire)
-      ? undefined
-      : `รายชื่อที่ส่งมา ${rows.length} คน น้อยกว่าครึ่งของ ${before} คนที่มีอยู่ จึงไม่ตั้งใครเป็นลาออก`,
-  };
+async function syncEmployees() {
+  return { upserted: 0, resigned: 0, skipped: 'SQL เป็นตัวหลักของรายชื่อพนักงานแล้ว ไม่คัดลอกจากชีท' };
 }
 
 /** เป้าขาย/ค่าแรงสูงสุดต่อวันของสาขา */
@@ -1242,6 +1068,9 @@ const ACTIONS = {
 
   // หน้ารายชื่อพนักงาน: สัญชาติ + เอกสารพนักงานต่างชาติและวันหมดอายุ — ดู office-server/employee-doc.js
   ...EMPLOYEE_DOC_ACTIONS,
+
+  // เพิ่มพนักงาน / แจ้งลาออก / LOGA / รูป / ข้อมูลส่วนตัว / ประวัติเข้า-ออก — ย้ายจากชีทมา SQL (ดู employee-hr.js)
+  ...EMPLOYEE_HR_ACTIONS,
 
   // ร้านที่เบิกของของแอป ordernaraipizzeria (ทะเบียนร้าน/ล็อกอินร้าน/สินค้าที่เบิกได้) — ดู ordershop.js
   ...ORDER_SHOP_ACTIONS,

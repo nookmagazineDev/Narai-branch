@@ -7,6 +7,7 @@ import { fetchAttendance } from '../services/dashboardApi';
 import { hhmm, summarizeDaily } from '../utils/attendance';
 import UniformGuide from '../components/UniformGuide';
 import { uniformSpecImage } from '../utils/uniformSpecs';
+import shrinkImage from '../utils/shrinkImage';
 import { NatBadge, DocStatusBadge, DocAlertPanel, EmployeeDocModal } from '../components/EmployeeDocs';
 import { docIssues, isForeign, parseForeignSheet } from '../utils/employeeDocs';
 import { branchGroup } from '../utils/branchAlias';
@@ -444,7 +445,9 @@ export default function EmployeeList() {
     if (!file) return;
     if (!emp.hrCode) { toast.error('พนักงานคนนี้ไม่มีรหัส HR'); return; }
     if (!file.type.startsWith('image/')) { toast.error('กรุณาเลือกไฟล์รูปภาพ'); return; }
-    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    // ย่อรูปก่อนส่ง — รูปจากมือถือใหญ่เกินที่ Vercel รับได้ (ดู utils/shrinkImage.js)
+    const shrunk = await shrinkImage(file);
+    const ext = shrunk ? 'jpg' : (file.name.split('.').pop() || 'jpg').toLowerCase();
     const reader = new FileReader();
     reader.onload = async () => {
       setUploadingHr(emp.hrCode);
@@ -453,8 +456,8 @@ export default function EmployeeList() {
         const res = await apiCall('uploadEmployeePhoto', {
           hrCode: emp.hrCode,
           ext,
-          mimeType: file.type,
-          base64: reader.result,
+          mimeType: shrunk ? 'image/jpeg' : file.type,
+          base64: shrunk || reader.result,
         });
         if (res.status === 'success') {
           toast.success('อัปโหลดรูปสำเร็จ', { id: toastId });

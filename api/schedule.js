@@ -49,6 +49,10 @@ const READ_ONLY = new Set([
   'getEmployeeUniform',
   // หน้าสแกนเข้า-ออก: เวลาที่แก้ไขแทนเวลาสแกน (ดู office-server/attendance.js)
   'getScanFixes',
+  // พนักงาน (ดู office-server/employee-hr.js)
+  'getNextHrCode',
+  'getEmployeeProfiles',
+  'getEmployeeMovements',
   // หน้ารายชื่อพนักงาน: สัญชาติ + เอกสารพนักงานต่างชาติ (ดู office-server/employee-doc.js)
   'getEmployeeDocs',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)
@@ -86,6 +90,26 @@ const upstreamHost = () => {
   }
 };
 
+async function sendEmployeePhoto(req, res) {
+  const path = String(req.query.file || '');
+  if (!/^photos\/[^/\\]+$/.test(path) || path.includes('..')) {
+    return res.status(400).json({ status: 'error', message: 'path ไม่ถูกต้อง' });
+  }
+  const headers = {};
+  if (process.env.USAGE_API_TOKEN) headers['x-api-token'] = process.env.USAGE_API_TOKEN;
+  try {
+    const r = await fetchUpstream(`${USAGE_API_BASE}/employee-files?path=${encodeURIComponent(path)}`, {
+      timeoutMs: 15000, retries: 1, headers,
+    });
+    if (!r.ok) return res.status(r.status).json({ status: 'error', message: 'ไม่พบรูป' });
+    res.setHeader('Content-Type', r.headers.get('content-type') || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    return res.status(200).send(Buffer.from(await r.arrayBuffer()));
+  } catch (error) {
+    return replyUpstreamError(res, error, 'schedule:employee-photo');
+  }
+}
+
 export default async function handler(req, res) {
   if (applyCors(req, res)) return;
   // รุ่นที่ deploy อยู่ตอนนี้ — หน้าเว็บเอาไปเทียบกับรหัสรุ่นที่ฝังมากับไฟล์ของตัวเอง
@@ -101,6 +125,10 @@ export default async function handler(req, res) {
   // บอกเป็น header ไว้ตรงนี้ จะได้ตอบได้จากภายนอกโดยไม่ต้องเปิดหน้า Settings
   // เอาเฉพาะ host ไม่ใส่ path/token
   res.setHeader('x-upstream', upstreamHost());
+  // รูปพนักงานที่เก็บบนเครื่องออฟฟิศ: GET /api/schedule?file=photos/xxx.jpg (ดู office-server/employee-hr.js)
+  // เปิดให้เฉพาะโฟลเดอร์ photos — ไฟล์แนบเอกสาร (attachments) เป็นข้อมูลส่วนตัว ดูได้ที่เว็บออฟฟิศเท่านั้น
+  // อยู่ในไฟล์นี้แทนไฟล์ใหม่เพราะ Vercel Hobby จำกัด serverless function ไว้ 12 ตัว (เต็มแล้ว)
+  if (req.method === 'GET' && req.query?.file) return sendEmployeePhoto(req, res);
   if (req.method !== 'POST') {
     return res.status(405).json({ status: 'error', message: 'รองรับเฉพาะ POST' });
   }

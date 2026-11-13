@@ -46,6 +46,14 @@ node scripts/setup-uniform-db.mjs          # สร้าง + ไล่ตร�
 ```
 วิธีตั้งทั้งหมดพร้อมวิธีแก้ปัญหาที่เจอบ่อย: [docs/uniform-sql-migration.md](../docs/uniform-sql-migration.md)
 
+**รายชื่อพนักงานย้ายจาก Google Sheet มา SQL ทั้งหมด** (`employee-hr.js`)
+เพิ่มพนักงาน / แจ้งลาออก / เลข LOGA / รูป เขียน SQL ตรง และเลิกคัดลอกจากชีทมาทับ (`syncEmployees` ไม่ทำอะไรแล้ว)
+ตารางใหม่ `dbo.hr_employee_profile` (ข้อมูลส่วนตัว — เห็นเฉพาะออฟฟิศ) และ `dbo.hr_employee_movement` (ประวัติเข้า-ออก)
+สร้างให้เองตอนรัน `update-office-server.bat` (ไฟล์ `sql/employee-hr-001-profile-movement.sql`)
+ไฟล์แนบตอนเพิ่มพนักงานและรูปพนักงานเก็บที่ `office-server/uploads` (ตั้ง `EMPLOYEE_FILE_DIR` ใน `.env` เพื่อย้ายที่ได้)
+⚠️ **ต้องสำรองโฟลเดอร์นี้เอง** — ไม่อยู่ใน git และไม่มีสำเนาที่อื่น
+ข้อมูลเดิมย้ายครั้งเดียวด้วยปุ่ม **นำเข้าชีทพนักงาน** ที่เว็บออฟฟิศ (ไฟล์ .xlsx ที่ดาวน์โหลดจากสเปรดชีตพนักงาน)
+
 **สัญชาติ + เอกสารพนักงานต่างชาติ** (กดที่ชื่อในหน้ารายชื่อพนักงาน / กล่องแจ้งเตือนวันหมดอายุล่วงหน้า 120 วัน)
 ใช้ตาราง `dbo.employee_doc` — สร้างให้เองตอนรัน `update-office-server.bat` (ไฟล์ `sql/employee-doc-001-table.sql`)
 สาขาดูได้อย่างเดียว แก้ไขได้เฉพาะออฟฟิศ (เว็บ office naraipizzeria หรือผู้ใช้สิทธิ์ all)

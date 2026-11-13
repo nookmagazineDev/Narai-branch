@@ -164,8 +164,14 @@ function DocCard({ title, expiryKey, form, children }) {
  * @param {() => Promise<boolean>} [props.onDelete]
  * @param {boolean} [props.canEdit]      false = ดูอย่างเดียว (สาขา) ไม่มีปุ่มแก้ไข/ผูก/ลบ
  * @param {boolean} [props.nameEditable] true = โหมดแก้ไขมีช่องแก้ชื่อ-นามสกุล (ค่าใหม่มากับ form.fullName)
+ * @param {(editing: boolean) => import('react').ReactNode} [props.renderExtra]
+ *        ส่วนเพิ่มใต้ชื่อ เช่น ข้อมูลส่วนตัวที่เห็นเฉพาะออฟฟิศ — เจ้าของหน้าเก็บค่าเองแล้วบันทึกใน onSave
+ * @param {() => void} [props.onCancelEdit] กดยกเลิกโหมดแก้ไข — ให้เจ้าของหน้าคืนค่าของ renderExtra
  */
-export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidates = [], onLink, onDelete, canEdit = true, nameEditable = false }) {
+export function EmployeeDocModal({
+  employee, doc, onSave, onClose, linkCandidates = [], onLink, onDelete,
+  canEdit = true, nameEditable = false, renderExtra, onCancelEdit,
+}) {
   // fullName ของฟอร์ม = ชื่อที่แสดงอยู่ (ชื่อในระบบของพนักงาน ถ้าไม่มีค่อยใช้ชื่อตามเอกสาร)
   const initialForm = () => ({ ...emptyDoc('thai'), ...(doc || {}), fullName: employee?.fullName || doc?.fullName || '' });
   const [form, setForm] = useState(initialForm);
@@ -188,7 +194,7 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
     setBusy('');
     if (ok) setEditing(false);
   };
-  const cancel = () => { setForm(initialForm()); setEditing(false); };
+  const cancel = () => { setForm(initialForm()); setEditing(false); onCancelEdit?.(); };
 
   const f = (key, label, extra = {}) => (
     <Field label={label} value={form[key]} editing={editing} onChange={set(key)} {...extra} />
@@ -253,6 +259,8 @@ export function EmployeeDocModal({ employee, doc, onSave, onClose, linkCandidate
               {employee && <p className="text-xs text-gray-400 mt-1">แก้แล้วชื่อในรายชื่อพนักงานจะเปลี่ยนตาม</p>}
             </section>
           )}
+
+          {renderExtra?.(editing)}
 
           <section>
             <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2">สัญชาติ</h4>
