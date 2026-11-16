@@ -25,6 +25,7 @@ import { UNIFORM_ACTIONS } from './uniform.js';
 import { ATTENDANCE_ACTIONS } from './attendance.js';
 import { EMPLOYEE_DOC_ACTIONS } from './employee-doc.js';
 import { EMPLOYEE_HR_ACTIONS } from './employee-hr.js';
+import { BRANCH_TRANSFER_ACTIONS } from './branch-transfer.js';
 import { ORDER_SHOP_ACTIONS } from './ordershop.js';
 import { SCHEDULE_LOCK_ACTIONS, assertNotLocked } from './schedule-lock.js';
 import {
@@ -1071,6 +1072,9 @@ const ACTIONS = {
 
   // เพิ่มพนักงาน / แจ้งลาออก / LOGA / รูป / ข้อมูลส่วนตัว / ประวัติเข้า-ออก — ย้ายจากชีทมา SQL (ดู employee-hr.js)
   ...EMPLOYEE_HR_ACTIONS,
+
+  // ย้ายสาขาพนักงาน (ตั้งล่วงหน้าได้ ย้ายให้เองเมื่อถึงวัน) — ดู branch-transfer.js
+  ...BRANCH_TRANSFER_ACTIONS,
 
   // ร้านที่เบิกของของแอป ordernaraipizzeria (ทะเบียนร้าน/ล็อกอินร้าน/สินค้าที่เบิกได้) — ดู ordershop.js
   ...ORDER_SHOP_ACTIONS,
