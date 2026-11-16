@@ -632,6 +632,100 @@ async function importMovements(input, reset) {
   return { movements: rows.length, skipped: input.length - rows.length };
 }
 
+/* ===================== เปลี่ยนรหัสพนักงาน (ออฟฟิศ) =====================
+   { oldCode, newCode } — เปลี่ยนรหัสในทุกตารางที่อ้างถึงคนนี้ "ใน transaction เดียว"
+   (ฐาน narai_hr กับ InventoryNarai อยู่บน SQL Server ตัวเดียวกัน จึงอ้างข้ามฐานด้วยชื่อสามส่วนได้)
+   ถ้าตารางไหนพลาด ย้อนกลับทั้งหมด ไม่มีข้อมูลค้างครึ่งรหัสเก่าครึ่งรหัสใหม่
+
+   ⚠️ ข้อมูลของเครื่องสแกนหน้า (ZKBio: iclock_transaction / personnel_employee) ไม่ถูกแตะ
+      เวลาสแกนย้อนหลังยังอยู่ใต้รหัสเก่า และต้องไปเปลี่ยนรหัสในโปรแกรม ZKBio เองให้ตรงกัน
+      หน้าเว็บขึ้นคำเตือนนี้ก่อนให้กดบันทึก */
+const CODE_RE = /^[A-Za-z0-9-]{3,30}$/;
+
+/** ตารางที่มีรหัสพนักงาน — [ฐาน, ตาราง, คอลัมน์] ตารางที่ยังไม่มีในเครื่องนี้ข้ามไปเอง */
+const CODE_TABLES = [
+  ['hr', 'hr_employee', 'hr_code'],
+  ['hr', 'hr_timesheet', 'hr_code'],
+  ['hr', 'hr_timesheet_log', 'hr_code'],
+  ['stock', 'employee_doc', 'hr_code'],
+  ['stock', 'hr_employee_profile', 'hr_code'],
+  ['stock', 'hr_employee_movement', 'hr_code'],
+  ['stock', 'hr_branch_transfer', 'hr_code'],
+  ['stock', 'UniformRequest', 'hr_code'],
+  ['stock', 'UniformBranch', 'hr_code'],
+  ['stock', 'attendance_scan_fix', 'emp_code'],
+  ['stock', 'attendance_edit', 'emp_code'],
+];
+/** ตารางที่รหัสใหม่ต้องยังไม่มีอยู่ ไม่งั้นชนคีย์/ไปรวมกับข้อมูลของคนอื่น */
+const CODE_MUST_BE_FREE = ['hr_employee', 'hr_timesheet', 'employee_doc', 'hr_employee_profile'];
+
+const dbName = (v, fallback) => {
+  const n = str(v) || fallback;
+  if (!/^[A-Za-z0-9_]+$/.test(n)) throw new Error(`ชื่อฐานข้อมูลไม่ถูกต้อง: ${n}`);
+  return n;
+};
+
+async function renameEmployeeCode(body, session) {
+  requireOffice(session);
+  const oldCode = str(body.oldCode);
+  const newCode = str(body.newCode);
+  if (!oldCode) throw badRequest('ไม่ระบุรหัสเดิม');
+  if (!CODE_RE.test(newCode)) throw badRequest('รหัสใหม่ใช้ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และ - ยาว 3-30 ตัว');
+  if (newCode === oldCode) throw badRequest('รหัสใหม่เหมือนรหัสเดิม');
+
+  const dbs = {
+    hr: dbName(process.env.HR_DB_NAME, 'narai_hr'),
+    stock: dbName(process.env.STOCK_DB_NAME, 'InventoryNarai'),
+  };
+  const full = (db, table) => `[${dbs[db]}].dbo.[${table}]`;
+  const codes = {
+    o: { type: sql.NVarChar(50), value: oldCode },
+    n: { type: sql.NVarChar(50), value: newCode },
+  };
+
+  // ตรวจก่อนแตะอะไร — รหัสเดิมต้องมี รหัสใหม่ต้องยังไม่มีใครใช้ (รวมคนที่ลาออก และข้อมูลที่ค้างอยู่)
+  const exists = await hrDb.queryRead(`SELECT hr_code, full_name FROM dbo.hr_employee WHERE hr_code IN (@o, @n)`, codes);
+  const oldRow = exists.find((r) => str(r.hr_code).toLowerCase() === oldCode.toLowerCase());
+  const taken = exists.find((r) => str(r.hr_code).toLowerCase() === newCode.toLowerCase());
+  if (!oldRow) throw badRequest(`ไม่พบพนักงานรหัส ${oldCode}`);
+  if (taken && taken !== oldRow) throw badRequest(`รหัส ${newCode} มีอยู่แล้ว (${str(taken.full_name)}) — ใช้ซ้ำไม่ได้`);
+  for (const [db, table, col] of CODE_TABLES.filter(([, t]) => CODE_MUST_BE_FREE.includes(t) && t !== 'hr_employee')) {
+    const rows = await hrDb.queryRead(
+      `IF OBJECT_ID(N'${full(db, table)}', N'U') IS NOT NULL
+         EXEC sp_executesql N'SELECT COUNT(*) AS n FROM ${full(db, table)} WHERE ${col} = @n', N'@n NVARCHAR(50)', @n
+       ELSE SELECT 0 AS n`,
+      { n: codes.n }
+    );
+    if (Number(rows[0]?.n)) throw badRequest(`รหัส ${newCode} ยังมีข้อมูลค้างอยู่ใน ${table} (${rows[0].n} แถว) — ใช้รหัสนี้ไม่ได้`);
+  }
+
+  const changed = {};
+  await hrDb.withTransaction(async (run) => {
+    for (const [db, table, col] of CODE_TABLES) {
+      // EXEC แยก — ตารางที่ยังไม่มีในเครื่องนี้จะไม่ทำให้ทั้งชุดคอมไพล์ไม่ผ่าน
+      const r = await run(
+        `DECLARE @cnt INT = 0;
+         IF OBJECT_ID(N'${full(db, table)}', N'U') IS NOT NULL
+           EXEC sp_executesql N'UPDATE ${full(db, table)} SET ${col} = @n WHERE ${col} = @o; SET @c = @@ROWCOUNT;',
+                N'@o NVARCHAR(50), @n NVARCHAR(50), @c INT OUTPUT', @o, @n, @cnt OUTPUT;
+         SELECT @cnt AS n;`,
+        codes
+      );
+      const n = Number(r.recordset?.[0]?.n) || 0;
+      if (n) changed[table] = n;
+    }
+    if (!changed.hr_employee) throw badRequest(`ไม่พบพนักงานรหัส ${oldCode} (อาจถูกเปลี่ยนไปแล้ว)`);
+  });
+
+  console.log(`เปลี่ยนรหัสพนักงาน ${oldCode} -> ${newCode} โดย ${who(session)}:`, JSON.stringify(changed));
+  return {
+    message: `เปลี่ยนรหัส ${oldCode} เป็น ${newCode} แล้ว — อย่าลืมเปลี่ยนรหัสในเครื่องสแกนหน้า (ZKBio) ให้ตรงกัน`,
+    oldCode,
+    newCode,
+    changed,
+  };
+}
+
 export const EMPLOYEE_HR_ACTIONS = {
   getNextHrCode,
   addEmployee,
@@ -642,4 +736,5 @@ export const EMPLOYEE_HR_ACTIONS = {
   saveEmployeeProfile,
   getEmployeeMovements,
   importEmployeeSheet,
+  renameEmployeeCode,
 };
