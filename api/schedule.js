@@ -53,6 +53,7 @@ const READ_ONLY = new Set([
   'getNextHrCode',
   'getEmployeeProfiles',
   'getEmployeeMovements',
+  'getBranchTransfers',
   // หน้ารายชื่อพนักงาน: สัญชาติ + เอกสารพนักงานต่างชาติ (ดู office-server/employee-doc.js)
   'getEmployeeDocs',
   // งานสโตร์/โกดัง เรียกจากแอป storefct (ดู office-server/storework.js)

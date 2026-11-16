@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import natUpnp from 'nat-upnp';
 import sql from 'mssql';
 import { employeeFileHandler } from './employee-hr.js';
+import { startTransferScheduler } from './branch-transfer.js';
 import { scheduleHandler, ACTION_NAMES } from './schedule.js';
 import { branchGroup } from './hr-session.js';
 import { syncItemsQuietly } from './item-sync.js';
@@ -967,6 +968,10 @@ app.listen(PORT, async () => {
     syncItemsQuietly();
     setInterval(() => syncItemsQuietly(), 60 * 60 * 1000);
   }
+
+  // ย้ายสาขาพนักงานที่ออฟฟิศตั้งล่วงหน้าไว้ เมื่อถึงวันที่มีผล — เช็คตอนเปิดเครื่องและทุก 30 นาที
+  // (ไม่ต้องตั้ง Task Scheduler ของ Windows เพิ่ม — service นี้รันตลอดอยู่แล้ว) ดู branch-transfer.js
+  if (process.env.BRANCH_TRANSFER !== 'off') startTransferScheduler();
 
   warmCache(); // อุ่น cache เบื้องหลัง
 });
