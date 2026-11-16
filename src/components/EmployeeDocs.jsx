@@ -167,15 +167,16 @@ function DocCard({ title, expiryKey, form, children }) {
  * @param {(editing: boolean) => import('react').ReactNode} [props.renderExtra]
  *        ส่วนเพิ่มใต้ชื่อ เช่น ข้อมูลส่วนตัวที่เห็นเฉพาะออฟฟิศ — เจ้าของหน้าเก็บค่าเองแล้วบันทึกใน onSave
  * @param {() => void} [props.onCancelEdit] กดยกเลิกโหมดแก้ไข — ให้เจ้าของหน้าคืนค่าของ renderExtra
+ * @param {boolean} [props.initialEditing] เปิดกล่องมาในโหมดแก้ไขเลย (เช่น ปุ่ม "แก้ไข" ท้ายแถว)
  */
 export function EmployeeDocModal({
   employee, doc, onSave, onClose, linkCandidates = [], onLink, onDelete,
-  canEdit = true, nameEditable = false, renderExtra, onCancelEdit,
+  canEdit = true, nameEditable = false, renderExtra, onCancelEdit, initialEditing = false,
 }) {
   // fullName ของฟอร์ม = ชื่อที่แสดงอยู่ (ชื่อในระบบของพนักงาน ถ้าไม่มีค่อยใช้ชื่อตามเอกสาร)
   const initialForm = () => ({ ...emptyDoc('thai'), ...(doc || {}), fullName: employee?.fullName || doc?.fullName || '' });
   const [form, setForm] = useState(initialForm);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(() => !!initialEditing && canEdit);
   const [busy, setBusy] = useState('');
   const [linkTo, setLinkTo] = useState('');
 
