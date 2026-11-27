@@ -47,9 +47,12 @@ const SHOP_COLUMNS = `shop_no, branch_code, shop_name, password_hash, is_active,
 
 /** หาร้านจากสิ่งที่ผู้ใช้พิมพ์ — รับได้ทั้งรหัสสาขา (SUM) และรหัสตัวเลข (51) */
 async function findShop(input) {
-  const v = str(input).toUpperCase();
+  // ตัดอักขระที่มองไม่เห็น/ช่องว่างกลางคำ (zero-width, NBSP จากการ copy-paste หรือ autofill) ทิ้ง
+  // เดิมค่าที่เกิน 3 ตัวถูกส่งเข้า NVarChar(3) ตรงๆ -> SQL Server ตอบ "Data type 0xE7 has an invalid data length"
+  const v = str(input).toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!v) return null;
   const byNo = /^\d+$/.test(v);
+  if (byNo ? v.length > 9 : !CODE_RE.test(v)) return null; // รูปแบบผิด = ไม่มีร้านนี้ (ไม่ต้องถาม SQL)
   const rows = await queryRead(
     `SELECT ${SHOP_COLUMNS} FROM dbo.order_shop WHERE ${byNo ? 'shop_no = @no' : 'branch_code = @code'}`,
     byNo ? { no: { type: sql.Int, value: Number(v) } } : { code: { type: sql.NVarChar(3), value: v } }
